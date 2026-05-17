@@ -58,6 +58,8 @@ private struct ConfigParser {
             return .command(.center)
         case "eject":
             return .command(.eject)
+        case "swap":
+            return .command(.swap(try parseDirection(required("direction", in: table, path: key), key: "\(key).direction")))
         case "focus_direction":
             return .command(.focusDirection(try parseDirection(required("direction", in: table, path: key), key: "\(key).direction")))
         case "focus_cycle":

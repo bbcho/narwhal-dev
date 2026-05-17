@@ -57,6 +57,7 @@ public enum CommandTemplate: Equatable, Sendable {
     case push(Direction)
     case center
     case eject
+    case swap(Direction)
     case focusDirection(Direction)
     case focusCycle(FocusCycleDirection)
     case toggleFloat
@@ -152,6 +153,10 @@ public enum DefaultKeymap {
         HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option]), action: .command(.focusDirection(.down))),
         HotkeyBinding(key: KeySpec(key: "u", modifiers: [.control, .option]), action: .command(.focusCycle(.previous))),
         HotkeyBinding(key: KeySpec(key: "i", modifiers: [.control, .option]), action: .command(.focusCycle(.next))),
+        HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .shift]), action: .command(.swap(.left))),
+        HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .shift]), action: .command(.swap(.right))),
+        HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .shift]), action: .command(.swap(.up))),
+        HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .shift]), action: .command(.swap(.down))),
         HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .command]), action: .command(.push(.left))),
         HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .command]), action: .command(.push(.right))),
         HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .command]), action: .command(.push(.up))),
@@ -217,6 +222,8 @@ public enum DefaultConfigLua {
             return "{ type = \"center\" }"
         case .eject:
             return "{ type = \"eject\" }"
+        case .swap(let direction):
+            return "{ type = \"swap\", direction = \(quoted(direction.rawValue)) }"
         case .focusDirection(let direction):
             return "{ type = \"focus_direction\", direction = \(quoted(direction.rawValue)) }"
         case .focusCycle(let direction):

@@ -7,7 +7,7 @@ public enum Command: Equatable, Sendable {
     case focusDirection(Direction)
     case focusCycle(FocusCycleDirection)
     case focus(WindowID)
-    case swapInTree(Direction)
+    case swapInTree(WindowID, Direction)
     case resizeSplit(WindowID, Direction, delta: Double)
     case balance(SpaceID)
     case toggleFloat(WindowID)
@@ -174,6 +174,8 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
     case push(windowID: WindowID, direction: Direction)
     case center(windowID: WindowID)
     case eject(windowID: WindowID)
+    case swapFocused(Direction)
+    case swap(windowID: WindowID, direction: Direction)
     case focusDirection(Direction)
     case focusCycle(FocusCycleDirection)
     case focus(windowID: WindowID)
@@ -190,6 +192,7 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
         case push
         case center
         case eject
+        case swap
         case focusDirection
         case focusCycle
         case focus
@@ -208,6 +211,11 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             return .success(.center(windowID))
         case .eject(let windowID):
             return .success(.eject(windowID))
+        case .swapFocused(let direction):
+            guard let focusedWindowID else { return .failure(.focusedWindowRequired) }
+            return .success(.swapInTree(focusedWindowID, direction))
+        case .swap(let windowID, let direction):
+            return .success(.swapInTree(windowID, direction))
         case .focusDirection(let direction):
             return .success(.focusDirection(direction))
         case .focusCycle(let direction):
@@ -235,6 +243,13 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             self = .center(windowID: try Self.decodeWindowID(from: container))
         case .eject:
             self = .eject(windowID: try Self.decodeWindowID(from: container))
+        case .swap:
+            let direction = try container.decode(Direction.self, forKey: .direction)
+            if let rawWindowID = try container.decodeIfPresent(UInt32.self, forKey: .windowID) {
+                self = .swap(windowID: WindowID(raw: rawWindowID), direction: direction)
+            } else {
+                self = .swapFocused(direction)
+            }
         case .focusDirection:
             self = .focusDirection(try container.decode(Direction.self, forKey: .direction))
         case .focusCycle:
@@ -264,6 +279,13 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
         case .eject(let windowID):
             try container.encode(CommandName.eject, forKey: .command)
             try container.encode(windowID.raw, forKey: .windowID)
+        case .swapFocused(let direction):
+            try container.encode(CommandName.swap, forKey: .command)
+            try container.encode(direction, forKey: .direction)
+        case .swap(let windowID, let direction):
+            try container.encode(CommandName.swap, forKey: .command)
+            try container.encode(windowID.raw, forKey: .windowID)
+            try container.encode(direction, forKey: .direction)
         case .focusDirection(let direction):
             try container.encode(CommandName.focusDirection, forKey: .command)
             try container.encode(direction, forKey: .direction)

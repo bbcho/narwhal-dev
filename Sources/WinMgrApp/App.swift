@@ -410,6 +410,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await performPush(direction)
         case .command(.center):
             await performCenter()
+        case .command(.swap(let direction)):
+            await performSwap(direction)
         case .command(.focusDirection(let direction)):
             await performFocusDirection(direction)
         case .command(.focusCycle(let direction)):
@@ -541,6 +543,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await applyPlannedCenter(result, windowID: context.snapshot.id, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Center rejected by core: \(error.message)")
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performSwap(_ direction: Direction) async -> Bool {
+        let operation = "Swap \(direction.rawValue)"
+        guard let context = focusedLayoutContext(operation: operation),
+              let displayID = displayForFocusedWindow(context, operation: operation),
+              await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-swap \(direction.rawValue)")
+        else { return false }
+
+        switch await worldActor.planSwap(context.snapshot.id, direction: direction) {
+        case .success(let result):
+            return await applyPlannedSwap(result, windowID: context.snapshot.id, direction: direction, retryOnClamp: true)
+        case .failure(let error):
+            reporter.error("Swap \(direction.rawValue) rejected by core: \(error.message)")
             return false
         }
     }
@@ -679,6 +699,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             retryOnClamp: retryOnClamp
         ) {
             await self.worldActor.planCenter(windowID)
+        }
+    }
+
+    @MainActor
+    private func applyPlannedSwap(
+        _ result: CommandPlanResult,
+        windowID: WindowID,
+        direction: Direction,
+        retryOnClamp: Bool
+    ) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: "Swap \(direction.rawValue)",
+            persistReason: "swap \(direction.rawValue)",
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.worldActor.planSwap(windowID, direction: direction)
         }
     }
 
@@ -873,6 +910,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return .error(commandID: commandID, code: failure.code, message: failure.message)
             }
             return .ok(commandID: commandID)
+        case .swapFocused(let direction):
+            if await performSwap(direction) {
+                return .ok(commandID: commandID)
+            }
+            return .error(
+                commandID: commandID,
+                code: "swap_failed",
+                message: "Focused swap \(direction.rawValue) failed; see WinMgrApp log"
+            )
+        case .swap(let windowID, let direction):
+            if let failure = await performExplicitSwap(windowID: windowID, direction: direction) {
+                return .error(commandID: commandID, code: failure.code, message: failure.message)
+            }
+            return .ok(commandID: commandID)
         case .center(let windowID):
             if let failure = await performExplicitCenter(windowID: windowID) {
                 return .error(commandID: commandID, code: failure.code, message: failure.message)
@@ -976,6 +1027,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    private func performExplicitSwap(windowID: WindowID, direction: Direction) async -> CommandExecutionFailure? {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            return CommandExecutionFailure(
+                code: "accessibility_not_trusted",
+                message: "Accessibility permission is not trusted"
+            )
+        }
+
+        let displays = displayClient.currentDisplays()
+        let environment = await refreshEnvironment(reason: "ipc swap \(direction.rawValue)", displays: displays)
+        guard environment.activeSpace != nil else {
+            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
+        }
+        guard case .complete = environment.quality else {
+            return CommandExecutionFailure(
+                code: "environment_incomplete",
+                message: "IPC swap requires a complete AX snapshot; got \(describe(environment.quality))"
+            )
+        }
+
+        switch await worldActor.planSwap(windowID, direction: direction) {
+        case .success(let result):
+            if await applyPlannedSwap(result, windowID: windowID, direction: direction, retryOnClamp: true) {
+                return nil
+            }
+            return CommandExecutionFailure(
+                code: "apply_failed",
+                message: "Swap \(direction.rawValue) layout write failed; see WinMgrApp log"
+            )
+        case .failure(let error):
+            return CommandExecutionFailure(code: error.code, message: error.message)
+        }
+    }
+
+    @MainActor
     private func persistRestore(reason: String) async {
         let stored = await worldActor.restoreSnapshot()
         do {
@@ -1017,6 +1103,8 @@ private func describe(_ template: CommandTemplate) -> String {
         return "center"
     case .eject:
         return "eject"
+    case .swap(let direction):
+        return "swap \(direction.rawValue)"
     case .focusDirection(let direction):
         return "focus \(direction.rawValue)"
     case .focusCycle(let direction):

@@ -19,6 +19,7 @@ This is the pre-implementation gate for the fp-architect skill, adapted to Swift
 | Restore | Fuzzy match on stable window descriptors `(bundleID, title, role)`. Restore JSON stores descriptors, not raw OS window/display IDs. Native Space pinning is deferred until a stable Space-slot mapping exists. |
 | Config | Lua 5.4 embedded via C interop. `~/.config/winmgr/init.lua`. FSEvent hot reload, last-good fallback. |
 | Input | Carbon hotkeys + `CGEventTap` shift-drag + Unix-socket IPC + `winmgrctl` CLI. |
+| Default key families | `ctrl-option-H/J/K/L` focus, `ctrl-option-shift-H/J/K/L` swap, `ctrl-option-command-H/J/K/L` push, `ctrl-option-U/I` cycle, `ctrl-option-delete` reset. |
 | Visuals | Focus border overlay, Space HUD on switch, gaps, NSStatusItem menubar. No animations. |
 | Distribution | Notarized `.app` bundle + LaunchAgent + brew cask (later). Private repo. |
 
@@ -115,6 +116,23 @@ For the sequence `H L J K` with windows `A B C D`, one lane per edge is occupied
 `Axis` means cell layout direction: a horizontal split has cells laid left to right; a vertical split has cells laid top to bottom. The visual split line is perpendicular to that axis.
 
 This rule replaces the earlier "split largest leaf on push side" idea. The tree is not area-greedy and not Dwindle-like; it is directionally stable and zone-preserving. `K/J` are deliberately row-realm operations rather than a pure 90-degree rotation of `H/L`.
+
+---
+
+## Swap semantics
+
+Directional swap exchanges the focused tiled window with the adjacent tiled window selected by the same geometric neighbor rule used for directional focus.
+
+Rules:
+
+1. Swap is bound by default to `ctrl-option-shift-H/J/K/L`.
+2. Swap only exchanges the two `WindowID` leaves. It does not change split axes, cell weights, `.void` leaves, or floating lists.
+3. The source window remains focused after the swap, now at the neighbor's old tile.
+4. If either window is on a different display in the same active Space, their `windowDisplay` ownership is exchanged with the leaves.
+5. If the focused window is not tiled, the command fails with `.windowIsFloating`.
+6. If there is no tiled neighbor in that direction, the command fails with `.noNeighbor(direction)`.
+
+This makes swap a rearrangement operation, not a new insertion. It must not collapse zone memory or create new voids.
 
 ---
 
@@ -385,6 +403,7 @@ Apply the 5-question test to every planned function. Tag `[CORE]` or `[SHELL]`.
 | `recordObservedConstraints(_:WindowConstraints, for:WindowID, in:World) -> World` | Apply.swift | Pure merge of AX clamp feedback into `world.windowConstraints`; maxes minimums, never lowers them during a session. |
 | `pushIntoTree(_:WindowID, _:Direction, _:Node) -> Node` | Tree.swift | Center-facing edge-recursive insertion; each edge lane alternates split axes and places the new window inward. Existing-window reposition replaces the old leaf with `.void` without collapsing. |
 | `centerIntoTree(_:WindowID, _:Node) -> Node` | Tree.swift | Establishes 3-column root or splits center vertically. |
+| `swapWindowsInTree(_:WindowID, _:WindowID, _:Node) -> Node` | Tree.swift | Exchanges two occupied leaves without changing split shape, weights, or void leaves. |
 | `ejectFromTree(_:WindowID, _:Node) -> Node` | Tree.swift | Replaces the leaf with `.void` and preserves the zone shape. |
 | `nodesInTree(_:Node) -> [(NodePath, Node)]` | Tree.swift | Pure traversal materialized as values; callers cannot hide effects in a visitor closure. |
 | `nodeAt(_:NodePath, in:Node) -> Node?` | Tree.swift | Path-indexed lookup. |
@@ -490,7 +509,7 @@ All "no" on the 5 questions:
 │  │   solveLayout(..., constraints) -> LayoutSolveResult        │     │
 │  │   layout(SpaceState, DisplayID, CGRect, Gaps) -> Layout     │     │
 │  │   diff(Layout, Layout) -> LayoutDelta                       │     │
-│  │   pushIntoTree, centerIntoTree, ejectFromTree               │     │
+│  │   pushIntoTree, centerIntoTree, swapWindowsInTree, eject    │     │
 │  │   nearestWindowInDirection                                  │     │
 │  │   matchRule                                                 │     │
 │  │   No CoreGraphics calls beyond CGRect arithmetic.           │     │
@@ -709,7 +728,7 @@ enum Command: Equatable {
     case focusDirection(Direction)
     case focusCycle(FocusCycleDirection)
     case focus(WindowID)
-    case swapInTree(Direction)
+    case swapInTree(WindowID, Direction)
     case resizeSplit(WindowID, Direction, delta: Double)
     case balance(SpaceID)
     case toggleFloat(WindowID)
@@ -876,6 +895,7 @@ enum CommandTemplate: Equatable {
     case push(Direction)
     case center
     case eject
+    case swap(Direction)
     case focusDirection(Direction)
     case focusCycle(FocusCycleDirection)
     case toggleFloat
@@ -988,6 +1008,10 @@ enum DefaultKeymap {
         HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option]), action: .command(.focusDirection(.down))),
         HotkeyBinding(key: KeySpec(key: "u", modifiers: [.control, .option]), action: .command(.focusCycle(.previous))),
         HotkeyBinding(key: KeySpec(key: "i", modifiers: [.control, .option]), action: .command(.focusCycle(.next))),
+        HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .shift]), action: .command(.swap(.left))),
+        HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .shift]), action: .command(.swap(.right))),
+        HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .shift]), action: .command(.swap(.up))),
+        HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .shift]), action: .command(.swap(.down))),
         HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .command]), action: .command(.push(.left))),
         HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .command]), action: .command(.push(.right))),
         HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .command]), action: .command(.push(.up))),

@@ -72,6 +72,7 @@ private enum WinMgrCtlError: Error, CustomStringConvertible {
         usage:
           winmgrctl reset [--socket PATH]
           winmgrctl push <left|right|up|down> [--window WINDOW_ID] [--socket PATH]
+          winmgrctl swap <left|right|up|down> [--window WINDOW_ID] [--socket PATH]
           winmgrctl center --window WINDOW_ID [--socket PATH]
         """
     }
@@ -119,6 +120,17 @@ private func parseInvocation(_ arguments: [String]) throws -> Invocation {
             dto = .push(windowID: explicitWindowID, direction: direction)
         } else {
             dto = .pushFocused(direction)
+        }
+        return Invocation(socketPath: socketPath, command: dto)
+    case "swap":
+        guard positional.indices.contains(1) else { throw WinMgrCtlError.missingDirection }
+        guard positional.count == 2 else { throw WinMgrCtlError.unexpectedArgument(positional[2]) }
+        let direction = try parseDirection(positional[1])
+        let dto: IPCCommandDTO
+        if let explicitWindowID {
+            dto = .swap(windowID: explicitWindowID, direction: direction)
+        } else {
+            dto = .swapFocused(direction)
         }
         return Invocation(socketPath: socketPath, command: dto)
     case "center":

@@ -32,6 +32,35 @@ public func frameWriteOrder(for layout: Layout, focused focusedWindowID: WindowI
     return ordered.filter { $0 != focusedWindowID } + [focusedWindowID]
 }
 
+public func flattenedLayout(of world: World) -> Result<Layout, UnsatisfiableLayout> {
+    guard let activeSpace = world.activeSpace, let space = world.spaces[activeSpace] else {
+        return .success(Layout(tiled: [:], floatingZOrder: [], hidden: []))
+    }
+
+    var tiled: [WindowID: CGRect] = [:]
+    var floating: [WindowID] = []
+    for displayID in space.displays.keys.sorted(by: { $0.raw < $1.raw }) {
+        guard let display = world.displays[displayID] else { continue }
+        let displayLayout: Layout
+        switch solveLayout(
+            spaceState: space,
+            displayID: displayID,
+            frame: display.visibleFrame,
+            gaps: world.config.gaps,
+            constraints: world.windowConstraints
+        ) {
+        case .solved(let layout, _):
+            displayLayout = layout
+        case .unsatisfiable(let unsatisfiable):
+            return .failure(unsatisfiable)
+        }
+        tiled.merge(displayLayout.tiled) { _, next in next }
+        floating.append(contentsOf: displayLayout.floatingZOrder)
+    }
+
+    return .success(Layout(tiled: tiled, floatingZOrder: floating, hidden: []))
+}
+
 private func framesByWindow(in node: Node, frame: CGRect, innerGap: Double) -> [WindowID: CGRect] {
     switch node {
     case .void:

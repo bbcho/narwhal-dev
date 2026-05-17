@@ -14,8 +14,8 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
         return commandNotImplemented(command)
     case .focus:
         return commandNotImplemented(command)
-    case .swapInTree:
-        return commandNotImplemented(command)
+    case .swapInTree(let windowID, let direction):
+        return applySwap(windowID, direction: direction, to: world)
     case .resizeSplit:
         return commandNotImplemented(command)
     case .balance:
@@ -93,6 +93,72 @@ private func applyCenter(_ windowID: WindowID, to world: World) -> Result<World,
     case .failure(let error):
         return .failure(error)
     }
+}
+
+private func applySwap(_ windowID: WindowID, direction: Direction, to world: World) -> Result<World, CommandError> {
+    guard world.windows[windowID] != nil else {
+        return .failure(.windowNotFound(windowID))
+    }
+    guard let activeSpace = world.activeSpace, let space = world.spaces[activeSpace] else {
+        return .failure(.activeSpaceUnavailable)
+    }
+
+    let currentLayout: Layout
+    switch flattenedLayout(of: world) {
+    case .success(let layout):
+        currentLayout = layout
+    case .failure(let unsatisfiable):
+        return .failure(.layoutUnsatisfiable(unsatisfiable))
+    }
+    guard currentLayout.tiled[windowID] != nil else {
+        return .failure(.windowIsFloating(windowID))
+    }
+    guard let targetWindowID = focusTarget(in: currentLayout, from: windowID, direction: direction) else {
+        return .failure(.noNeighbor(direction))
+    }
+    guard world.windows[targetWindowID] != nil else {
+        return .failure(.windowNotFound(targetWindowID))
+    }
+    guard let sourceDisplay = tiledDisplay(containing: windowID, in: space),
+          let targetDisplay = tiledDisplay(containing: targetWindowID, in: space)
+    else {
+        return .failure(.windowIsFloating(windowID))
+    }
+
+    let displayStates = space.displays.mapValues { displayState in
+        DisplaySpaceState(
+            displayID: displayState.displayID,
+            tree: swapWindowsInTree(windowID, targetWindowID, displayState.tree),
+            floating: displayState.floating
+        )
+    }
+    var spaces = world.spaces
+    spaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: windowID)
+
+    var windowDisplay = world.windowDisplay
+    windowDisplay[windowID] = targetDisplay
+    windowDisplay[targetWindowID] = sourceDisplay
+
+    return .success(World(
+        displays: world.displays,
+        activeSpace: activeSpace,
+        spaces: spaces,
+        windows: world.windows,
+        windowDisplay: windowDisplay,
+        windowConstraints: world.windowConstraints,
+        pendingRules: world.pendingRules,
+        config: world.config
+    ))
+}
+
+private func tiledDisplay(containing windowID: WindowID, in space: SpaceState) -> DisplayID? {
+    for displayID in space.displays.keys.sorted(by: { $0.raw < $1.raw }) {
+        guard let displayState = space.displays[displayID],
+              occupiedWindows(in: displayState.tree).contains(windowID)
+        else { continue }
+        return displayID
+    }
+    return nil
 }
 
 private struct RetileTarget {

@@ -243,6 +243,8 @@ private func describe(_ template: CommandTemplate) -> String {
         return "center"
     case .eject:
         return "eject"
+    case .swap(let direction):
+        return "swap \(direction.rawValue)"
     case .focusDirection(let direction):
         return "focus \(direction.rawValue)"
     case .focusCycle(let direction):

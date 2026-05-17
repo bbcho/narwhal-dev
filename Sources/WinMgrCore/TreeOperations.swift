@@ -52,6 +52,26 @@ public func centerIntoTree(_ window: WindowID, _ node: Node) -> Node {
     return insertAtCenter(window, treeWithoutWindow)
 }
 
+public func swapWindowsInTree(_ first: WindowID, _ second: WindowID, _ node: Node) -> Node {
+    guard first != second else { return node }
+
+    switch node {
+    case .void:
+        return .void
+    case .leaf(let id) where id == first:
+        return .leaf(second)
+    case .leaf(let id) where id == second:
+        return .leaf(first)
+    case .leaf:
+        return node
+    case .split(let split):
+        let cells = split.cells.map { cell in
+            makeCell(weight: cell.weight, node: swapWindowsInTree(first, second, cell.node))
+        }
+        return .split(makeSplit(axis: split.axis, cells: cells))
+    }
+}
+
 private func clearWindowPreservingZones(_ window: WindowID, from node: Node) -> Node {
     switch node {
     case .void:
