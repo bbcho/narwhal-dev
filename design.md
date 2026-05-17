@@ -287,6 +287,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 11a | IPC socket + `winmgrctl` | `winmgrctl reset` works against the running app; IPC tests cover newline-delimited JSON, connection reuse, and invalid command replies | Drag zones |
 | 11b | Drag zones | Shift-drag onto configured zones maps to the same push pipeline | Packaging |
 | 12 | Local packaging | `scripts/build_app_bundle.sh` emits a runnable `.app`, embeds Lua, copies default config into Resources, and generates a LaunchAgent plist | Notarization, brew cask |
+| 13 | Local install lifecycle | `scripts/install_local.sh --no-launchctl --app-dir .build/install-test/Applications --launch-agents-dir .build/install-test/LaunchAgents --replace --configuration debug` installs a test app/plist, and `scripts/uninstall_local.sh --no-launchctl ...` removes them | Notarized installer, brew cask |
 
 ### Fast-path constraints
 
@@ -2029,6 +2030,7 @@ No external lens library needed. Sum types (enums) need custom matchers — done
 |---|---|---|
 | License (MIT vs GPL) | TBD before first public push | Private repo for now. |
 | Brew cask publishing | After local packaging and notarization | Need a stable feature set first. |
+| Notarized installer package | After local install scripts and signing identity | Requires Apple Developer signing identity and notarization credentials. |
 | App icon | After Phase 30 | Aesthetics, not architecture. |
 | Notarization automation | After local `.app` bundle works | Need a signing identity and bundle structure finalized first. |
 | Multi-display window movement hotkeys | Add later phase | Not in current 31-phase list; can extend `Direction` w/ `.display(.left/.right)` variants. |
