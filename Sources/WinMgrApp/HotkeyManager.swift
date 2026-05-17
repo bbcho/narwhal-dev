@@ -3,7 +3,7 @@ import Foundation
 import WinMgrCore
 
 final class HotkeyManager {
-    private let bindings: [HotkeyBinding]
+    private var bindings: [HotkeyBinding]
     private let reporter: StartupReporter
     private let fire: @Sendable (HotkeyAction) -> Void
     private var handlerRef: EventHandlerRef?
@@ -45,9 +45,7 @@ final class HotkeyManager {
         }
 
         do {
-            for (offset, binding) in bindings.enumerated() {
-                try register(binding: binding, id: UInt32(offset + 1))
-            }
+            try registerHotkeys(bindings)
         } catch {
             stop()
             throw error
@@ -57,7 +55,42 @@ final class HotkeyManager {
         reporter.info("Registered hotkeys: \(bindings.map(describe).joined(separator: ", "))")
     }
 
+    func rebind(_ newBindings: [HotkeyBinding]) throws {
+        let oldBindings = bindings
+        unregisterHotkeys()
+        do {
+            try registerHotkeys(newBindings)
+            bindings = newBindings
+            reporter.info("Rebound hotkeys: \(newBindings.map(describe).joined(separator: ", "))")
+        } catch {
+            unregisterHotkeys()
+            do {
+                try registerHotkeys(oldBindings)
+                reporter.error("Hotkey rebind failed; restored previous bindings: \(String(describing: error))")
+            } catch {
+                reporter.error("Hotkey rebind failed and previous bindings could not be restored: \(String(describing: error))")
+            }
+            throw error
+        }
+    }
+
     func stop() {
+        unregisterHotkeys()
+
+        if let handlerRef {
+            RemoveEventHandler(handlerRef)
+            self.handlerRef = nil
+        }
+        isStarted = false
+    }
+
+    private func registerHotkeys(_ bindings: [HotkeyBinding]) throws {
+        for (offset, binding) in bindings.enumerated() {
+            try register(binding: binding, id: UInt32(offset + 1))
+        }
+    }
+
+    private func unregisterHotkeys() {
         for ref in hotkeyRefs {
             if let ref {
                 UnregisterEventHotKey(ref)
@@ -65,12 +98,6 @@ final class HotkeyManager {
         }
         hotkeyRefs.removeAll()
         actionsByID.removeAll()
-
-        if let handlerRef {
-            RemoveEventHandler(handlerRef)
-            self.handlerRef = nil
-        }
-        isStarted = false
     }
 
     private func register(binding: HotkeyBinding, id: UInt32) throws {

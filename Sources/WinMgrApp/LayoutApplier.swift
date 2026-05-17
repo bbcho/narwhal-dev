@@ -34,6 +34,13 @@ struct LayoutApplyResult: Sendable {
 struct LayoutApplier {
     let axClient: AXClient
     let reporter: StartupReporter
+    let echoSuppressor: AXEchoSuppressor?
+
+    init(axClient: AXClient, reporter: StartupReporter, echoSuppressor: AXEchoSuppressor? = nil) {
+        self.axClient = axClient
+        self.reporter = reporter
+        self.echoSuppressor = echoSuppressor
+    }
 
     func apply(_ result: MVPCommandResult) -> LayoutApplyResult {
         var applied: [WindowID: CGRect] = [:]
@@ -54,6 +61,7 @@ struct LayoutApplier {
             }
 
             let writeResult: AXFrameWriteOutcome
+            echoSuppressor?.expectFrame(windowID: windowID, targetFrame: frame)
             if let focusedWindowID = result.focusedWindowID, windowID == focusedWindowID {
                 writeResult = axClient.setFocusedWindowFrame(frame)
             } else {

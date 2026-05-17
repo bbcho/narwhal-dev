@@ -4,6 +4,7 @@ import Darwin
 import WinMgrCore
 
 @main
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let instance = AppDelegate()
 
@@ -11,11 +12,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let displayClient = DisplayClient()
     private let spaceClient = SpaceClient()
     private let restoreManager = RestoreManager()
+    private let echoSuppressor = AXEchoSuppressor()
+    private let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
+    private let menubar = Menubar()
     private var worldActor = MVPWorldActor()
     private let reporter = StartupReporter()
     private var config = Config.default
     private var accessibilityPollTimer: Timer?
     private var hotkeyManager: HotkeyManager?
+    private var axObserverService: AXObserverService?
     private var mvpServicesStarted = false
 
     static func main() {
@@ -114,8 +119,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         accessibilityPollTimer?.invalidate()
         accessibilityPollTimer = nil
+        axObserverService?.stop()
+        axObserverService = nil
         hotkeyManager?.stop()
         hotkeyManager = nil
+        menubar.stop()
+        overlay.stop()
         reporter.info("WinMgrApp stopped")
     }
 
@@ -157,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard await loadRestoreState(using: environment.snapshot) else { return }
         if let focused {
             await worldActor.recordExternalFocus(focused.id)
+            overlay.updateFocusBorder(.show(focused.id, focused.frame))
         }
         await applyStartupConverge()
         startMVPServices()
@@ -211,21 +221,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @discardableResult
     private func loadStartupConfig() -> Bool {
-        switch startupConfigRequestFromArguments() {
-        case .success(let request):
-            switch StartupConfigLoader(configURL: request.url, missingFilePolicy: request.missingFilePolicy).load() {
-            case .success(let loaded):
-                config = loaded.config
-                worldActor = MVPWorldActor(config: loaded.config)
-                logStartupConfig(loaded)
-                return true
-            case .failure(let error):
-                reporter.error("Startup config failed: \(error.description)")
-                return false
-            }
+        switch startupConfigLoad() {
+        case .success(let loaded):
+            config = loaded.config
+            worldActor = MVPWorldActor(config: loaded.config)
+            overlay.updateConfig(border: loaded.config.border, hud: loaded.config.hud)
+            logStartupConfig(loaded)
+            return true
         case .failure(let error):
             reporter.error("Startup config failed: \(error.description)")
             return false
+        }
+    }
+
+    private func startupConfigLoad() -> Result<StartupConfigLoad, StartupConfigError> {
+        switch startupConfigRequestFromArguments() {
+        case .success(let request):
+            return StartupConfigLoader(configURL: request.url, missingFilePolicy: request.missingFilePolicy).load()
+        case .failure(let error):
+            return .failure(error)
         }
     }
 
@@ -301,6 +315,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startMVPServices() {
         guard !mvpServicesStarted else { return }
+        startMenubar()
 
         let manager = HotkeyManager(bindings: config.keymap, reporter: reporter) { [weak self] action in
             Task { @MainActor in
@@ -311,11 +326,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try manager.start()
             hotkeyManager = manager
+            startAXObserver()
             mvpServicesStarted = true
             reporter.info("MVP push loop ready")
         } catch {
             reporter.error("Hotkey startup failed: \(String(describing: error))")
         }
+    }
+
+    @MainActor
+    private func startMenubar() {
+        menubar.start(
+            reload: { [weak self] in
+                Task { @MainActor in
+                    await self?.reloadConfig(reason: "menubar")
+                }
+            },
+            reset: { [weak self] in
+                Task { @MainActor in
+                    await self?.performHotkey(.command(.resetLayout))
+                }
+            },
+            quit: {
+                NSApplication.shared.terminate(nil)
+            }
+        )
+        menubar.updateConfigStatus(.loaded)
+    }
+
+    @MainActor
+    private func startAXObserver() {
+        guard axObserverService == nil else { return }
+        let service = AXObserverService(
+            axClient: axClient,
+            echoSuppressor: echoSuppressor,
+            reporter: reporter
+        ) { [weak self] event, snapshot in
+            Task { @MainActor in
+                await self?.handleAXEvent(event, snapshot: snapshot)
+            }
+        }
+        service.start()
+        axObserverService = service
     }
 
     private func moveFocusedWindowToLeftHalf() -> String? {
@@ -356,11 +408,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .command(.resetLayout):
             await worldActor.resetLayoutMemory()
             reporter.info("Reset layout memory: cleared BSP trees, floating lists, focus, pending rules, and observed window minimums")
+            overlay.updateFocusBorder(.hide)
             await persistRestore(reason: "reset")
         case .command(let template):
             reporter.error("Hotkey action not implemented in MVP: \(describe(template))")
         case .reloadConfig:
-            reporter.error("Reload config hotkey ignored: hot reload is not implemented; restart the app to apply startup config")
+            await reloadConfig(reason: "hotkey")
         }
     }
 
@@ -418,10 +471,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func applyPlannedPush(_ result: MVPCommandResult, direction: Direction, retryOnClamp: Bool) async {
-        let applyResult = LayoutApplier(axClient: axClient, reporter: reporter).apply(result)
+        let applyResult = LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
         if applyResult.succeeded {
             await worldActor.commit(result, appliedFrames: applyResult.applied)
             reporter.info("Push \(direction.rawValue) completed")
+            if let focusedWindowID = result.focusedWindowID,
+               let frame = applyResult.applied[focusedWindowID] ?? result.desiredLayout.layout.tiled[focusedWindowID] {
+                overlay.updateFocusBorder(.show(focusedWindowID, frame))
+            }
             await persistRestore(reason: "push \(direction.rawValue)")
             return
         }
@@ -495,7 +552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .success(nil):
             reporter.info("Startup restore convergence skipped: no restored tiled windows")
         case .success(let result?):
-            let applyResult = LayoutApplier(axClient: axClient, reporter: reporter).apply(result)
+            let applyResult = LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
             if applyResult.succeeded {
                 await worldActor.commit(result, appliedFrames: applyResult.applied)
                 reporter.info("Startup restore convergence completed")
@@ -520,6 +577,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         case .failure(let error):
             reporter.error("Startup restore convergence rejected by core: \(error.message)")
+        }
+    }
+
+    @MainActor
+    private func reloadConfig(reason: String) async {
+        let loaded: StartupConfigLoad
+        switch startupConfigLoad() {
+        case .success(let value):
+            loaded = value
+        case .failure(let error):
+            reporter.error("Config reload failed (\(reason)): \(error.description)")
+            menubar.updateConfigStatus(.failed(error.description))
+            return
+        }
+
+        do {
+            try hotkeyManager?.rebind(loaded.config.keymap)
+        } catch {
+            let message = String(describing: error)
+            reporter.error("Config reload failed rebinding hotkeys (\(reason)): \(message)")
+            menubar.updateConfigStatus(.failed(message))
+            return
+        }
+
+        config = loaded.config
+        await worldActor.reloadConfig(loaded.config)
+        overlay.updateConfig(border: loaded.config.border, hud: loaded.config.hud)
+        logStartupConfig(loaded)
+        menubar.updateConfigStatus(.loaded)
+        reporter.info("Config reload completed (\(reason))")
+    }
+
+    @MainActor
+    private func handleAXEvent(_ event: AXEvent, snapshot: FocusedWindowSnapshot?) async {
+        switch event {
+        case .windowFocused(let windowID):
+            await worldActor.recordExternalFocus(windowID)
+            if let snapshot {
+                overlay.updateFocusBorder(.show(windowID, snapshot.frame))
+            }
+        case .windowOpened, .windowClosed, .windowMoved, .windowResized:
+            break
         }
     }
 

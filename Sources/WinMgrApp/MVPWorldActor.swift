@@ -68,6 +68,11 @@ actor MVPWorldActor {
         world = next
     }
 
+    func reloadConfig(_ config: Config) {
+        guard case .success(let next) = apply(.reloadConfig(config), to: world) else { return }
+        world = next
+    }
+
     func reconcileLiveWindows(_ liveWindowIDs: Set<WindowID>) {
         world = pruneWorld(world, keepingLiveWindows: liveWindowIDs)
     }
