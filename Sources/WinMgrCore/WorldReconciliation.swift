@@ -47,15 +47,33 @@ public func reconcileEnvironment(_ snapshot: EnvironmentSnapshot, in world: Worl
     }
 }
 
+func worldByOpeningWindow(_ metadata: WindowMetadata, in world: World) -> World {
+    switch windowOpenDecision(metadata, rules: world.config.rules) {
+    case .tileOrFloatByDefault(let metadata):
+        return worldByTrackingOpenedWindow(metadata, pendingRule: nil, preferredDisplaySlot: nil, in: world)
+    case .forceFloat(let metadata):
+        return worldByTrackingOpenedWindow(metadata, pendingRule: .forceFloat, preferredDisplaySlot: nil, in: world)
+    case .ignore(let id):
+        return worldByClosingWindow(id, in: world)
+    case .pinToDisplay(let metadata, let slot):
+        return worldByTrackingOpenedWindow(metadata, pendingRule: .pinToDisplay(slot: slot), preferredDisplaySlot: slot, in: world)
+    }
+}
+
+func worldByClosingWindow(_ windowID: WindowID, in world: World) -> World {
+    pruneWorld(world, keepingLiveWindows: Set(world.windows.keys).subtracting([windowID]))
+}
+
 private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in world: World) -> World {
     let liveWindows = snapshot.axSnapshot.windows.reduce(into: [:]) { result, metadata in
         result[metadata.id] = metadata
     }
     let liveWindowIDs = Set(liveWindows.keys)
+    let previouslyKnownWindowIDs = Set(world.windows.keys)
     let windowDisplay = displayOwnership(for: liveWindows.values, displays: snapshot.displays)
     let pruned = pruneWorld(world, keepingLiveWindows: liveWindowIDs)
     guard let activeSpace = snapshot.activeSpace else {
-        return World(
+        let reconciled = World(
             displays: snapshot.displays,
             activeSpace: nil,
             spaces: pruned.spaces,
@@ -64,6 +82,11 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
             windowConstraints: pruned.windowConstraints,
             pendingRules: pruned.pendingRules,
             config: world.config
+        )
+        return applyOpenRulesForNewWindows(
+            liveWindows,
+            previouslyKnownWindowIDs: previouslyKnownWindowIDs,
+            in: reconciled
         )
     }
 
@@ -83,7 +106,7 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
     let focused = previousSpace.focused.flatMap { liveWindowIDs.contains($0) ? $0 : nil }
     spaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: focused)
 
-    return World(
+    let reconciled = World(
         displays: snapshot.displays,
         activeSpace: activeSpace,
         spaces: spaces,
@@ -93,6 +116,121 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
         pendingRules: pruned.pendingRules,
         config: world.config
     )
+    return applyOpenRulesForNewWindows(
+        liveWindows,
+        previouslyKnownWindowIDs: previouslyKnownWindowIDs,
+        in: reconciled
+    )
+}
+
+private func applyOpenRulesForNewWindows(
+    _ liveWindows: [WindowID: WindowMetadata],
+    previouslyKnownWindowIDs: Set<WindowID>,
+    in world: World
+) -> World {
+    liveWindows.keys
+        .filter { !previouslyKnownWindowIDs.contains($0) }
+        .sorted { $0.raw < $1.raw }
+        .reduce(world) { current, windowID in
+            guard let metadata = liveWindows[windowID] else { return current }
+            return worldByOpeningWindow(metadata, in: current)
+        }
+}
+
+private func worldByTrackingOpenedWindow(
+    _ metadata: WindowMetadata,
+    pendingRule: RuleAction?,
+    preferredDisplaySlot: Int?,
+    in world: World
+) -> World {
+    let displayID = resolvedDisplayID(
+        for: metadata,
+        preferredSlot: preferredDisplaySlot,
+        displays: world.displays
+    )
+    var windows = world.windows
+    windows[metadata.id] = metadata
+
+    var windowDisplay = world.windowDisplay
+    if let displayID {
+        windowDisplay[metadata.id] = displayID
+    } else {
+        windowDisplay.removeValue(forKey: metadata.id)
+    }
+
+    var pendingRules = world.pendingRules
+    if let pendingRule {
+        pendingRules[metadata.id] = pendingRule
+    } else {
+        pendingRules.removeValue(forKey: metadata.id)
+    }
+
+    let spaces = spacesByMovingFloatingWindowIfNeeded(
+        metadata.id,
+        displayID: displayID,
+        spaces: world.spaces,
+        activeSpace: world.activeSpace
+    )
+
+    return World(
+        displays: world.displays,
+        activeSpace: world.activeSpace,
+        spaces: spaces,
+        windows: windows,
+        windowDisplay: windowDisplay,
+        windowConstraints: world.windowConstraints,
+        pendingRules: pendingRules,
+        config: world.config
+    )
+}
+
+private func spacesByMovingFloatingWindowIfNeeded(
+    _ windowID: WindowID,
+    displayID: DisplayID?,
+    spaces: [SpaceID: SpaceState],
+    activeSpace: SpaceID?
+) -> [SpaceID: SpaceState] {
+    guard let activeSpace, let displayID else { return spaces }
+
+    let space = spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
+    let isTiled = space.displays.values.contains { displayState in
+        occupiedWindows(in: displayState.tree).contains(windowID)
+    }
+
+    var displayStates = space.displays.mapValues { displayState in
+        DisplaySpaceState(
+            displayID: displayState.displayID,
+            tree: displayState.tree,
+            floating: displayState.floating.filter { $0 != windowID }
+        )
+    }
+    if !isTiled {
+        let target = displayStates[displayID] ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
+        displayStates[displayID] = DisplaySpaceState(
+            displayID: displayID,
+            tree: target.tree,
+            floating: target.floating + [windowID]
+        )
+    }
+
+    var nextSpaces = spaces
+    nextSpaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: space.focused)
+    return nextSpaces
+}
+
+private func resolvedDisplayID(
+    for metadata: WindowMetadata,
+    preferredSlot: Int?,
+    displays: [DisplayID: DisplayInfo]
+) -> DisplayID? {
+    if let preferredSlot,
+       let preferredDisplay = displays.values
+        .filter({ $0.slot == preferredSlot })
+        .sorted(by: { $0.id.raw < $1.id.raw })
+        .first {
+        return preferredDisplay.id
+    }
+    return displayContaining(frame: metadata.frame, displays: displays)
 }
 
 private func displayOwnership(

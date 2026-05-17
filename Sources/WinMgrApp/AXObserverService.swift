@@ -15,6 +15,7 @@ final class AXObserverService {
     private var settleTimers: [Timer] = []
     private var workspaceObserver: NSObjectProtocol?
     private var focusedGeometryState = FocusedWindowGeometryState.empty
+    private var windowInventoryState: WindowInventoryState?
 
     init(
         axClient: AXClient,
@@ -33,9 +34,11 @@ final class AXObserverService {
     func start() {
         guard timer == nil else { return }
         pollFocusedWindow()
+        syncWindowInventory()
         timer = makeTimer(interval: Self.pollInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.pollFocusedWindow()
+                self?.pollVisibleWindowInventory()
             }
         }
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -55,6 +58,7 @@ final class AXObserverService {
         timer = nil
         settleTimers.forEach { $0.invalidate() }
         settleTimers.removeAll()
+        windowInventoryState = nil
         if let workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
             self.workspaceObserver = nil
@@ -65,6 +69,7 @@ final class AXObserverService {
         settleTimers.forEach { $0.invalidate() }
         settleTimers.removeAll()
         focusedGeometryState = .empty
+        windowInventoryState = nil
         spaceChanged()
         reporter.info("Active Space changed; focus border hidden pending focused-window refresh")
         pollFocusedWindowAfterDelay(0.05)
@@ -107,5 +112,31 @@ final class AXObserverService {
             return
         }
         emit(event, snapshot)
+    }
+
+    private func syncWindowInventory() {
+        let snapshot = axClient.windowSnapshot()
+        guard case .complete = snapshot.quality else { return }
+        windowInventoryState = WindowInventoryState(
+            visibleWindowIDs: Set(snapshot.windows.map(\.id))
+        )
+    }
+
+    private func pollVisibleWindowInventory() {
+        let snapshot = axClient.windowSnapshot()
+        guard case .complete = snapshot.quality else { return }
+
+        guard let previous = windowInventoryState else {
+            windowInventoryState = WindowInventoryState(
+                visibleWindowIDs: Set(snapshot.windows.map(\.id))
+            )
+            return
+        }
+
+        let poll = pollWindowInventory(previous: previous, current: snapshot.windows)
+        windowInventoryState = poll.state
+        for event in poll.events {
+            emit(event, nil)
+        }
     }
 }

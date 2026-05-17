@@ -881,8 +881,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let snapshot {
                 overlay.updateFocusBorder(.show(windowID, snapshot.frame))
             }
-        case .windowOpened, .windowClosed:
-            break
+        case .windowOpened(let metadata):
+            let environment = await refreshEnvironment(reason: "window opened \(metadata.id.description)")
+            guard case .complete = environment.quality else { return }
+            await persistRestore(reason: "window opened")
+        case .windowClosed(let windowID):
+            let environment = await refreshEnvironment(reason: "window closed \(windowID.description)")
+            guard case .complete = environment.quality else { return }
+            await persistRestore(reason: "window closed")
         }
     }
 

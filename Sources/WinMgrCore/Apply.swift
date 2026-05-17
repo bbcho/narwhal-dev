@@ -30,10 +30,10 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
         return applyExternalFocus(windowID, to: world)
     case .windowConstraintObserved(let windowID, let constraints):
         return .success(recordObservedConstraints(constraints, for: windowID, in: world))
-    case .windowOpened:
-        return commandNotImplemented(command)
-    case .windowClosed:
-        return commandNotImplemented(command)
+    case .windowOpened(let metadata):
+        return .success(worldByOpeningWindow(metadata, in: world))
+    case .windowClosed(let windowID):
+        return .success(worldByClosingWindow(windowID, in: world))
     case .windowMovedExternally:
         return commandNotImplemented(command)
     case .windowResizedExternally:
