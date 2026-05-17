@@ -360,7 +360,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let service = AXObserverService(
             axClient: axClient,
             echoSuppressor: echoSuppressor,
-            reporter: reporter
+            reporter: reporter,
+            spaceChanged: { [weak self] in
+                self?.overlay.updateFocusBorder(.hide)
+            }
         ) { [weak self] event, snapshot in
             Task { @MainActor in
                 await self?.handleAXEvent(event, snapshot: snapshot)
