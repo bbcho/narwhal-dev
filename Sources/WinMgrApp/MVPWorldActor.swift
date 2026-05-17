@@ -116,6 +116,17 @@ actor MVPWorldActor {
     }
 
     func planPush(_ windowID: WindowID, direction: Direction) -> Result<MVPCommandResult, CommandError> {
+        planLayoutCommand(.push(windowID, direction), focusedWindowID: windowID)
+    }
+
+    func planDrop(windowID: WindowID, displayID: DisplayID, zoneID: ZoneID) -> Result<MVPCommandResult, CommandError> {
+        planLayoutCommand(.dropAtZone(windowID, displayID, zoneID), focusedWindowID: windowID)
+    }
+
+    private func planLayoutCommand(
+        _ command: Command,
+        focusedWindowID: WindowID?
+    ) -> Result<MVPCommandResult, CommandError> {
         let oldLayout: Layout
         switch flattenedLayout(of: world) {
         case .success(let layout):
@@ -124,7 +135,7 @@ actor MVPWorldActor {
             return .failure(.layoutUnsatisfiable(unsatisfiable))
         }
 
-        switch apply(.push(windowID, direction), to: world) {
+        switch apply(command, to: world) {
         case .success(let newWorld):
             let newLayout: Layout
             switch flattenedLayout(of: newWorld) {
@@ -140,7 +151,7 @@ actor MVPWorldActor {
             )
             nextGeneration += 1
             return .success(MVPCommandResult(
-                focusedWindowID: windowID,
+                focusedWindowID: focusedWindowID,
                 desiredLayout: desired,
                 windows: newWorld.windows,
                 plannedWorld: newWorld

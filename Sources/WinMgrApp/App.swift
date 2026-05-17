@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkeyManager: HotkeyManager?
     private var axObserverService: AXObserverService?
     private var ipcServer: IPCServer?
+    private var eventTapClient: EventTapClient?
     private var mvpServicesStarted = false
 
     static func main() {
@@ -125,6 +126,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         axObserverService = nil
         ipcServer?.stop()
         ipcServer = nil
+        eventTapClient?.stop()
+        eventTapClient = nil
         hotkeyManager?.stop()
         hotkeyManager = nil
         menubar.stop()
@@ -332,6 +335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hotkeyManager = manager
             startAXObserver()
             startIPCServer()
+            startEventTap()
             mvpServicesStarted = true
             reporter.info("MVP push loop ready")
         } catch {
@@ -402,6 +406,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.info("IPC server ready at \(IPCDefaults.socketPath)")
         } catch {
             reporter.error("IPC server startup failed: \(String(describing: error))")
+        }
+    }
+
+    @MainActor
+    private func startEventTap() {
+        guard eventTapClient == nil else { return }
+        let client = EventTapClient(modifier: config.dragModifier, reporter: reporter) { [weak self] location in
+            Task { @MainActor in
+                await self?.performDragDrop(at: location)
+            }
+        }
+        do {
+            try client.start()
+            eventTapClient = client
+        } catch {
+            reporter.error("Drag-zone event tap startup failed: \(String(describing: error))")
         }
     }
 
@@ -594,16 +614,114 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    private func performDragDrop(at location: CGPoint) async {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            reporter.error("Drag drop skipped because Accessibility is not trusted")
+            return
+        }
+
+        let snapshot: FocusedWindowSnapshot
+        switch axClient.focusedWindowSnapshot() {
+        case .success(let value):
+            snapshot = value
+        case .failure(let error):
+            reporter.error("Drag drop failed reading focused window: \(error.description)")
+            return
+        }
+
+        let displays = displayClient.currentDisplays()
+        let drag = DragEvent(windowID: snapshot.id, location: location, displayID: nil)
+        guard let command = resolveDrop(drag, zones: config.zones, displays: displays) else {
+            reporter.info("Drag drop ignored: no matching exclusive zone at \(location.debugDescription)")
+            return
+        }
+        guard case .dropAtZone(let windowID, let displayID, let zoneID) = command else {
+            reporter.error("Drag drop resolved to unsupported command: \(command)")
+            return
+        }
+
+        reporter.info(
+            "Drag drop resolved focused=\(snapshot.id.description) display=\(displayID.raw) zone=\(zoneID.raw) location=\(location.debugDescription)"
+        )
+        let environment = await refreshEnvironment(reason: "pre-drag drop", displays: displays)
+        guard environment.activeSpace != nil else {
+            reporter.error("Drag drop rejected before planning: active Space unavailable")
+            return
+        }
+
+        switch axClient.visibleWindowIDs() {
+        case .success(let liveWindowIDs):
+            await worldActor.reconcileLiveWindows(liveWindowIDs.union([snapshot.id]))
+        case .failure(let error):
+            reporter.error("Drag drop skipped live-window reconciliation: \(error.description)")
+        }
+        switch await worldActor.upsertWindow(snapshot.metadata, displayID: displayID, displays: displays) {
+        case .success:
+            break
+        case .failure(let error):
+            reporter.error("Drag drop failed updating focused window state: \(error.message)")
+            return
+        }
+
+        switch await worldActor.planDrop(windowID: windowID, displayID: displayID, zoneID: zoneID) {
+        case .success(let result):
+            _ = await applyPlannedDrop(result, windowID: windowID, displayID: displayID, zoneID: zoneID, retryOnClamp: true)
+        case .failure(let error):
+            reporter.error("Drag drop rejected by core: \(error.message)")
+        }
+    }
+
+    @MainActor
     private func applyPlannedPush(_ result: MVPCommandResult, direction: Direction, retryOnClamp: Bool) async -> Bool {
+        guard let focusedWindowID = result.focusedWindowID else {
+            reporter.error("Push \(direction.rawValue) cannot retry or commit without a focused window")
+            return false
+        }
+        return await applyPlannedLayout(
+            result,
+            operation: "Push \(direction.rawValue)",
+            persistReason: "push \(direction.rawValue)",
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.worldActor.planPush(focusedWindowID, direction: direction)
+        }
+    }
+
+    @MainActor
+    private func applyPlannedDrop(
+        _ result: MVPCommandResult,
+        windowID: WindowID,
+        displayID: DisplayID,
+        zoneID: ZoneID,
+        retryOnClamp: Bool
+    ) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: "Drag drop \(zoneID.raw)",
+            persistReason: "drag \(zoneID.raw)",
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.worldActor.planDrop(windowID: windowID, displayID: displayID, zoneID: zoneID)
+        }
+    }
+
+    @MainActor
+    private func applyPlannedLayout(
+        _ result: MVPCommandResult,
+        operation: String,
+        persistReason: String,
+        retryOnClamp: Bool,
+        replanAfterClamp: () async -> Result<MVPCommandResult, CommandError>
+    ) async -> Bool {
         let applyResult = LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
         if applyResult.succeeded {
             await worldActor.commit(result, appliedFrames: applyResult.applied)
-            reporter.info("Push \(direction.rawValue) completed")
+            reporter.info("\(operation) completed")
             if let focusedWindowID = result.focusedWindowID,
                let frame = applyResult.applied[focusedWindowID] ?? result.desiredLayout.layout.tiled[focusedWindowID] {
                 overlay.updateFocusBorder(.show(focusedWindowID, frame))
             }
-            await persistRestore(reason: "push \(direction.rawValue)")
+            await persistRestore(reason: persistReason)
             return true
         }
 
@@ -617,7 +735,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .map { "\($0.windowID.description) target=\($0.targetFrame.debugDescription) error=\($0.message)" }
                 .joined(separator: "; ")
             reporter.error(
-                "Push \(direction.rawValue) failed applying \(applyResult.failures.count) window(s); planned layout was not committed: \(failureSummary)"
+                "\(operation) failed applying \(applyResult.failures.count) window(s); planned layout was not committed: \(failureSummary)"
             )
             return false
         }
@@ -630,21 +748,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard retryOnClamp else {
             reporter.error(
-                "Push \(direction.rawValue) still clamped after min-size re-solve; planned layout was not committed: \(clampSummary)"
+                "\(operation) still clamped after min-size re-solve; planned layout was not committed: \(clampSummary)"
             )
             return false
         }
 
-        reporter.info("Push \(direction.rawValue) observed app min-size clamp; re-solving once: \(clampSummary)")
-        guard let focusedWindowID = result.focusedWindowID else {
-            reporter.error("Push \(direction.rawValue) cannot retry min-size re-solve without a focused window")
-            return false
-        }
-        switch await worldActor.planPush(focusedWindowID, direction: direction) {
+        reporter.info("\(operation) observed app min-size clamp; re-solving once: \(clampSummary)")
+        switch await replanAfterClamp() {
         case .success(let retry):
-            return await applyPlannedPush(retry, direction: direction, retryOnClamp: false)
+            return await applyPlannedLayout(
+                retry,
+                operation: operation,
+                persistReason: persistReason,
+                retryOnClamp: false,
+                replanAfterClamp: replanAfterClamp
+            )
         case .failure(let error):
-            reporter.error("Push \(direction.rawValue) rejected after min-size observation: \(error.message)")
+            reporter.error("\(operation) rejected after min-size observation: \(error.message)")
             return false
         }
     }
@@ -729,6 +849,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         config = loaded.config
         await worldActor.reloadConfig(loaded.config)
         overlay.updateConfig(border: loaded.config.border, hud: loaded.config.hud)
+        eventTapClient?.updateModifier(loaded.config.dragModifier)
         logStartupConfig(loaded)
         menubar.updateConfigStatus(.loaded)
         reporter.info("Config reload completed (\(reason))")

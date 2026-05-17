@@ -22,8 +22,8 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
         return commandNotImplemented(command)
     case .toggleFloat:
         return commandNotImplemented(command)
-    case .dropAtZone:
-        return commandNotImplemented(command)
+    case .dropAtZone(let windowID, let displayID, let zoneID):
+        return applyDropAtZone(windowID, displayID: displayID, zoneID: zoneID, to: world)
     case .resetLayout:
         return .success(resetTilingState(in: world))
     case .windowFocusedExternally(let windowID):
@@ -93,6 +93,68 @@ private func applyPush(_ windowID: WindowID, direction: Direction, to world: Wor
         spaces: nextSpaces,
         windows: world.windows,
         windowDisplay: world.windowDisplay,
+        windowConstraints: world.windowConstraints,
+        pendingRules: world.pendingRules,
+        config: world.config
+    ))
+}
+
+private func applyDropAtZone(
+    _ windowID: WindowID,
+    displayID: DisplayID,
+    zoneID: ZoneID,
+    to world: World
+) -> Result<World, CommandError> {
+    guard let metadata = world.windows[windowID] else {
+        return .failure(.windowNotFound(windowID))
+    }
+    guard metadata.isResizable else {
+        return .failure(.windowNotResizable(windowID))
+    }
+    guard world.displays[displayID] != nil else {
+        return .failure(.displayNotFound(displayID))
+    }
+    guard let activeSpace = world.activeSpace else {
+        return .failure(.activeSpaceUnavailable)
+    }
+    guard let zone = world.config.zones.first(where: { $0.id == zoneID }) else {
+        return .failure(.zoneNotFound(zoneID))
+    }
+    guard case .insertAsHalf(let direction) = zone.action else {
+        return .failure(.configInvalid("zone action is not implemented in the current MVP rung: \(String(describing: zone.action))"))
+    }
+
+    let currentSpace = world.spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
+    var displayStates = currentSpace.displays.mapValues { displayState in
+        DisplaySpaceState(
+            displayID: displayState.displayID,
+            tree: ejectFromTree(windowID, displayState.tree),
+            floating: displayState.floating.filter { $0 != windowID }
+        )
+    }
+    let targetDisplayState = displayStates[displayID] ?? DisplaySpaceState(
+        displayID: displayID,
+        tree: .void,
+        floating: []
+    )
+    displayStates[displayID] = DisplaySpaceState(
+        displayID: displayID,
+        tree: pushIntoTree(windowID, direction, targetDisplayState.tree),
+        floating: targetDisplayState.floating.filter { $0 != windowID }
+    )
+
+    var spaces = world.spaces
+    spaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: windowID)
+
+    var windowDisplay = world.windowDisplay
+    windowDisplay[windowID] = displayID
+
+    return .success(World(
+        displays: world.displays,
+        activeSpace: activeSpace,
+        spaces: spaces,
+        windows: world.windows,
+        windowDisplay: windowDisplay,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config
