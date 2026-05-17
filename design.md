@@ -1975,11 +1975,11 @@ For `.environmentChanged`, `apply` calls `reconcileEnvironment`. When `Environme
 
 If a hotkey arrives during that incomplete-snapshot interval, normal `validateCommand` still gates the focused `WindowID` against `world.windows`. Unknown current-Space windows are ignored until the next complete environment snapshot rather than mapped onto stale state.
 
-AX inventory refresh coalescing is a shell-only optimization backed by a pure state machine. `AXObserver` may detect multiple `.windowOpened` / `.windowClosed` events in one app launch, tab detach, window restore, or Space settle burst. Those events schedule one coalesced `EnvironmentSnapshot` refresh after a short debounce window, not one refresh per event. The coalescer keeps only shell data: pending reasons, a scheduled timer/task, and a monotonically increasing request generation. It does not buffer or transform `Command`s, and it does not alter `reconcileEnvironment`.
+AX inventory refresh coalescing is a shell-only optimization backed by a pure state machine. `AXObserver` may detect multiple `.windowOpened` / `.windowClosed` events in one app launch, tab detach, window restore, or Space settle burst; `DisplayObserverService` may also detect display topology changes while the app is idle. Those events schedule one coalesced `EnvironmentSnapshot` refresh after a short debounce window, not one refresh per event. The coalescer keeps only shell data: pending reasons, a scheduled timer/task, and a monotonically increasing request generation. It does not buffer or transform `Command`s, and it does not alter `reconcileEnvironment`.
 
 Coalescing rules:
 1. User commands (`push`, `center`, `swap`, focus, drag, IPC) bypass the coalescer and perform their existing immediate pre-command environment refresh.
-2. AX inventory and Space-settle refresh requests are coalesced for 100 ms. Display-change requests should use the same coalescer when a display observer lands.
+2. AX inventory, Space-settle, and display-change refresh requests are coalesced for 100 ms.
 3. A newer coalesced request cancels or supersedes the older scheduled request by generation.
 4. A coalesced refresh persists restore state only after a complete AX snapshot is applied.
 5. Partial or permission-denied AX snapshots do not clear the pending generation; the next complete snapshot still reconciles live inventory.
@@ -2054,7 +2054,7 @@ No external lens library needed. Sum types (enums) need custom matchers — done
 | AXClient (shell) | Integration test against real AX with a known test app (e.g. spawn `TextEdit`); assert complete/partial snapshot, setFrame, raise, and focus behavior | `Tests/WinMgrShellTests/AXClientTests.swift` |
 | LayoutApplier | Integration: submit stale and current `DesiredLayout`, assert latest generation wins via AX re-query; submit below-min Finder/TextEdit frame and assert clamp is returned as `AXFrameWriteOutcome.clamped` | `Tests/WinMgrShellTests/ApplierTests.swift` |
 | AX echo suppression | Integration: self-generated move-only, resize-only, combined frame, and focus callbacks do not persist as external move/resize/focus commands | `Tests/WinMgrShellTests/AXEchoTests.swift` |
-| AX inventory refresh coalescing | Pure unit test: open/close/Space-settle burst produces one latest-generation request; stale generations cannot run or clear newer pending work; partial AX snapshot retains pending state and does not imply restore persistence | `Tests/WinMgrCoreTests/EnvironmentRefreshCoalescerTests.swift` |
+| AX inventory refresh coalescing | Pure unit test: open/close/display/Space-settle burst produces one latest-generation request; stale generations cannot run or clear newer pending work; partial AX snapshot retains pending state and does not imply restore persistence | `Tests/WinMgrCoreTests/EnvironmentRefreshCoalescerTests.swift` |
 | Overlay | Unit/integration: focus-border effect shows/moves/hides border from outcomes; Space HUD only from Space-sourced environment changes | `Tests/WinMgrShellTests/OverlayTests.swift` |
 | HotkeyManager | Unit test with mock Carbon-bind closure; reload rebinds exact new keymap | `Tests/WinMgrShellTests/HotkeyTests.swift` |
 | LuaEngine | Unit test: eval simple expressions, exposed function calls return | `Tests/WinMgrShellTests/LuaTests.swift` |

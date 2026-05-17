@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var accessibilityPollTimer: Timer?
     private var hotkeyManager: HotkeyManager?
     private var axObserverService: AXObserverService?
+    private var displayObserverService: DisplayObserverService?
     private var ipcServer: IPCServer?
     private var eventTapClient: EventTapClient?
     private var environmentRefreshCoalescer = EnvironmentRefreshCoalescerState.empty
@@ -125,6 +126,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environmentRefreshCoalescingTimerGeneration = nil
         axObserverService?.stop()
         axObserverService = nil
+        displayObserverService?.stop()
+        displayObserverService = nil
         ipcServer?.stop()
         ipcServer = nil
         eventTapClient?.stop()
@@ -319,6 +322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try manager.start()
             hotkeyManager = manager
             startAXObserver()
+            startDisplayObserver()
             startIPCServer()
             startEventTap()
             servicesStarted = true
@@ -366,6 +370,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         service.start()
         axObserverService = service
+    }
+
+    @MainActor
+    private func startDisplayObserver() {
+        guard displayObserverService == nil else { return }
+        let service = DisplayObserverService(reporter: reporter) { [weak self] in
+            self?.overlay.updateFocusBorder(.hide)
+            self?.scheduleCoalescedEnvironmentRefresh(.displayChanged)
+        }
+        service.start()
+        displayObserverService = service
     }
 
     @MainActor

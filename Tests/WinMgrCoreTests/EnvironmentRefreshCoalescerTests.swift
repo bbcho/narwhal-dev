@@ -7,6 +7,7 @@ struct EnvironmentRefreshCoalescerTests {
     func burstSchedulingAccumulatesReasonsAndSupersedesStaleGenerations() {
         let first = scheduleEnvironmentRefresh(.windowOpened(WindowID(raw: 10)), in: .empty)
         let second = scheduleEnvironmentRefresh(.windowClosed(WindowID(raw: 11)), in: first.state)
+        let third = scheduleEnvironmentRefresh(.displayChanged, in: second.state)
 
         #expect(first.request == CoalescedEnvironmentRefresh(
             generation: 1,
@@ -19,12 +20,21 @@ struct EnvironmentRefreshCoalescerTests {
                 .windowClosed(WindowID(raw: 11))
             ]
         ))
-        #expect(second.state == EnvironmentRefreshCoalescerState(
-            nextGeneration: 3,
-            pending: second.request
+        #expect(third.request == CoalescedEnvironmentRefresh(
+            generation: 3,
+            reasons: [
+                .windowOpened(WindowID(raw: 10)),
+                .windowClosed(WindowID(raw: 11)),
+                .displayChanged
+            ]
         ))
-        #expect(fireEnvironmentRefreshTimer(generation: 1, in: second.state).decision == .stale(pending: second.request))
-        #expect(fireEnvironmentRefreshTimer(generation: 2, in: second.state).decision == .run(second.request))
+        #expect(third.state == EnvironmentRefreshCoalescerState(
+            nextGeneration: 4,
+            pending: third.request
+        ))
+        #expect(fireEnvironmentRefreshTimer(generation: 1, in: third.state).decision == .stale(pending: third.request))
+        #expect(fireEnvironmentRefreshTimer(generation: 2, in: third.state).decision == .stale(pending: third.request))
+        #expect(fireEnvironmentRefreshTimer(generation: 3, in: third.state).decision == .run(third.request))
     }
 
     @Test("Complete matching refresh clears the pending request only after it runs")
