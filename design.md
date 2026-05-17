@@ -286,6 +286,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 10 | Quality-of-life shell adapters: focus border, menubar reload, AXObserver echo filtering | Daily-use loop is tolerable | IPC, drag zones |
 | 11a | IPC socket + `winmgrctl` | `winmgrctl reset` works against the running app; IPC tests cover newline-delimited JSON, connection reuse, and invalid command replies | Drag zones |
 | 11b | Drag zones | Shift-drag onto configured zones maps to the same push pipeline | Packaging |
+| 12 | Local packaging | `scripts/build_app_bundle.sh` emits a runnable `.app`, embeds Lua, copies default config into Resources, and generates a LaunchAgent plist | Notarization, brew cask |
 
 ### Fast-path constraints
 
@@ -2027,9 +2028,9 @@ No external lens library needed. Sum types (enums) need custom matchers — done
 | Item | Decision | Why deferred |
 |---|---|---|
 | License (MIT vs GPL) | TBD before first public push | Private repo for now. |
-| Brew cask publishing | After Phase 30 | Need a stable feature set first. |
+| Brew cask publishing | After local packaging and notarization | Need a stable feature set first. |
 | App icon | After Phase 30 | Aesthetics, not architecture. |
-| Notarization automation | Phase 30 area | Need `.app` bundle structure finalized first. |
+| Notarization automation | After local `.app` bundle works | Need a signing identity and bundle structure finalized first. |
 | Multi-display window movement hotkeys | Add later phase | Not in current 31-phase list; can extend `Direction` w/ `.display(.left/.right)` variants. |
 | Workspace rename / labels | Later | Not in MVP scope. |
 | Tabbed groups (i3-style) | Later | Adds a new Node variant. Reconsider after MVP. |
