@@ -48,7 +48,9 @@ struct SlotSequenceTests {
             #expect(slotFrames.map(\.frame).allSatisfy { display.contains($0) })
             #expect(rectsArePairwiseDisjoint(Array(frames.values)))
             #expect(rectsArePairwiseDisjoint(slotFrames.map(\.frame)))
-            #expect(abs(slotFrames.map { $0.frame.width * $0.frame.height }.reduce(0, +) - display.width * display.height) < 0.0001)
+            let coveredArea = slotFrames.map { $0.frame.width * $0.frame.height }.reduce(0, +)
+            let displayArea = display.width * display.height
+            #expect(abs(coveredArea - displayArea) < 0.0001)
         }
     }
 

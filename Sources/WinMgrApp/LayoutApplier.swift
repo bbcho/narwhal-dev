@@ -54,7 +54,7 @@ struct LayoutApplier {
             }
 
             let writeResult: AXFrameWriteOutcome
-            if windowID == result.focusedWindowID {
+            if let focusedWindowID = result.focusedWindowID, windowID == focusedWindowID {
                 writeResult = axClient.setFocusedWindowFrame(frame)
             } else {
                 writeResult = axClient.setFrame(metadata, to: frame)

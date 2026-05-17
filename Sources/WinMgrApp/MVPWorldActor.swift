@@ -2,13 +2,14 @@ import CoreGraphics
 import WinMgrCore
 
 struct MVPCommandResult: Sendable {
-    let focusedWindowID: WindowID
+    let focusedWindowID: WindowID?
     let desiredLayout: DesiredLayout
     let windows: [WindowID: WindowMetadata]
     let plannedWorld: World
 }
 
 struct EnvironmentRefreshResult: Sendable {
+    let snapshot: EnvironmentSnapshot
     let activeSpace: SpaceID?
     let displayCount: Int
     let windowCount: Int
@@ -40,11 +41,26 @@ actor MVPWorldActor {
             break
         }
         return EnvironmentRefreshResult(
+            snapshot: snapshot,
             activeSpace: world.activeSpace,
             displayCount: world.displays.count,
             windowCount: world.windows.count,
             quality: snapshot.axSnapshot.quality
         )
+    }
+
+    func restore(_ stored: StoredWorld, from snapshot: EnvironmentSnapshot) -> Int {
+        world = restoreWorld(
+            from: stored,
+            liveWindows: snapshot.axSnapshot.windows,
+            displays: snapshot.displays,
+            activeSpace: snapshot.activeSpace,
+            config: world.config
+        )
+        guard let activeSpace = world.activeSpace, let space = world.spaces[activeSpace] else { return 0 }
+        return space.displays.values.reduce(0) { total, state in
+            total + occupiedWindows(in: state.tree).count
+        }
     }
 
     func recordExternalFocus(_ windowID: WindowID) {
@@ -124,6 +140,37 @@ actor MVPWorldActor {
         }
     }
 
+    func planCurrentLayout() -> Result<MVPCommandResult?, CommandError> {
+        let newLayout: Layout
+        switch flattenedLayout(of: world) {
+        case .success(let layout):
+            newLayout = layout
+        case .failure(let unsatisfiable):
+            return .failure(.layoutUnsatisfiable(unsatisfiable))
+        }
+        guard !newLayout.tiled.isEmpty else {
+            return .success(nil)
+        }
+
+        let desired = DesiredLayout(
+            generation: LayoutGeneration(raw: nextGeneration),
+            layout: newLayout,
+            delta: LayoutDelta(
+                moves: newLayout.tiled,
+                raises: [],
+                hides: [],
+                shows: Set(newLayout.tiled.keys)
+            )
+        )
+        nextGeneration += 1
+        return .success(MVPCommandResult(
+            focusedWindowID: nil,
+            desiredLayout: desired,
+            windows: world.windows,
+            plannedWorld: world
+        ))
+    }
+
     func recordObservedConstraints(_ observations: [WindowID: WindowConstraints]) {
         for (windowID, constraints) in observations {
             world = WinMgrCore.recordObservedConstraints(constraints, for: windowID, in: world)
@@ -137,6 +184,10 @@ actor MVPWorldActor {
         case .failure:
             world = resetTilingState(in: world)
         }
+    }
+
+    func restoreSnapshot() -> StoredWorld {
+        storedWorld(from: world)
     }
 
     func commit(_ result: MVPCommandResult, appliedFrames: [WindowID: CGRect]) {

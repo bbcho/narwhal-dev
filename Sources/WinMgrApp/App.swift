@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let axClient = AXClient()
     private let displayClient = DisplayClient()
     private let spaceClient = SpaceClient()
+    private let restoreManager = RestoreManager()
     private var worldActor = MVPWorldActor()
     private let reporter = StartupReporter()
     private var config = Config.default
@@ -153,9 +154,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.error("MVP services not started: active Space unavailable")
             return
         }
+        guard await loadRestoreState(using: environment.snapshot) else { return }
         if let focused {
             await worldActor.recordExternalFocus(focused.id)
         }
+        await applyStartupConverge()
         startMVPServices()
     }
 
@@ -287,6 +290,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApplication.shared.terminate(nil)
                 return
             }
+            guard await loadRestoreState(using: environment.snapshot) else {
+                NSApplication.shared.terminate(nil)
+                return
+            }
             await performPush(direction)
             NSApplication.shared.terminate(nil)
         }
@@ -349,6 +356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .command(.resetLayout):
             await worldActor.resetLayoutMemory()
             reporter.info("Reset layout memory: cleared BSP trees, floating lists, focus, pending rules, and observed window minimums")
+            await persistRestore(reason: "reset")
         case .command(let template):
             reporter.error("Hotkey action not implemented in MVP: \(describe(template))")
         case .reloadConfig:
@@ -414,6 +422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if applyResult.succeeded {
             await worldActor.commit(result, appliedFrames: applyResult.applied)
             reporter.info("Push \(direction.rawValue) completed")
+            await persistRestore(reason: "push \(direction.rawValue)")
             return
         }
 
@@ -446,11 +455,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         reporter.info("Push \(direction.rawValue) observed app min-size clamp; re-solving once: \(clampSummary)")
-        switch await worldActor.planPush(result.focusedWindowID, direction: direction) {
+        guard let focusedWindowID = result.focusedWindowID else {
+            reporter.error("Push \(direction.rawValue) cannot retry min-size re-solve without a focused window")
+            return
+        }
+        switch await worldActor.planPush(focusedWindowID, direction: direction) {
         case .success(let retry):
             await applyPlannedPush(retry, direction: direction, retryOnClamp: false)
         case .failure(let error):
             reporter.error("Push \(direction.rawValue) rejected after min-size observation: \(error.message)")
+        }
+    }
+
+    @MainActor
+    private func loadRestoreState(using snapshot: EnvironmentSnapshot) async -> Bool {
+        guard snapshot.axSnapshot.quality == .complete else {
+            reporter.error("Restore skipped because environment snapshot is \(describe(snapshot.axSnapshot.quality))")
+            return true
+        }
+
+        do {
+            guard let stored = try restoreManager.load() else {
+                reporter.info("Restore state not found at \(restoreManager.url.path)")
+                return true
+            }
+            let restoredCount = await worldActor.restore(stored, from: snapshot)
+            reporter.info("Restore state loaded from \(restoreManager.url.path); restored tiled windows=\(restoredCount)")
+            return true
+        } catch {
+            reporter.error("Restore state failed: \(String(describing: error))")
+            NSApplication.shared.terminate(nil)
+            return false
+        }
+    }
+
+    @MainActor
+    private func applyStartupConverge() async {
+        switch await worldActor.planCurrentLayout() {
+        case .success(nil):
+            reporter.info("Startup restore convergence skipped: no restored tiled windows")
+        case .success(let result?):
+            let applyResult = LayoutApplier(axClient: axClient, reporter: reporter).apply(result)
+            if applyResult.succeeded {
+                await worldActor.commit(result, appliedFrames: applyResult.applied)
+                reporter.info("Startup restore convergence completed")
+                await persistRestore(reason: "startup")
+                return
+            }
+
+            await worldActor.recordAppliedFrames(applyResult.applied)
+            if !applyResult.clamps.isEmpty {
+                await worldActor.recordObservedConstraints(applyResult.observedConstraints)
+            }
+            let clampSummary = applyResult.clamps
+                .map {
+                    "\($0.windowID.description) target=\($0.targetFrame.debugDescription) actual=\($0.actualFrame.debugDescription) observed=\($0.observed.debugDescription)"
+                }
+                .joined(separator: "; ")
+            let failureSummary = applyResult.failures
+                .map { "\($0.windowID.description) target=\($0.targetFrame.debugDescription) error=\($0.message)" }
+                .joined(separator: "; ")
+            reporter.error(
+                "Startup restore convergence failed; restored layout was not committed: clamps=\(clampSummary) failures=\(failureSummary)"
+            )
+        case .failure(let error):
+            reporter.error("Startup restore convergence rejected by core: \(error.message)")
+        }
+    }
+
+    @MainActor
+    private func persistRestore(reason: String) async {
+        let stored = await worldActor.restoreSnapshot()
+        do {
+            try restoreManager.save(stored)
+            reporter.info("Restore state saved (\(reason)) to \(restoreManager.url.path)")
+        } catch {
+            reporter.error("Restore state save failed (\(reason)): \(String(describing: error))")
         }
     }
 
