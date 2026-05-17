@@ -705,6 +705,7 @@ enum Command: Equatable {
     case center(WindowID)
     case eject(WindowID)
     case focusDirection(Direction)
+    case focusCycle(FocusCycleDirection)
     case focus(WindowID)
     case swapInTree(Direction)
     case resizeSplit(WindowID, Direction, delta: Double)
@@ -874,6 +875,7 @@ enum CommandTemplate: Equatable {
     case center
     case eject
     case focusDirection(Direction)
+    case focusCycle(FocusCycleDirection)
     case toggleFloat
     case resetLayout
     // template is resolved at hotkey-fire time using "focused window"
@@ -930,6 +932,11 @@ enum Corner: String, Codable, CaseIterable {
     case topLeft, topRight, bottomLeft, bottomRight
 }
 
+enum FocusCycleDirection: String, Codable, CaseIterable {
+    case previous
+    case next
+}
+
 // ───── Supporting value types ─────
 
 typealias ProcessID = Int32
@@ -973,10 +980,16 @@ struct HUDConfig: Equatable {
 
 enum DefaultKeymap {
     static let entries: [HotkeyBinding] = [
-        HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option]), action: .command(.push(.left))),
-        HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option]), action: .command(.push(.right))),
-        HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option]), action: .command(.push(.up))),
-        HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option]), action: .command(.push(.down))),
+        HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option]), action: .command(.focusDirection(.left))),
+        HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option]), action: .command(.focusDirection(.right))),
+        HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option]), action: .command(.focusDirection(.up))),
+        HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option]), action: .command(.focusDirection(.down))),
+        HotkeyBinding(key: KeySpec(key: "u", modifiers: [.control, .option]), action: .command(.focusCycle(.previous))),
+        HotkeyBinding(key: KeySpec(key: "i", modifiers: [.control, .option]), action: .command(.focusCycle(.next))),
+        HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .command]), action: .command(.push(.left))),
+        HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .command]), action: .command(.push(.right))),
+        HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .command]), action: .command(.push(.up))),
+        HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .command]), action: .command(.push(.down))),
         HotkeyBinding(key: KeySpec(key: "delete", modifiers: [.control, .option]), action: .command(.resetLayout))
     ]
 }
@@ -1068,6 +1081,7 @@ enum IPCCommandDTO: Codable {
     case center(windowID: WindowID)
     case eject(windowID: WindowID)
     case focusDirection(Direction)
+    case focusCycle(FocusCycleDirection)
     case focus(windowID: WindowID)
     case toggleFloat(windowID: WindowID)
     case resetLayout
@@ -1081,6 +1095,7 @@ enum IPCCommandDTO: Codable {
         case .center(let windowID): return .success(.center(windowID))
         case .eject(let windowID): return .success(.eject(windowID))
         case .focusDirection(let direction): return .success(.focusDirection(direction))
+        case .focusCycle(let direction): return .success(.focusCycle(direction))
         case .focus(let windowID): return .success(.focus(windowID))
         case .toggleFloat(let windowID): return .success(.toggleFloat(windowID))
         case .resetLayout: return .success(.resetLayout)

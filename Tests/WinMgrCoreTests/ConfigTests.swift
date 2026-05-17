@@ -7,10 +7,16 @@ struct ConfigTests {
     @Test("Default keymap contains only implemented MVP hotkeys")
     func defaultKeymapContainsOnlyMvpHotkeys() {
         #expect(Config.default.keymap == [
-            HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option]), action: .command(.push(.left))),
-            HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option]), action: .command(.push(.right))),
-            HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option]), action: .command(.push(.up))),
-            HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option]), action: .command(.push(.down))),
+            HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option]), action: .command(.focusDirection(.left))),
+            HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option]), action: .command(.focusDirection(.right))),
+            HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option]), action: .command(.focusDirection(.up))),
+            HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option]), action: .command(.focusDirection(.down))),
+            HotkeyBinding(key: KeySpec(key: "u", modifiers: [.control, .option]), action: .command(.focusCycle(.previous))),
+            HotkeyBinding(key: KeySpec(key: "i", modifiers: [.control, .option]), action: .command(.focusCycle(.next))),
+            HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .command]), action: .command(.push(.left))),
+            HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .command]), action: .command(.push(.right))),
+            HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .command]), action: .command(.push(.up))),
+            HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .command]), action: .command(.push(.down))),
             HotkeyBinding(key: KeySpec(key: "delete", modifiers: [.control, .option]), action: .command(.resetLayout))
         ])
     }
@@ -124,10 +130,16 @@ struct ConfigTests {
     private func defaultLuaRoot() -> [String: LuaValue] {
         [
             "keymap": .array([
-                binding(key: "h", modifiers: ["control", "option"], action: ["type": .string("push"), "direction": .string("left")]),
-                binding(key: "l", modifiers: ["control", "option"], action: ["type": .string("push"), "direction": .string("right")]),
-                binding(key: "k", modifiers: ["control", "option"], action: ["type": .string("push"), "direction": .string("up")]),
-                binding(key: "j", modifiers: ["control", "option"], action: ["type": .string("push"), "direction": .string("down")]),
+                binding(key: "h", modifiers: ["control", "option"], action: ["type": .string("focus_direction"), "direction": .string("left")]),
+                binding(key: "l", modifiers: ["control", "option"], action: ["type": .string("focus_direction"), "direction": .string("right")]),
+                binding(key: "k", modifiers: ["control", "option"], action: ["type": .string("focus_direction"), "direction": .string("up")]),
+                binding(key: "j", modifiers: ["control", "option"], action: ["type": .string("focus_direction"), "direction": .string("down")]),
+                binding(key: "u", modifiers: ["control", "option"], action: ["type": .string("focus_cycle"), "direction": .string("previous")]),
+                binding(key: "i", modifiers: ["control", "option"], action: ["type": .string("focus_cycle"), "direction": .string("next")]),
+                binding(key: "h", modifiers: ["control", "option", "command"], action: ["type": .string("push"), "direction": .string("left")]),
+                binding(key: "l", modifiers: ["control", "option", "command"], action: ["type": .string("push"), "direction": .string("right")]),
+                binding(key: "k", modifiers: ["control", "option", "command"], action: ["type": .string("push"), "direction": .string("up")]),
+                binding(key: "j", modifiers: ["control", "option", "command"], action: ["type": .string("push"), "direction": .string("down")]),
                 binding(key: "delete", modifiers: ["control", "option"], action: ["type": .string("reset_layout")])
             ]),
             "gaps": .table([

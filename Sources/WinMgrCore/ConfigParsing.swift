@@ -60,6 +60,8 @@ private struct ConfigParser {
             return .command(.eject)
         case "focus_direction":
             return .command(.focusDirection(try parseDirection(required("direction", in: table, path: key), key: "\(key).direction")))
+        case "focus_cycle":
+            return .command(.focusCycle(try parseFocusCycleDirection(required("direction", in: table, path: key), key: "\(key).direction")))
         case "toggle_float":
             return .command(.toggleFloat)
         case "reset_layout":
@@ -193,6 +195,14 @@ private struct ConfigParser {
         let raw = try string(value, key: key)
         guard let direction = Direction(rawValue: raw) else {
             throw ConfigError.invalidValue(key: key, reason: "unsupported direction '\(raw)'")
+        }
+        return direction
+    }
+
+    private func parseFocusCycleDirection(_ value: LuaValue, key: String) throws -> FocusCycleDirection {
+        let raw = try string(value, key: key)
+        guard let direction = FocusCycleDirection(rawValue: raw) else {
+            throw ConfigError.invalidValue(key: key, reason: "unsupported focus cycle direction '\(raw)'")
         }
         return direction
     }

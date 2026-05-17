@@ -2,10 +2,16 @@
 -- Copy this file to ~/.config/winmgr/init.lua to customize startup config.
 return {
   keymap = {
-    { key = "h", modifiers = { "control", "option" }, action = { type = "push", direction = "left" } },
-    { key = "l", modifiers = { "control", "option" }, action = { type = "push", direction = "right" } },
-    { key = "k", modifiers = { "control", "option" }, action = { type = "push", direction = "up" } },
-    { key = "j", modifiers = { "control", "option" }, action = { type = "push", direction = "down" } },
+    { key = "h", modifiers = { "control", "option" }, action = { type = "focus_direction", direction = "left" } },
+    { key = "l", modifiers = { "control", "option" }, action = { type = "focus_direction", direction = "right" } },
+    { key = "k", modifiers = { "control", "option" }, action = { type = "focus_direction", direction = "up" } },
+    { key = "j", modifiers = { "control", "option" }, action = { type = "focus_direction", direction = "down" } },
+    { key = "u", modifiers = { "control", "option" }, action = { type = "focus_cycle", direction = "previous" } },
+    { key = "i", modifiers = { "control", "option" }, action = { type = "focus_cycle", direction = "next" } },
+    { key = "h", modifiers = { "control", "option", "command" }, action = { type = "push", direction = "left" } },
+    { key = "l", modifiers = { "control", "option", "command" }, action = { type = "push", direction = "right" } },
+    { key = "k", modifiers = { "control", "option", "command" }, action = { type = "push", direction = "up" } },
+    { key = "j", modifiers = { "control", "option", "command" }, action = { type = "push", direction = "down" } },
     { key = "delete", modifiers = { "control", "option" }, action = { type = "reset_layout" } },
   },
   gaps = {

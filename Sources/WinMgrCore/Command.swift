@@ -5,6 +5,7 @@ public enum Command: Equatable, Sendable {
     case center(WindowID)
     case eject(WindowID)
     case focusDirection(Direction)
+    case focusCycle(FocusCycleDirection)
     case focus(WindowID)
     case swapInTree(Direction)
     case resizeSplit(WindowID, Direction, delta: Double)
@@ -174,6 +175,7 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
     case center(windowID: WindowID)
     case eject(windowID: WindowID)
     case focusDirection(Direction)
+    case focusCycle(FocusCycleDirection)
     case focus(windowID: WindowID)
     case toggleFloat(windowID: WindowID)
     case resetLayout
@@ -189,6 +191,7 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
         case center
         case eject
         case focusDirection
+        case focusCycle
         case focus
         case toggleFloat
         case resetLayout
@@ -207,6 +210,8 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             return .success(.eject(windowID))
         case .focusDirection(let direction):
             return .success(.focusDirection(direction))
+        case .focusCycle(let direction):
+            return .success(.focusCycle(direction))
         case .focus(let windowID):
             return .success(.focus(windowID))
         case .toggleFloat(let windowID):
@@ -232,6 +237,8 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             self = .eject(windowID: try Self.decodeWindowID(from: container))
         case .focusDirection:
             self = .focusDirection(try container.decode(Direction.self, forKey: .direction))
+        case .focusCycle:
+            self = .focusCycle(try container.decode(FocusCycleDirection.self, forKey: .direction))
         case .focus:
             self = .focus(windowID: try Self.decodeWindowID(from: container))
         case .toggleFloat:
@@ -259,6 +266,9 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             try container.encode(windowID.raw, forKey: .windowID)
         case .focusDirection(let direction):
             try container.encode(CommandName.focusDirection, forKey: .command)
+            try container.encode(direction, forKey: .direction)
+        case .focusCycle(let direction):
+            try container.encode(CommandName.focusCycle, forKey: .command)
             try container.encode(direction, forKey: .direction)
         case .focus(let windowID):
             try container.encode(CommandName.focus, forKey: .command)

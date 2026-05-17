@@ -58,6 +58,7 @@ public enum CommandTemplate: Equatable, Sendable {
     case center
     case eject
     case focusDirection(Direction)
+    case focusCycle(FocusCycleDirection)
     case toggleFloat
     case resetLayout
 }
@@ -145,10 +146,16 @@ public enum Corner: String, Codable, CaseIterable, Sendable {
 
 public enum DefaultKeymap {
     public static let entries: [HotkeyBinding] = [
-        HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option]), action: .command(.push(.left))),
-        HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option]), action: .command(.push(.right))),
-        HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option]), action: .command(.push(.up))),
-        HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option]), action: .command(.push(.down))),
+        HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option]), action: .command(.focusDirection(.left))),
+        HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option]), action: .command(.focusDirection(.right))),
+        HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option]), action: .command(.focusDirection(.up))),
+        HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option]), action: .command(.focusDirection(.down))),
+        HotkeyBinding(key: KeySpec(key: "u", modifiers: [.control, .option]), action: .command(.focusCycle(.previous))),
+        HotkeyBinding(key: KeySpec(key: "i", modifiers: [.control, .option]), action: .command(.focusCycle(.next))),
+        HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .command]), action: .command(.push(.left))),
+        HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .command]), action: .command(.push(.right))),
+        HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .command]), action: .command(.push(.up))),
+        HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .command]), action: .command(.push(.down))),
         HotkeyBinding(key: KeySpec(key: "delete", modifiers: [.control, .option]), action: .command(.resetLayout))
     ]
 }
@@ -212,6 +219,8 @@ public enum DefaultConfigLua {
             return "{ type = \"eject\" }"
         case .focusDirection(let direction):
             return "{ type = \"focus_direction\", direction = \(quoted(direction.rawValue)) }"
+        case .focusCycle(let direction):
+            return "{ type = \"focus_cycle\", direction = \(quoted(direction.rawValue)) }"
         case .toggleFloat:
             return "{ type = \"toggle_float\" }"
         case .resetLayout:

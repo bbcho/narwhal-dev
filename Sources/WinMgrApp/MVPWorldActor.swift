@@ -8,6 +8,11 @@ struct MVPCommandResult: Sendable {
     let plannedWorld: World
 }
 
+struct MVPFocusResult: Sendable {
+    let window: WindowMetadata
+    let frame: CGRect
+}
+
 struct EnvironmentRefreshResult: Sendable {
     let snapshot: EnvironmentSnapshot
     let activeSpace: SpaceID?
@@ -174,6 +179,47 @@ actor MVPWorldActor {
             windows: world.windows,
             plannedWorld: world
         ))
+    }
+
+    func planFocusDirection(from focusedWindowID: WindowID, direction: Direction) -> Result<MVPFocusResult, CommandError> {
+        guard world.windows[focusedWindowID] != nil else {
+            return .failure(.windowNotFound(focusedWindowID))
+        }
+        let currentLayout: Layout
+        switch flattenedLayout(of: world) {
+        case .success(let layout):
+            currentLayout = layout
+        case .failure(let unsatisfiable):
+            return .failure(.layoutUnsatisfiable(unsatisfiable))
+        }
+        guard let targetWindowID = focusTarget(in: currentLayout, from: focusedWindowID, direction: direction) else {
+            return .failure(.noNeighbor(direction))
+        }
+        guard let target = world.windows[targetWindowID] else {
+            return .failure(.windowNotFound(targetWindowID))
+        }
+        return .success(MVPFocusResult(window: target, frame: currentLayout.tiled[targetWindowID] ?? target.frame))
+    }
+
+    func planFocusCycle(from focusedWindowID: WindowID?, direction: FocusCycleDirection) -> Result<MVPFocusResult, CommandError> {
+        guard let targetWindowID = focusCycleTarget(
+            windows: Array(world.windows.values),
+            from: focusedWindowID,
+            direction: direction
+        ) else {
+            return .failure(.windowNotFound(focusedWindowID ?? WindowID(raw: 0)))
+        }
+        guard let target = world.windows[targetWindowID] else {
+            return .failure(.windowNotFound(targetWindowID))
+        }
+        let targetFrame: CGRect
+        switch flattenedLayout(of: world) {
+        case .success(let layout):
+            targetFrame = layout.tiled[targetWindowID] ?? target.frame
+        case .failure:
+            targetFrame = target.frame
+        }
+        return .success(MVPFocusResult(window: target, frame: targetFrame))
     }
 
     func recordObservedConstraints(_ observations: [WindowID: WindowConstraints]) {

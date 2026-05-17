@@ -178,6 +178,10 @@ private func carbonKeyCode(for key: String) -> UInt32? {
         return UInt32(kVK_ANSI_K)
     case "l":
         return UInt32(kVK_ANSI_L)
+    case "u":
+        return UInt32(kVK_ANSI_U)
+    case "i":
+        return UInt32(kVK_ANSI_I)
     case "r":
         return UInt32(kVK_ANSI_R)
     case "return":
@@ -241,6 +245,8 @@ private func describe(_ template: CommandTemplate) -> String {
         return "eject"
     case .focusDirection(let direction):
         return "focus \(direction.rawValue)"
+    case .focusCycle(let direction):
+        return "focus cycle \(direction.rawValue)"
     case .toggleFloat:
         return "toggleFloat"
     case .resetLayout:

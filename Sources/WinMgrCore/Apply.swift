@@ -10,6 +10,8 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
         return commandNotImplemented(command)
     case .focusDirection:
         return commandNotImplemented(command)
+    case .focusCycle:
+        return commandNotImplemented(command)
     case .focus:
         return commandNotImplemented(command)
     case .swapInTree:

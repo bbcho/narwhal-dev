@@ -440,6 +440,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch action {
         case .command(.push(let direction)):
             await performPush(direction)
+        case .command(.focusDirection(let direction)):
+            await performFocusDirection(direction)
+        case .command(.focusCycle(let direction)):
+            await performFocusCycle(direction)
         case .command(.resetLayout):
             await worldActor.resetLayoutMemory()
             reporter.info("Reset layout memory: cleared BSP trees, floating lists, focus, pending rules, and observed window minimums")
@@ -449,6 +453,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.error("Hotkey action not implemented in MVP: \(describe(template))")
         case .reloadConfig:
             await reloadConfig(reason: "hotkey")
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performFocusDirection(_ direction: Direction) async -> Bool {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            reporter.error("Focus \(direction.rawValue) skipped because Accessibility is not trusted")
+            return false
+        }
+
+        let snapshot: FocusedWindowSnapshot
+        switch axClient.focusedWindowSnapshot() {
+        case .success(let value):
+            snapshot = value
+        case .failure(let error):
+            reporter.error("Focus \(direction.rawValue) failed reading focused window: \(error.description)")
+            return false
+        }
+
+        let displays = displayClient.currentDisplays()
+        let environment = await refreshEnvironment(reason: "pre-focus \(direction.rawValue)", displays: displays)
+        guard environment.activeSpace != nil else {
+            reporter.error("Focus \(direction.rawValue) rejected before planning: active Space unavailable")
+            return false
+        }
+        await worldActor.recordExternalFocus(snapshot.id)
+
+        switch await worldActor.planFocusDirection(from: snapshot.id, direction: direction) {
+        case .success(let result):
+            return await focusWindow(result, reason: "focus \(direction.rawValue)")
+        case .failure(let error):
+            reporter.error("Focus \(direction.rawValue) rejected by core: \(error.message)")
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performFocusCycle(_ direction: FocusCycleDirection) async -> Bool {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            reporter.error("Focus cycle \(direction.rawValue) skipped because Accessibility is not trusted")
+            return false
+        }
+
+        let focusedWindowID: WindowID?
+        switch axClient.focusedWindowSnapshot() {
+        case .success(let value):
+            focusedWindowID = value.id
+        case .failure:
+            focusedWindowID = nil
+        }
+
+        let environment = await refreshEnvironment(reason: "pre-focus-cycle \(direction.rawValue)")
+        guard environment.activeSpace != nil else {
+            reporter.error("Focus cycle \(direction.rawValue) rejected before planning: active Space unavailable")
+            return false
+        }
+        if let focusedWindowID {
+            await worldActor.recordExternalFocus(focusedWindowID)
+        }
+
+        switch await worldActor.planFocusCycle(from: focusedWindowID, direction: direction) {
+        case .success(let result):
+            return await focusWindow(result, reason: "focus cycle \(direction.rawValue)")
+        case .failure(let error):
+            reporter.error("Focus cycle \(direction.rawValue) rejected by core: \(error.message)")
+            return false
+        }
+    }
+
+    @MainActor
+    private func focusWindow(_ result: MVPFocusResult, reason: String) async -> Bool {
+        switch axClient.focusWindow(result.window) {
+        case .success:
+            echoSuppressor.expectFocus(windowID: result.window.id)
+            await worldActor.recordExternalFocus(result.window.id)
+            overlay.updateFocusBorder(.show(result.window.id, result.frame))
+            reporter.info("\(reason) completed target=\(result.window.id.description)")
+            return true
+        case .failure(let error):
+            reporter.error("\(reason) failed focusing \(result.window.id.description): \(error.description)")
+            return false
         }
     }
 
@@ -684,7 +771,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return .error(commandID: commandID, code: failure.code, message: failure.message)
             }
             return .ok(commandID: commandID)
-        case .center, .eject, .focusDirection, .focus, .toggleFloat:
+        case .focusDirection(let direction):
+            if await performFocusDirection(direction) {
+                return .ok(commandID: commandID)
+            }
+            return .error(
+                commandID: commandID,
+                code: "focus_failed",
+                message: "Focus \(direction.rawValue) failed; see WinMgrApp log"
+            )
+        case .focusCycle(let direction):
+            if await performFocusCycle(direction) {
+                return .ok(commandID: commandID)
+            }
+            return .error(
+                commandID: commandID,
+                code: "focus_failed",
+                message: "Focus cycle \(direction.rawValue) failed; see WinMgrApp log"
+            )
+        case .center, .eject, .focus, .toggleFloat:
             return .error(
                 commandID: commandID,
                 code: "not_implemented",
@@ -767,6 +872,8 @@ private func describe(_ template: CommandTemplate) -> String {
         return "eject"
     case .focusDirection(let direction):
         return "focus \(direction.rawValue)"
+    case .focusCycle(let direction):
+        return "focus cycle \(direction.rawValue)"
     case .toggleFloat:
         return "toggleFloat"
     case .resetLayout:

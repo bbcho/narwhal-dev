@@ -112,6 +112,11 @@ public enum Direction: String, Codable, CaseIterable, Sendable {
     }
 }
 
+public enum FocusCycleDirection: String, Codable, CaseIterable, Sendable {
+    case previous
+    case next
+}
+
 public typealias NodePath = [Int]
 
 public enum SlotOccupancy: Equatable, Sendable {

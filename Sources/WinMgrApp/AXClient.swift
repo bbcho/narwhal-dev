@@ -44,6 +44,8 @@ enum AXClientError: Error, CustomStringConvertible, Sendable {
     case windowElementNotFound(WindowID)
     case windowsAttributeInvalid(pid_t, AXError)
     case setAttributeFailed(String, AXError)
+    case performActionFailed(String, AXError)
+    case applicationActivateFailed(pid_t)
     case frameDidNotConverge(target: CGRect, actual: CGRect, attempts: Int)
     case visibleWindowListUnavailable
 
@@ -71,6 +73,10 @@ enum AXClientError: Error, CustomStringConvertible, Sendable {
             return "AXWindows unavailable for pid \(pid) with \(error)"
         case .setAttributeFailed(let attribute, let error):
             return "setting \(attribute) failed with \(error)"
+        case .performActionFailed(let action, let error):
+            return "\(action) failed with \(error)"
+        case .applicationActivateFailed(let pid):
+            return "activating application pid=\(pid) failed"
         case .frameDidNotConverge(let target, let actual, let attempts):
             return "frame write did not converge after \(attempts) attempts target=\(target.debugDescription) actual=\(actual.debugDescription)"
         case .visibleWindowListUnavailable:
@@ -221,6 +227,32 @@ struct AXClient {
         }
     }
 
+    func focusWindow(_ window: WindowMetadata) -> Result<Void, AXClientError> {
+        guard NSRunningApplication(processIdentifier: window.pid)?.activate(options: []) == true else {
+            return .failure(.applicationActivateFailed(window.pid))
+        }
+
+        let element: AXUIElement
+        switch windowElement(matching: window) {
+        case .success(let value):
+            element = value
+        case .failure(let error):
+            return .failure(error)
+        }
+
+        let raiseError = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        guard raiseError == .success else {
+            return .failure(.performActionFailed(kAXRaiseAction, raiseError))
+        }
+
+        switch setBool(true, attribute: kAXMainAttribute, on: element) {
+        case .success:
+            return .success(())
+        case .failure:
+            return setBool(true, attribute: kAXFocusedAttribute, on: element)
+        }
+    }
+
     private func focusedWindowElement() -> Result<AXUIElement, AXClientError> {
         let systemElement = AXUIElementCreateSystemWide()
         var focusedAppValue: CFTypeRef?
@@ -367,6 +399,15 @@ struct AXClient {
             return .failure(.setAttributeFailed(kAXPositionAttribute, positionError))
         }
 
+        return .success(())
+    }
+
+    private func setBool(_ value: Bool, attribute: String, on window: AXUIElement) -> Result<Void, AXClientError> {
+        let boolValue: CFBoolean = value ? kCFBooleanTrue! : kCFBooleanFalse!
+        let error = AXUIElementSetAttributeValue(window, attribute as CFString, boolValue)
+        guard error == .success else {
+            return .failure(.setAttributeFailed(attribute, error))
+        }
         return .success(())
     }
 
