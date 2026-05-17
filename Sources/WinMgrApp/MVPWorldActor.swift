@@ -8,9 +8,49 @@ struct MVPCommandResult: Sendable {
     let plannedWorld: World
 }
 
+struct EnvironmentRefreshResult: Sendable {
+    let activeSpace: SpaceID?
+    let displayCount: Int
+    let windowCount: Int
+    let quality: AXSnapshotQuality
+}
+
 actor MVPWorldActor {
-    private var world = World.empty
+    private var world: World
     private var nextGeneration: UInt64 = 1
+
+    init(config: Config = .default) {
+        self.world = World(
+            displays: [:],
+            activeSpace: nil,
+            spaces: [:],
+            windows: [:],
+            windowDisplay: [:],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: config
+        )
+    }
+
+    func refreshEnvironment(_ snapshot: EnvironmentSnapshot) -> EnvironmentRefreshResult {
+        switch apply(.environmentChanged(snapshot), to: world) {
+        case .success(let next):
+            world = next
+        case .failure:
+            break
+        }
+        return EnvironmentRefreshResult(
+            activeSpace: world.activeSpace,
+            displayCount: world.displays.count,
+            windowCount: world.windows.count,
+            quality: snapshot.axSnapshot.quality
+        )
+    }
+
+    func recordExternalFocus(_ windowID: WindowID) {
+        guard case .success(let next) = apply(.windowFocusedExternally(windowID), to: world) else { return }
+        world = next
+    }
 
     func reconcileLiveWindows(_ liveWindowIDs: Set<WindowID>) {
         world = pruneWorld(world, keepingLiveWindows: liveWindowIDs)

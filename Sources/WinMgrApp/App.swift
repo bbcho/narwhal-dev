@@ -9,7 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let axClient = AXClient()
     private let displayClient = DisplayClient()
-    private let worldActor = MVPWorldActor()
+    private var worldActor = MVPWorldActor()
     private let reporter = StartupReporter()
     private var config = Config.default
     private var accessibilityPollTimer: Timer?
@@ -34,6 +34,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Darwin.exit(ok ? 0 : 1)
         }
 
+        if ProcessInfo.processInfo.arguments.contains("--check-environment") {
+            guard loadStartupConfig() else {
+                reporter.info("WinMgrApp stopped")
+                Darwin.exit(1)
+            }
+            let status = reportAccessibilityStatus(prompt: false)
+            guard status.isTrusted else {
+                reporter.error("Environment check skipped because Accessibility is not trusted")
+                reporter.info("WinMgrApp stopped")
+                Darwin.exit(1)
+            }
+            Task { @MainActor in
+                let focused = reportFocusedWindowSnapshot()
+                await refreshEnvironment(reason: "check")
+                if let focused {
+                    await worldActor.recordExternalFocus(focused.id)
+                }
+                reporter.info("WinMgrApp stopped")
+                Darwin.exit(0)
+            }
+            return
+        }
+
         if ProcessInfo.processInfo.arguments.contains("--left-half") {
             runLeftHalfOnceAndTerminate()
             return
@@ -47,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.arguments.contains("--focused-window") {
             let status = reportAccessibilityStatus(prompt: false)
             if status.isTrusted {
-                reportFocusedWindowSnapshot()
+                _ = reportFocusedWindowSnapshot()
             } else {
                 reporter.error("Focused-window check skipped because Accessibility is not trusted")
             }
@@ -76,9 +99,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        reporter.info("Rung 1 complete: AppKit run loop is active and Accessibility is trusted")
-        reportFocusedWindowSnapshot()
-        startMVPServices()
+        Task { @MainActor in
+            await startAfterAccessibilityTrusted()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -109,18 +132,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timer.invalidate()
         accessibilityPollTimer = nil
         reporter.info("Accessibility trusted")
+        Task { @MainActor in
+            await startAfterAccessibilityTrusted()
+        }
+    }
+
+    @MainActor
+    private func startAfterAccessibilityTrusted() async {
+        guard !mvpServicesStarted else { return }
         reporter.info("Rung 1 complete: AppKit run loop is active and Accessibility is trusted")
-        reportFocusedWindowSnapshot()
+        let focused = reportFocusedWindowSnapshot()
+        await refreshEnvironment(reason: "startup")
+        if let focused {
+            await worldActor.recordExternalFocus(focused.id)
+        }
         startMVPServices()
     }
 
-    private func reportFocusedWindowSnapshot() {
+    private func reportFocusedWindowSnapshot() -> FocusedWindowSnapshot? {
         switch axClient.focusedWindowSnapshot() {
         case .success(let snapshot):
             reporter.info("Focused window: \(snapshot.logDescription)")
+            return snapshot
         case .failure(let error):
             reporter.error("Focused-window snapshot failed: \(error.description)")
+            return nil
         }
+    }
+
+    @MainActor
+    private func refreshEnvironment(reason: String) async {
+        let displays = displayClient.currentDisplays()
+        let snapshot = EnvironmentSnapshot(
+            activeSpace: nil,
+            displays: displays,
+            axSnapshot: axClient.windowSnapshot()
+        )
+        let result = await worldActor.refreshEnvironment(snapshot)
+        reporter.info(
+            "Environment refreshed (\(reason)): activeSpace=\(result.activeSpace?.raw.description ?? "nil") displays=\(result.displayCount) windows=\(result.windowCount) quality=\(describe(result.quality))"
+        )
     }
 
     @discardableResult
@@ -139,6 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch StartupConfigLoader(configURL: request.url, missingFilePolicy: request.missingFilePolicy).load() {
             case .success(let loaded):
                 config = loaded.config
+                worldActor = MVPWorldActor(config: loaded.config)
                 logStartupConfig(loaded)
                 return true
             case .failure(let error):
@@ -196,6 +248,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func runPushOnceAndTerminate(_ direction: Direction) {
+        guard loadStartupConfigOrTerminate() else { return }
+
         let status = reportAccessibilityStatus(prompt: false)
         guard status.isTrusted else {
             reporter.error("Push command skipped because Accessibility is not trusted")
@@ -204,6 +258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         Task { @MainActor in
+            await refreshEnvironment(reason: "one-shot push")
             await performPush(direction)
             NSApplication.shared.terminate(nil)
         }
@@ -387,5 +442,16 @@ private func describe(_ template: CommandTemplate) -> String {
         return "toggleFloat"
     case .resetLayout:
         return "resetLayout"
+    }
+}
+
+private func describe(_ quality: AXSnapshotQuality) -> String {
+    switch quality {
+    case .complete:
+        return "complete"
+    case .partial(let errors):
+        return "partial(\(errors.count) errors)"
+    case .permissionDenied(let message):
+        return "permissionDenied(\(message))"
     }
 }

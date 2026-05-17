@@ -86,6 +86,24 @@ enum AXFrameWriteOutcome: Sendable {
 }
 
 struct AXClient {
+    func windowSnapshot() -> AXWindowSnapshot {
+        guard
+            let windows = CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements],
+                kCGNullWindowID
+            ) as? [[String: Any]]
+        else {
+            return AXWindowSnapshot(
+                windows: [],
+                quality: .permissionDenied(AXClientError.visibleWindowListUnavailable.description)
+            )
+        }
+
+        let metadata = windows.compactMap(windowMetadata(from:))
+            .sorted { $0.id.raw < $1.id.raw }
+        return AXWindowSnapshot(windows: metadata, quality: .complete)
+    }
+
     func visibleWindowIDs() -> Result<Set<WindowID>, AXClientError> {
         guard
             let windows = CGWindowListCopyWindowInfo(
@@ -108,6 +126,32 @@ struct AXClient {
         })
 
         return .success(ids)
+    }
+
+    private func windowMetadata(from window: [String: Any]) -> WindowMetadata? {
+        guard
+            let layer = window[kCGWindowLayer as String] as? Int,
+            layer == 0,
+            let number = window[kCGWindowNumber as String] as? CGWindowID,
+            let ownerPID = window[kCGWindowOwnerPID as String] as? pid_t,
+            let boundsDictionary = window[kCGWindowBounds as String] as? NSDictionary,
+            let frame = CGRect(dictionaryRepresentation: boundsDictionary),
+            frame.width > 0,
+            frame.height > 0
+        else {
+            return nil
+        }
+
+        return WindowMetadata(
+            id: WindowID(raw: number),
+            bundleID: BundleID(raw: NSRunningApplication(processIdentifier: ownerPID)?.bundleIdentifier ?? ""),
+            title: window[kCGWindowName as String] as? String ?? "",
+            role: kAXWindowRole,
+            pid: ownerPID,
+            frame: frame,
+            isResizable: true,
+            isMinimized: false
+        )
     }
 
     func focusedWindowSnapshot() -> Result<FocusedWindowSnapshot, AXClientError> {

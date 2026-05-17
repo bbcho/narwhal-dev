@@ -349,6 +349,152 @@ struct MVPLayoutTests {
         #expect(prunedFrames[b] == nil)
     }
 
+    @Test("Complete environment snapshot replaces live windows and assigns display ownership")
+    func completeEnvironmentSnapshotReplacesLiveWindowsAndAssignsDisplays() throws {
+        let leftDisplay = DisplayID(raw: 1)
+        let rightDisplay = DisplayID(raw: 2)
+        let space = SpaceID(raw: 99)
+        let first = WindowID(raw: 11)
+        let second = WindowID(raw: 12)
+        let displays = [
+            leftDisplay: display(leftDisplay, x: 0, width: 1000),
+            rightDisplay: display(rightDisplay, x: 1000, width: 1000)
+        ]
+        let snapshot = EnvironmentSnapshot(
+            activeSpace: space,
+            displays: displays,
+            axSnapshot: AXWindowSnapshot(
+                windows: [
+                    metadata(for: first, frame: CGRect(x: 100, y: 50, width: 400, height: 300)),
+                    metadata(for: second, frame: CGRect(x: 1200, y: 50, width: 400, height: 300))
+                ],
+                quality: .complete
+            )
+        )
+
+        guard case .success(let next) = apply(.environmentChanged(snapshot), to: World.empty) else {
+            Issue.record("Expected environmentChanged to succeed")
+            return
+        }
+
+        #expect(next.activeSpace == space)
+        #expect(next.displays == displays)
+        #expect(next.windows.keys.sorted { $0.raw < $1.raw } == [first, second])
+        #expect(next.windowDisplay == [first: leftDisplay, second: rightDisplay])
+        #expect(next.spaces[space]?.displays[leftDisplay]?.tree == .void)
+        #expect(next.spaces[space]?.displays[leftDisplay]?.floating == [first])
+        #expect(next.spaces[space]?.displays[rightDisplay]?.tree == .void)
+        #expect(next.spaces[space]?.displays[rightDisplay]?.floating == [second])
+    }
+
+    @Test("Complete environment snapshot prunes closed windows but preserves zone shape")
+    func completeEnvironmentSnapshotPrunesClosedWindowsPreservingTreeShape() throws {
+        let displayID = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let first = WindowID(raw: 1)
+        let closed = WindowID(raw: 2)
+        let tree = pushIntoTree(closed, .right, pushIntoTree(first, .left, .void))
+        let world = World(
+            displays: [displayID: display(displayID, x: 0, width: 1000)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [displayID: DisplaySpaceState(displayID: displayID, tree: tree, floating: [closed])],
+                    focused: closed
+                )
+            ],
+            windows: [first: metadata(for: first), closed: metadata(for: closed)],
+            windowDisplay: [first: displayID, closed: displayID],
+            windowConstraints: [closed: WindowConstraints(minWidth: 500)],
+            pendingRules: [closed: .forceFloat],
+            config: .default
+        )
+        let snapshot = EnvironmentSnapshot(
+            activeSpace: space,
+            displays: [displayID: display(displayID, x: 0, width: 1000)],
+            axSnapshot: AXWindowSnapshot(windows: [metadata(for: first)], quality: .complete)
+        )
+
+        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
+            Issue.record("Expected environmentChanged to succeed")
+            return
+        }
+
+        let nextTree = next.spaces[space]?.displays[displayID]?.tree
+        #expect(next.windows == [first: metadata(for: first)])
+        #expect(next.windowDisplay == [first: displayID])
+        #expect(next.windowConstraints.isEmpty)
+        #expect(next.pendingRules.isEmpty)
+        #expect(next.spaces[space]?.focused == nil)
+        #expect(next.spaces[space]?.displays[displayID]?.floating == [])
+        #expect(nextTree.map(occupiedWindows(in:)) == [first])
+        #expect(nextTree.map(slots(in:)) == [
+            TreeSlot(path: [0], occupancy: .occupied(first)),
+            TreeSlot(path: [1], occupancy: .empty)
+        ])
+    }
+
+    @Test("Incomplete environment snapshot preserves window state and updates display identity only")
+    func incompleteEnvironmentSnapshotPreservesWindowState() throws {
+        let oldDisplay = DisplayID(raw: 1)
+        let newDisplay = DisplayID(raw: 2)
+        let oldSpace = SpaceID(raw: 1)
+        let newSpace = SpaceID(raw: 2)
+        let window = WindowID(raw: 1)
+        let world = World(
+            displays: [oldDisplay: display(oldDisplay, x: 0, width: 1000)],
+            activeSpace: oldSpace,
+            spaces: [oldSpace: SpaceState(id: oldSpace, displays: [:], focused: window)],
+            windows: [window: metadata(for: window)],
+            windowDisplay: [window: oldDisplay],
+            windowConstraints: [window: WindowConstraints(minWidth: 500)],
+            pendingRules: [window: .forceFloat],
+            config: .default
+        )
+        let snapshot = EnvironmentSnapshot(
+            activeSpace: newSpace,
+            displays: [newDisplay: display(newDisplay, x: 1000, width: 1200)],
+            axSnapshot: AXWindowSnapshot(
+                windows: [],
+                quality: .partial([AXWindowReadError(windowID: nil, pid: nil, message: "AX read failed")])
+            )
+        )
+
+        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
+            Issue.record("Expected environmentChanged to succeed")
+            return
+        }
+
+        #expect(next.activeSpace == newSpace)
+        #expect(next.displays == [newDisplay: display(newDisplay, x: 1000, width: 1200)])
+        #expect(next.spaces == world.spaces)
+        #expect(next.windows == world.windows)
+        #expect(next.windowDisplay == world.windowDisplay)
+        #expect(next.windowConstraints == world.windowConstraints)
+        #expect(next.pendingRules == world.pendingRules)
+    }
+
+    @Test("Reload config updates world config used by layout")
+    func reloadConfigUpdatesWorldConfig() throws {
+        let config = Config(
+            keymap: Config.default.keymap,
+            rules: [],
+            zones: Config.default.zones,
+            gaps: Gaps(inner: 8, outer: Insets(top: 1, left: 2, bottom: 3, right: 4)),
+            border: .default,
+            hud: .default,
+            dragModifier: [.shift]
+        )
+
+        guard case .success(let next) = apply(.reloadConfig(config), to: World.empty) else {
+            Issue.record("Expected reloadConfig to succeed")
+            return
+        }
+
+        #expect(next.config == config)
+    }
+
     @Test("Generated push sequences preserve core BSP invariants")
     func generatedPushSequencesPreserveCoreInvariants() throws {
         for directions in generatedDirectionSequences(maxLength: 5) {
@@ -547,16 +693,29 @@ struct MVPLayoutTests {
         ).tiled
     }
 
-    private func metadata(for window: WindowID) -> WindowMetadata {
+    private func metadata(
+        for window: WindowID,
+        frame: CGRect = CGRect(x: 0, y: 0, width: 100, height: 100)
+    ) -> WindowMetadata {
         WindowMetadata(
             id: window,
             bundleID: BundleID(raw: "com.example"),
             title: "Window \(window.raw)",
             role: "AXWindow",
             pid: 42,
-            frame: CGRect(x: 0, y: 0, width: 100, height: 100),
+            frame: frame,
             isResizable: true,
             isMinimized: false
+        )
+    }
+
+    private func display(_ id: DisplayID, x: Double, width: Double) -> DisplayInfo {
+        DisplayInfo(
+            id: id,
+            slot: Int(id.raw),
+            fingerprint: nil,
+            frame: CGRect(x: x, y: 0, width: width, height: 800),
+            visibleFrame: CGRect(x: x, y: 0, width: width, height: 800)
         )
     }
 

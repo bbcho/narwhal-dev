@@ -36,12 +36,12 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
         return commandNotImplemented(command)
     case .windowResizedExternally:
         return commandNotImplemented(command)
-    case .environmentChanged:
-        return commandNotImplemented(command)
+    case .environmentChanged(let snapshot):
+        return .success(reconcileEnvironment(snapshot, in: world))
     case .startupConverge:
         return .success(world)
-    case .reloadConfig:
-        return commandNotImplemented(command)
+    case .reloadConfig(let config):
+        return .success(worldBySettingConfig(config, in: world))
     }
 }
 
@@ -155,4 +155,17 @@ private func applyExternalFocus(_ windowID: WindowID, to world: World) -> Result
         pendingRules: world.pendingRules,
         config: world.config
     ))
+}
+
+private func worldBySettingConfig(_ config: Config, in world: World) -> World {
+    World(
+        displays: world.displays,
+        activeSpace: world.activeSpace,
+        spaces: world.spaces,
+        windows: world.windows,
+        windowDisplay: world.windowDisplay,
+        windowConstraints: world.windowConstraints,
+        pendingRules: world.pendingRules,
+        config: config
+    )
 }
