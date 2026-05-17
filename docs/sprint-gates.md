@@ -255,3 +255,9 @@ Pass criteria:
   reverse order and does not start later services.
 - `WinMgrApp` startup uses the same service sequence primitive.
 - Startup/shutdown smoke still passes, including IPC socket cleanup.
+
+Observed Rung 17 results:
+
+| Date | Commit | Unit lifecycle tests | App startup wiring | Startup/shutdown smoke | Known failures |
+|---|---|---|---|---|---|
+| 2026-05-17 | `64b421f` | Passed: 3 tests prove exact startup order, reverse-order idempotent shutdown, and reverse-order rollback after `ipc` startup failure | Passed: `WinMgrApp` starts menubar, hotkeys, AX observer, display observer, config watcher, IPC server, and drag zones through `startServiceSequence` | Passed: startup services logged, `winmgrctl reset` and `winmgrctl quit` returned `ok`, process exited, and `/tmp/winmgr-501.sock` was removed | None |
