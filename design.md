@@ -1415,7 +1415,7 @@ For every value the code reads or writes that outlives a call:
 | FSEvent stream | `ConfigLoader` | FSEventStream on dedicated queue → actor handoff | FSEvent callbacks on arbitrary thread. |
 | Space changes | `SpaceClient` | NSWorkspace notification plus active-Space dlsym read, de-duplicated in `AsyncStream`; owned by `ServiceHandle` | Native Space switches have no public typed Space ID; shell observes switch then reads current ID. |
 | Display changes | `DisplayClient` | CGDisplay/NSApplication screen-change notification → `AsyncStream`; owned by `ServiceHandle` | Display topology and visible frames can change independently of window events. |
-| AX inventory refresh coalescer | App shell / future `EnvironmentRefreshCoordinator` | `@MainActor` pending timer + latest-generation token | Window open/close bursts can emit many stale-but-complete inventories. Coalesce shell-triggered environment refreshes before they enter `WorldActor`; user commands still bypass coalescing and force an immediate pre-command refresh. |
+| AX inventory refresh coalescer | App shell, with pure policy in `WinMgrCore` | `@MainActor` pending timer + latest-generation token | Window open/close bursts can emit many stale-but-complete inventories. Coalesce shell-triggered environment refreshes before they enter `WorldActor`; user commands still bypass coalescing and force an immediate pre-command refresh. |
 | Service task/service handles | `AppDelegate.serviceTasks` + `serviceHandles` | `@MainActor` arrays of `Task<Void, Never>` and `ServiceHandle` | Long-lived stream consumers are cancelled and registered OS services are stopped on startup failure. |
 | Restore state on disk | `RestoreManager` | File written atomically (`.atomic` write option) to `~/Library/Application Support/winmgr/state.json` | One writer, one reader. |
 | Logger | `os.Logger` | Apple-provided, thread-safe | Trust framework. |
@@ -1975,11 +1975,11 @@ For `.environmentChanged`, `apply` calls `reconcileEnvironment`. When `Environme
 
 If a hotkey arrives during that incomplete-snapshot interval, normal `validateCommand` still gates the focused `WindowID` against `world.windows`. Unknown current-Space windows are ignored until the next complete environment snapshot rather than mapped onto stale state.
 
-Future AX inventory refresh coalescing is a shell-only optimization. `AXObserver` may detect multiple `.windowOpened` / `.windowClosed` events in one app launch, tab detach, window restore, or Space/display settle burst. Those events should schedule one coalesced `EnvironmentSnapshot` refresh after a short debounce window, not one refresh per event. The coalescer must keep only shell data: pending reasons, a scheduled timer/task, and a monotonically increasing request generation. It must not buffer or transform `Command`s, and it must not alter `reconcileEnvironment`.
+AX inventory refresh coalescing is a shell-only optimization backed by a pure state machine. `AXObserver` may detect multiple `.windowOpened` / `.windowClosed` events in one app launch, tab detach, window restore, or Space settle burst. Those events schedule one coalesced `EnvironmentSnapshot` refresh after a short debounce window, not one refresh per event. The coalescer keeps only shell data: pending reasons, a scheduled timer/task, and a monotonically increasing request generation. It does not buffer or transform `Command`s, and it does not alter `reconcileEnvironment`.
 
 Coalescing rules:
 1. User commands (`push`, `center`, `swap`, focus, drag, IPC) bypass the coalescer and perform their existing immediate pre-command environment refresh.
-2. AX inventory, display-change, and Space-settle refresh requests may be coalesced for 75-150 ms, with the exact interval chosen by measurement.
+2. AX inventory and Space-settle refresh requests are coalesced for 100 ms. Display-change requests should use the same coalescer when a display observer lands.
 3. A newer coalesced request cancels or supersedes the older scheduled request by generation.
 4. A coalesced refresh persists restore state only after a complete AX snapshot is applied.
 5. Partial or permission-denied AX snapshots do not clear the pending generation; the next complete snapshot still reconciles live inventory.
@@ -2054,7 +2054,7 @@ No external lens library needed. Sum types (enums) need custom matchers — done
 | AXClient (shell) | Integration test against real AX with a known test app (e.g. spawn `TextEdit`); assert complete/partial snapshot, setFrame, raise, and focus behavior | `Tests/WinMgrShellTests/AXClientTests.swift` |
 | LayoutApplier | Integration: submit stale and current `DesiredLayout`, assert latest generation wins via AX re-query; submit below-min Finder/TextEdit frame and assert clamp is returned as `AXFrameWriteOutcome.clamped` | `Tests/WinMgrShellTests/ApplierTests.swift` |
 | AX echo suppression | Integration: self-generated move-only, resize-only, combined frame, and focus callbacks do not persist as external move/resize/focus commands | `Tests/WinMgrShellTests/AXEchoTests.swift` |
-| AX inventory refresh coalescing | Unit test with fake scheduler: open/close/display/Space-settle burst emits exactly one environment refresh with the latest generation; hotkey/IPC pre-command refresh bypasses coalescing; partial AX snapshot does not persist restore state | `Tests/WinMgrShellTests/EnvironmentRefreshCoordinatorTests.swift` |
+| AX inventory refresh coalescing | Pure unit test: open/close/Space-settle burst produces one latest-generation request; stale generations cannot run or clear newer pending work; partial AX snapshot retains pending state and does not imply restore persistence | `Tests/WinMgrCoreTests/EnvironmentRefreshCoalescerTests.swift` |
 | Overlay | Unit/integration: focus-border effect shows/moves/hides border from outcomes; Space HUD only from Space-sourced environment changes | `Tests/WinMgrShellTests/OverlayTests.swift` |
 | HotkeyManager | Unit test with mock Carbon-bind closure; reload rebinds exact new keymap | `Tests/WinMgrShellTests/HotkeyTests.swift` |
 | LuaEngine | Unit test: eval simple expressions, exposed function calls return | `Tests/WinMgrShellTests/LuaTests.swift` |
@@ -2104,7 +2104,6 @@ No external lens library needed. Sum types (enums) need custom matchers — done
 | Workspace rename / labels | Later | Not in MVP scope. |
 | Tabbed groups (i3-style) | Later | Adds a new Node variant. Reconsider after MVP. |
 | Focus border latency during native Space switch animation | Later polish | Current shell hides stale border on `NSWorkspace.activeSpaceDidChangeNotification` and redraws after focused-window refresh. A noticeable delay can remain because macOS/AX focus state settles after the desktop animation. Future fix: measure `space notification -> focused snapshot -> overlay show`, then either subscribe to app/window AX focus notifications or draw from remembered per-Space focus state immediately and reconcile when AX confirms. |
-| AX window-inventory refresh coalescing | Later performance/operability phase | Current implementation is correct but can do one environment refresh per observed open/close event. During app launch, browser restore, or Space/display settle, that is noisy and can persist intermediate states. Add a shell-owned coalescer that batches AX inventory/display/Space-settle refresh requests for 75-150 ms, emits one latest-generation `EnvironmentSnapshot`, and never delays explicit user commands. |
 
 ---
 

@@ -8,6 +8,7 @@ import WinMgrIPC
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let instance = AppDelegate()
+    private static let environmentRefreshCoalescingDelay: TimeInterval = 0.10
 
     private let axClient = AXClient()
     private let displayClient = DisplayClient()
@@ -24,6 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var axObserverService: AXObserverService?
     private var ipcServer: IPCServer?
     private var eventTapClient: EventTapClient?
+    private var environmentRefreshCoalescer = EnvironmentRefreshCoalescerState.empty
+    private var environmentRefreshCoalescingTimer: Timer?
+    private var environmentRefreshCoalescingTimerGeneration: UInt64?
     private var servicesStarted = false
 
     static func main() {
@@ -116,6 +120,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         accessibilityPollTimer?.invalidate()
         accessibilityPollTimer = nil
+        environmentRefreshCoalescingTimer?.invalidate()
+        environmentRefreshCoalescingTimer = nil
+        environmentRefreshCoalescingTimerGeneration = nil
         axObserverService?.stop()
         axObserverService = nil
         ipcServer?.stop()
@@ -350,6 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter: reporter,
             spaceChanged: { [weak self] in
                 self?.overlay.updateFocusBorder(.hide)
+                self?.scheduleCoalescedEnvironmentRefresh(.spaceSettled)
             }
         ) { [weak self] event, snapshot in
             Task { @MainActor in
@@ -882,13 +890,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 overlay.updateFocusBorder(.show(windowID, snapshot.frame))
             }
         case .windowOpened(let metadata):
-            let environment = await refreshEnvironment(reason: "window opened \(metadata.id.description)")
-            guard case .complete = environment.quality else { return }
-            await persistRestore(reason: "window opened")
+            scheduleCoalescedEnvironmentRefresh(.windowOpened(metadata.id))
         case .windowClosed(let windowID):
-            let environment = await refreshEnvironment(reason: "window closed \(windowID.description)")
-            guard case .complete = environment.quality else { return }
-            await persistRestore(reason: "window closed")
+            scheduleCoalescedEnvironmentRefresh(.windowClosed(windowID))
+        }
+    }
+
+    @MainActor
+    private func scheduleCoalescedEnvironmentRefresh(_ reason: EnvironmentRefreshReason) {
+        let scheduled = scheduleEnvironmentRefresh(reason, in: environmentRefreshCoalescer)
+        environmentRefreshCoalescer = scheduled.state
+
+        environmentRefreshCoalescingTimer?.invalidate()
+        let generation = scheduled.request.generation
+        let timer = Timer(timeInterval: Self.environmentRefreshCoalescingDelay, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                await self?.runCoalescedEnvironmentRefresh(generation: generation)
+            }
+        }
+        environmentRefreshCoalescingTimer = timer
+        environmentRefreshCoalescingTimerGeneration = generation
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    @MainActor
+    private func runCoalescedEnvironmentRefresh(generation: UInt64) async {
+        if environmentRefreshCoalescingTimerGeneration == generation {
+            environmentRefreshCoalescingTimer?.invalidate()
+            environmentRefreshCoalescingTimer = nil
+            environmentRefreshCoalescingTimerGeneration = nil
+        }
+
+        let fired = fireEnvironmentRefreshTimer(generation: generation, in: environmentRefreshCoalescer)
+        environmentRefreshCoalescer = fired.state
+        guard case .run(let request) = fired.decision else { return }
+
+        let environment = await refreshEnvironment(reason: "coalesced \(request.description)")
+        let completed: Bool
+        if case .complete = environment.quality {
+            completed = true
+        } else {
+            completed = false
+        }
+
+        let completion = completeEnvironmentRefresh(
+            generation: request.generation,
+            snapshotComplete: completed,
+            in: environmentRefreshCoalescer
+        )
+        environmentRefreshCoalescer = completion.state
+        switch completion.decision {
+        case .cleared(let completedRequest):
+            await persistRestore(reason: "coalesced \(completedRequest.description)")
+        case .retained(let pending):
+            reporter.info("Coalesced environment refresh retained pending generation \(pending.generation) after incomplete AX snapshot")
+        case .stale, .idle:
+            break
         }
     }
 
