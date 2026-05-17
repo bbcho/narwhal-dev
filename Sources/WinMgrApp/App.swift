@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkeyManager: HotkeyManager?
     private var axObserverService: AXObserverService?
     private var displayObserverService: DisplayObserverService?
+    private var configFileWatcherService: ConfigFileWatcherService?
     private var ipcServer: IPCServer?
     private var eventTapClient: EventTapClient?
     private var environmentRefreshCoalescer = EnvironmentRefreshCoalescerState.empty
@@ -128,6 +129,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         axObserverService = nil
         displayObserverService?.stop()
         displayObserverService = nil
+        configFileWatcherService?.stop()
+        configFileWatcherService = nil
         ipcServer?.stop()
         ipcServer = nil
         eventTapClient?.stop()
@@ -323,6 +326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hotkeyManager = manager
             startAXObserver()
             startDisplayObserver()
+            startConfigFileWatcher()
             startIPCServer()
             startEventTap()
             servicesStarted = true
@@ -381,6 +385,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         service.start()
         displayObserverService = service
+    }
+
+    @MainActor
+    private func startConfigFileWatcher() {
+        guard configFileWatcherService == nil else { return }
+        switch startupConfigRequestFromArguments() {
+        case .success(let request):
+            let service = ConfigFileWatcherService(configURL: request.url, reporter: reporter) { [weak self] in
+                Task { @MainActor in
+                    await self?.reloadConfig(reason: "file watcher")
+                }
+            }
+            service.start()
+            configFileWatcherService = service
+        case .failure(let error):
+            reporter.error("Config watcher skipped: \(error.description)")
+        }
     }
 
     @MainActor

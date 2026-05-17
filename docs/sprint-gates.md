@@ -6,6 +6,9 @@ pass/fail result.
 
 ## Sprint 1 MVP Gate
 
+Status: done. Ben accepted the MVP on 2026-05-17. Remaining work in this file is
+post-MVP hardening and feature completion.
+
 Sprint 1 is complete only when all five gates pass:
 
 - Full automated Swift test suite passes.
@@ -171,3 +174,31 @@ Observed gate results:
 | Date | Commit | Automated suite | Package gate | Test install gate | User LaunchAgent gate | Manual tiling/focus/swap/reset | Known failures |
 |---|---|---|---|---|---|---|---|
 | 2026-05-17 | `a80f016` | 113 tests / 16 suites passed | Passed | Passed | Passed: launchctl running PID 23158; installed `winmgrctl reset` returned `ok ipc-AD0BA665-E8B0-48D9-BA9D-D0782146B030` | Not rerun in this gate | None from launch/install gate |
+
+## Rung 15: Config Hot Reload
+
+This is a post-MVP gate. It requires the app to be running with Accessibility
+trusted because hotkey rebinding and drag-modifier updates only happen after the
+normal app services start.
+
+Commands:
+
+```sh
+mkdir -p "$HOME/.config/winmgr"
+cp DefaultConfig/init.lua "$HOME/.config/winmgr/init.lua"
+swift run WinMgrApp
+```
+
+In another shell, edit `~/.config/winmgr/init.lua`.
+
+Pass criteria:
+
+- Startup logs include `Config watcher ready`.
+- Editing the active config file logs `Config file changed; reloading`.
+- A valid config edit logs `Config reload completed (file watcher)`.
+- Hotkeys are rebound to the new keymap without restarting the app.
+- Drag modifier, border, HUD, zones, rules, and layout gaps use the reloaded
+  config without restarting the app.
+- An invalid config edit logs `Config reload failed (file watcher)`.
+- After an invalid config edit, the previous hotkeys and drag modifier still
+  work. This proves last-good fallback, not just error reporting.

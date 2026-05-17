@@ -307,6 +307,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 12 | Local packaging | `scripts/build_app_bundle.sh` emits a runnable `.app`, embeds Lua, copies default config into Resources, and generates a LaunchAgent plist | Notarization, brew cask |
 | 13 | Local install lifecycle | `scripts/install_local.sh --no-launchctl --app-dir .build/install-test/Applications --launch-agents-dir .build/install-test/LaunchAgents --replace --configuration debug` installs a test app/plist, and `scripts/uninstall_local.sh --no-launchctl ...` removes them | Notarized installer, brew cask |
 | 14 | User LaunchAgent smoke | `scripts/install_local.sh --replace --configuration debug` installs into `~/Applications` and `~/Library/LaunchAgents`; `launchctl print gui/$UID/com.ben.winmgr` reports running; installed `winmgrctl reset` returns `ok` | Notarized installer, brew cask |
+| 15 | Config hot reload | FSEvents watches the active config path; file changes debounce into `reloadConfig`; invalid configs leave the last-good runtime config active and report failure in the menu/log | Notarization, brew cask |
 
 ### Fast-path constraints
 
@@ -317,6 +318,9 @@ Anything not required for that loop is deferred until after the loop works.
 - Core invariants remain non-negotiable: pure data transforms, smart constructors for invalid ADTs, explicit `Result` for expected domain failures.
 
 ### MVP approval gate
+
+**Status: done.** Ben accepted the MVP on 2026-05-17. Rungs 0-14 are complete;
+the work after this point is post-MVP implementation of the remaining design.
 
 Sprint 1 is done when this exact manual smoke works:
 
