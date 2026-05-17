@@ -1,0 +1,5 @@
+module CLua [system] {
+    header "shim.h"
+    link "lua"
+    export *
+}

@@ -88,10 +88,21 @@ public struct LuaConfigData: Equatable, Sendable {
     }
 }
 
-public enum ConfigError: Error, Equatable, Sendable {
+public enum ConfigError: Error, Equatable, CustomStringConvertible, Sendable {
     case missingKey(String)
     case wrongType(key: String, expected: String)
     case invalidValue(key: String, reason: String)
+
+    public var description: String {
+        switch self {
+        case .missingKey(let key):
+            return "Missing config key '\(key)'"
+        case .wrongType(let key, let expected):
+            return "Config key '\(key)' must be \(expected)"
+        case .invalidValue(let key, let reason):
+            return "Config key '\(key)' is invalid: \(reason)"
+        }
+    }
 }
 
 public enum InvariantError: Error, Equatable, CustomStringConvertible, Sendable {

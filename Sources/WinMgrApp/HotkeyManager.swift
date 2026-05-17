@@ -54,7 +54,7 @@ final class HotkeyManager {
         }
 
         isStarted = true
-        reporter.info("Registered default hotkeys: \(bindings.map(describe).joined(separator: ", "))")
+        reporter.info("Registered hotkeys: \(bindings.map(describe).joined(separator: ", "))")
     }
 
     func stop() {

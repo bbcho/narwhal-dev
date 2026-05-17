@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import Darwin
 import WinMgrCore
 
 @main
@@ -10,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let displayClient = DisplayClient()
     private let worldActor = MVPWorldActor()
     private let reporter = StartupReporter()
+    private var config = Config.default
     private var accessibilityPollTimer: Timer?
     private var hotkeyManager: HotkeyManager?
     private var mvpServicesStarted = false
@@ -25,6 +27,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reporter.info("WinMgrApp started")
         reporter.info("Build marker: mvp-frame-debug-2026-05-16.1")
         reporter.info("Log file: \(StartupReporter.defaultLogPath)")
+
+        if ProcessInfo.processInfo.arguments.contains("--check-config") {
+            let ok = loadStartupConfig()
+            reporter.info("WinMgrApp stopped")
+            Darwin.exit(ok ? 0 : 1)
+        }
 
         if ProcessInfo.processInfo.arguments.contains("--left-half") {
             runLeftHalfOnceAndTerminate()
@@ -52,6 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApplication.shared.terminate(nil)
             return
         }
+
+        guard loadStartupConfigOrTerminate() else { return }
 
         let status = reportAccessibilityStatus(prompt: true)
         guard status.isTrusted else {
@@ -113,6 +123,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @discardableResult
+    private func loadStartupConfigOrTerminate() -> Bool {
+        let ok = loadStartupConfig()
+        if !ok {
+            NSApplication.shared.terminate(nil)
+        }
+        return ok
+    }
+
+    @discardableResult
+    private func loadStartupConfig() -> Bool {
+        switch startupConfigRequestFromArguments() {
+        case .success(let request):
+            switch StartupConfigLoader(configURL: request.url, missingFilePolicy: request.missingFilePolicy).load() {
+            case .success(let loaded):
+                config = loaded.config
+                logStartupConfig(loaded)
+                return true
+            case .failure(let error):
+                reporter.error("Startup config failed: \(error.description)")
+                return false
+            }
+        case .failure(let error):
+            reporter.error("Startup config failed: \(error.description)")
+            return false
+        }
+    }
+
+    private func startupConfigRequestFromArguments() -> Result<StartupConfigRequest, StartupConfigError> {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--config") else {
+            return .success(StartupConfigRequest(
+                url: StartupConfigLoader.defaultUserConfigURL,
+                missingFilePolicy: .useBuiltInDefault
+            ))
+        }
+        let pathIndex = arguments.index(after: index)
+        guard arguments.indices.contains(pathIndex) else {
+            return .failure(.missingConfigPathArgument)
+        }
+        return .success(StartupConfigRequest(
+            url: URL(fileURLWithPath: arguments[pathIndex]).standardizedFileURL,
+            missingFilePolicy: .fail
+        ))
+    }
+
+    private func logStartupConfig(_ loaded: StartupConfigLoad) {
+        switch loaded.source {
+        case .builtInDefault(let missingUserConfig):
+            reporter.info("Startup config not found at \(missingUserConfig.path); using built-in defaults")
+        case .userFile(let url):
+            reporter.info("Loaded startup config from \(url.path)")
+        }
+        reporter.info("Startup config active: \(loaded.config.keymap.count) hotkeys, \(loaded.config.zones.count) zones")
+    }
+
     private func runLeftHalfOnceAndTerminate() {
         let status = reportAccessibilityStatus(prompt: false)
         guard status.isTrusted else {
@@ -146,7 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startMVPServices() {
         guard !mvpServicesStarted else { return }
 
-        let manager = HotkeyManager(bindings: Config.default.keymap, reporter: reporter) { [weak self] action in
+        let manager = HotkeyManager(bindings: config.keymap, reporter: reporter) { [weak self] action in
             Task { @MainActor in
                 await self?.performHotkey(action)
             }
@@ -203,7 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .command(let template):
             reporter.error("Hotkey action not implemented in MVP: \(describe(template))")
         case .reloadConfig:
-            reporter.error("Reload config hotkey ignored: Lua config loader lands in Rung 7")
+            reporter.error("Reload config hotkey ignored: hot reload is not implemented; restart the app to apply startup config")
         }
     }
 

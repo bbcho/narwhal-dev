@@ -167,7 +167,7 @@ public enum DefaultConfigLua {
     public static func render(_ config: Config = .default) -> String {
         """
         -- Bundled default configuration.
-        -- Swift Config.default is canonical until the Lua loader lands.
+        -- Copy this file to ~/.config/winmgr/init.lua to customize startup config.
         return {
           keymap = {
         \(renderKeymap(config.keymap))

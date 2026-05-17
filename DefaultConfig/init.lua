@@ -1,5 +1,5 @@
 -- Bundled default configuration.
--- Swift Config.default is canonical until the Lua loader lands.
+-- Copy this file to ~/.config/winmgr/init.lua to customize startup config.
 return {
   keymap = {
     { key = "h", modifiers = { "control", "option" }, action = { type = "push", direction = "left" } },
