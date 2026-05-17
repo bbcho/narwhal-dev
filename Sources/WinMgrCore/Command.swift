@@ -112,6 +112,18 @@ public enum IPCReplyDTO: Codable, Equatable, Sendable {
     case ok(commandID: CommandID)
     case error(commandID: CommandID, code: String, message: String)
 
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case commandID
+        case code
+        case message
+    }
+
+    private enum Status: String, Codable {
+        case ok
+        case error
+    }
+
     public static func from(_ outcome: CommandOutcome) -> IPCReplyDTO {
         switch outcome {
         case .success(let envelope, _, _):
@@ -120,9 +132,44 @@ public enum IPCReplyDTO: Codable, Equatable, Sendable {
             return .error(commandID: envelope.id, code: error.code, message: error.message)
         }
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let status = try container.decode(Status.self, forKey: .status)
+        let commandID = CommandID(raw: try container.decode(String.self, forKey: .commandID))
+        switch status {
+        case .ok:
+            self = .ok(commandID: commandID)
+        case .error:
+            self = .error(
+                commandID: commandID,
+                code: try container.decode(String.self, forKey: .code),
+                message: try container.decode(String.self, forKey: .message)
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .ok(let commandID):
+            try container.encode(Status.ok, forKey: .status)
+            try container.encode(commandID.raw, forKey: .commandID)
+        case .error(let commandID, let code, let message):
+            try container.encode(Status.error, forKey: .status)
+            try container.encode(commandID.raw, forKey: .commandID)
+            try container.encode(code, forKey: .code)
+            try container.encode(message, forKey: .message)
+        }
+    }
 }
 
-public enum IPCCommandDTO: Codable, Sendable {
+public enum IPCCommandResolutionError: Error, Equatable, Sendable {
+    case focusedWindowRequired
+}
+
+public enum IPCCommandDTO: Codable, Equatable, Sendable {
+    case pushFocused(Direction)
     case push(windowID: WindowID, direction: Direction)
     case center(windowID: WindowID)
     case eject(windowID: WindowID)
@@ -131,23 +178,101 @@ public enum IPCCommandDTO: Codable, Sendable {
     case toggleFloat(windowID: WindowID)
     case resetLayout
 
-    public func toCommand() -> Command {
+    private enum CodingKeys: String, CodingKey {
+        case command
+        case windowID
+        case direction
+    }
+
+    private enum CommandName: String, Codable {
+        case push
+        case center
+        case eject
+        case focusDirection
+        case focus
+        case toggleFloat
+        case resetLayout
+    }
+
+    public func toCommand(focusedWindowID: WindowID? = nil) -> Result<Command, IPCCommandResolutionError> {
         switch self {
+        case .pushFocused(let direction):
+            guard let focusedWindowID else { return .failure(.focusedWindowRequired) }
+            return .success(.push(focusedWindowID, direction))
         case .push(let windowID, let direction):
-            return .push(windowID, direction)
+            return .success(.push(windowID, direction))
         case .center(let windowID):
-            return .center(windowID)
+            return .success(.center(windowID))
         case .eject(let windowID):
-            return .eject(windowID)
+            return .success(.eject(windowID))
         case .focusDirection(let direction):
-            return .focusDirection(direction)
+            return .success(.focusDirection(direction))
         case .focus(let windowID):
-            return .focus(windowID)
+            return .success(.focus(windowID))
         case .toggleFloat(let windowID):
-            return .toggleFloat(windowID)
+            return .success(.toggleFloat(windowID))
         case .resetLayout:
-            return .resetLayout
+            return .success(.resetLayout)
         }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(CommandName.self, forKey: .command) {
+        case .push:
+            let direction = try container.decode(Direction.self, forKey: .direction)
+            if let rawWindowID = try container.decodeIfPresent(UInt32.self, forKey: .windowID) {
+                self = .push(windowID: WindowID(raw: rawWindowID), direction: direction)
+            } else {
+                self = .pushFocused(direction)
+            }
+        case .center:
+            self = .center(windowID: try Self.decodeWindowID(from: container))
+        case .eject:
+            self = .eject(windowID: try Self.decodeWindowID(from: container))
+        case .focusDirection:
+            self = .focusDirection(try container.decode(Direction.self, forKey: .direction))
+        case .focus:
+            self = .focus(windowID: try Self.decodeWindowID(from: container))
+        case .toggleFloat:
+            self = .toggleFloat(windowID: try Self.decodeWindowID(from: container))
+        case .resetLayout:
+            self = .resetLayout
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .pushFocused(let direction):
+            try container.encode(CommandName.push, forKey: .command)
+            try container.encode(direction, forKey: .direction)
+        case .push(let windowID, let direction):
+            try container.encode(CommandName.push, forKey: .command)
+            try container.encode(windowID.raw, forKey: .windowID)
+            try container.encode(direction, forKey: .direction)
+        case .center(let windowID):
+            try container.encode(CommandName.center, forKey: .command)
+            try container.encode(windowID.raw, forKey: .windowID)
+        case .eject(let windowID):
+            try container.encode(CommandName.eject, forKey: .command)
+            try container.encode(windowID.raw, forKey: .windowID)
+        case .focusDirection(let direction):
+            try container.encode(CommandName.focusDirection, forKey: .command)
+            try container.encode(direction, forKey: .direction)
+        case .focus(let windowID):
+            try container.encode(CommandName.focus, forKey: .command)
+            try container.encode(windowID.raw, forKey: .windowID)
+        case .toggleFloat(let windowID):
+            try container.encode(CommandName.toggleFloat, forKey: .command)
+            try container.encode(windowID.raw, forKey: .windowID)
+        case .resetLayout:
+            try container.encode(CommandName.resetLayout, forKey: .command)
+        }
+    }
+
+    private static func decodeWindowID(from container: KeyedDecodingContainer<CodingKeys>) throws -> WindowID {
+        WindowID(raw: try container.decode(UInt32.self, forKey: .windowID))
     }
 }
 

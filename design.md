@@ -284,7 +284,8 @@ Anything not required for that loop is deferred until after the loop works.
 | 8 | Environment refresh: list windows, display/Space snapshot, startup convergence | Relaunch preserves a sensible active-display state | Full restore fuzzy matching |
 | 9 | Restore JSON for active Space | Relaunch retiles currently matchable windows | Cross-Space restore |
 | 10 | Quality-of-life shell adapters: focus border, menubar reload, AXObserver echo filtering | Daily-use loop is tolerable | IPC, drag zones |
-| 11 | IPC and drag zones | `winmgrctl` and shift-drag work | Packaging |
+| 11a | IPC socket + `winmgrctl` | `winmgrctl reset` works against the running app; IPC tests cover newline-delimited JSON, connection reuse, and invalid command replies | Drag zones |
+| 11b | Drag zones | Shift-drag onto configured zones maps to the same push pipeline | Packaging |
 
 ### Fast-path constraints
 
@@ -1062,21 +1063,27 @@ enum IPCReplyDTO: Codable, Equatable {
 }
 
 enum IPCCommandDTO: Codable {
+    case pushFocused(Direction)
     case push(windowID: WindowID, direction: Direction)
     case center(windowID: WindowID)
     case eject(windowID: WindowID)
     case focusDirection(Direction)
     case focus(windowID: WindowID)
     case toggleFloat(windowID: WindowID)
+    case resetLayout
 
-    func toCommand() -> Command {
+    func toCommand(focusedWindowID: WindowID? = nil) -> Result<Command, IPCCommandResolutionError> {
         switch self {
-        case .push(let windowID, let direction): return .push(windowID, direction)
-        case .center(let windowID): return .center(windowID)
-        case .eject(let windowID): return .eject(windowID)
-        case .focusDirection(let direction): return .focusDirection(direction)
-        case .focus(let windowID): return .focus(windowID)
-        case .toggleFloat(let windowID): return .toggleFloat(windowID)
+        case .pushFocused(let direction):
+            guard let focusedWindowID else { return .failure(.focusedWindowRequired) }
+            return .success(.push(focusedWindowID, direction))
+        case .push(let windowID, let direction): return .success(.push(windowID, direction))
+        case .center(let windowID): return .success(.center(windowID))
+        case .eject(let windowID): return .success(.eject(windowID))
+        case .focusDirection(let direction): return .success(.focusDirection(direction))
+        case .focus(let windowID): return .success(.focus(windowID))
+        case .toggleFloat(let windowID): return .success(.toggleFloat(windowID))
+        case .resetLayout: return .success(.resetLayout)
         }
     }
 }
@@ -2011,6 +2018,7 @@ No external lens library needed. Sum types (enums) need custom matchers — done
 | Multi-display window movement hotkeys | Add later phase | Not in current 31-phase list; can extend `Direction` w/ `.display(.left/.right)` variants. |
 | Workspace rename / labels | Later | Not in MVP scope. |
 | Tabbed groups (i3-style) | Later | Adds a new Node variant. Reconsider after MVP. |
+| Focus border latency during native Space switch animation | Later polish | Current shell hides stale border on `NSWorkspace.activeSpaceDidChangeNotification` and redraws after focused-window refresh. A noticeable delay can remain because macOS/AX focus state settles after the desktop animation. Future fix: measure `space notification -> focused snapshot -> overlay show`, then either subscribe to app/window AX focus notifications or draw from remembered per-Space focus state immediately and reconcile when AX confirms. |
 
 ---
 

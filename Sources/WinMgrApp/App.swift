@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Darwin
 import WinMgrCore
+import WinMgrIPC
 
 @main
 @MainActor
@@ -21,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var accessibilityPollTimer: Timer?
     private var hotkeyManager: HotkeyManager?
     private var axObserverService: AXObserverService?
+    private var ipcServer: IPCServer?
     private var mvpServicesStarted = false
 
     static func main() {
@@ -121,6 +123,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         accessibilityPollTimer = nil
         axObserverService?.stop()
         axObserverService = nil
+        ipcServer?.stop()
+        ipcServer = nil
         hotkeyManager?.stop()
         hotkeyManager = nil
         menubar.stop()
@@ -327,6 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try manager.start()
             hotkeyManager = manager
             startAXObserver()
+            startIPCServer()
             mvpServicesStarted = true
             reporter.info("MVP push loop ready")
         } catch {
@@ -371,6 +376,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         service.start()
         axObserverService = service
+    }
+
+    @MainActor
+    private func startIPCServer() {
+        guard ipcServer == nil else { return }
+        let server = IPCServer(
+            socketPath: IPCDefaults.socketPath,
+            handle: { [weak self] command in
+                await self?.handleIPCCommand(command) ?? .error(
+                    commandID: CommandID(raw: "app-unavailable"),
+                    code: "app_unavailable",
+                    message: "WinMgrApp is not available"
+                )
+            },
+            log: { [weak self] message in
+                Task { @MainActor in
+                    self?.reporter.error(message)
+                }
+            }
+        )
+        do {
+            try server.start()
+            ipcServer = server
+            reporter.info("IPC server ready at \(IPCDefaults.socketPath)")
+        } catch {
+            reporter.error("IPC server startup failed: \(String(describing: error))")
+        }
     }
 
     private func moveFocusedWindowToLeftHalf() -> String? {
@@ -421,10 +453,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func performPush(_ direction: Direction) async {
+    @discardableResult
+    private func performPush(_ direction: Direction) async -> Bool {
         guard AccessibilityTrust.current(prompt: false).isTrusted else {
             reporter.error("Push \(direction.rawValue) skipped because Accessibility is not trusted")
-            return
+            return false
         }
 
         let snapshot: FocusedWindowSnapshot
@@ -433,7 +466,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshot = value
         case .failure(let error):
             reporter.error("Push \(direction.rawValue) failed reading focused window: \(error.description)")
-            return
+            return false
         }
 
         let displays = displayClient.currentDisplays()
@@ -441,13 +474,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logDisplays(displays)
         guard let displayID = displayClient.displayContaining(frame: snapshot.frame, displays: displays) else {
             reporter.error("Push \(direction.rawValue) failed: no display for focused window")
-            return
+            return false
         }
         reporter.info("Push \(direction.rawValue) selected display \(displayID.raw)")
         let environment = await refreshEnvironment(reason: "pre-push \(direction.rawValue)", displays: displays)
         guard environment.activeSpace != nil else {
             reporter.error("Push \(direction.rawValue) rejected before planning: active Space unavailable")
-            return
+            return false
         }
 
         switch axClient.visibleWindowIDs() {
@@ -461,19 +494,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             break
         case .failure(let error):
             reporter.error("Push \(direction.rawValue) failed updating focused window state: \(error.message)")
-            return
+            return false
         }
 
         switch await worldActor.planPush(snapshot.id, direction: direction) {
         case .success(let result):
-            await applyPlannedPush(result, direction: direction, retryOnClamp: true)
+            return await applyPlannedPush(result, direction: direction, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Push \(direction.rawValue) rejected by core: \(error.message)")
+            return false
         }
     }
 
     @MainActor
-    private func applyPlannedPush(_ result: MVPCommandResult, direction: Direction, retryOnClamp: Bool) async {
+    private func applyPlannedPush(_ result: MVPCommandResult, direction: Direction, retryOnClamp: Bool) async -> Bool {
         let applyResult = LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
         if applyResult.succeeded {
             await worldActor.commit(result, appliedFrames: applyResult.applied)
@@ -483,7 +517,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 overlay.updateFocusBorder(.show(focusedWindowID, frame))
             }
             await persistRestore(reason: "push \(direction.rawValue)")
-            return
+            return true
         }
 
         await worldActor.recordAppliedFrames(applyResult.applied)
@@ -498,7 +532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.error(
                 "Push \(direction.rawValue) failed applying \(applyResult.failures.count) window(s); planned layout was not committed: \(failureSummary)"
             )
-            return
+            return false
         }
 
         let clampSummary = applyResult.clamps
@@ -511,19 +545,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.error(
                 "Push \(direction.rawValue) still clamped after min-size re-solve; planned layout was not committed: \(clampSummary)"
             )
-            return
+            return false
         }
 
         reporter.info("Push \(direction.rawValue) observed app min-size clamp; re-solving once: \(clampSummary)")
         guard let focusedWindowID = result.focusedWindowID else {
             reporter.error("Push \(direction.rawValue) cannot retry min-size re-solve without a focused window")
-            return
+            return false
         }
         switch await worldActor.planPush(focusedWindowID, direction: direction) {
         case .success(let retry):
-            await applyPlannedPush(retry, direction: direction, retryOnClamp: false)
+            return await applyPlannedPush(retry, direction: direction, retryOnClamp: false)
         case .failure(let error):
             reporter.error("Push \(direction.rawValue) rejected after min-size observation: \(error.message)")
+            return false
         }
     }
 
@@ -626,6 +661,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    private func handleIPCCommand(_ command: IPCCommandDTO) async -> IPCReplyDTO {
+        let commandID = CommandID(raw: "ipc-\(UUID().uuidString)")
+        switch command {
+        case .resetLayout:
+            await worldActor.resetLayoutMemory()
+            reporter.info("IPC reset layout memory: cleared BSP trees, floating lists, focus, pending rules, and observed window minimums")
+            overlay.updateFocusBorder(.hide)
+            await persistRestore(reason: "ipc reset")
+            return .ok(commandID: commandID)
+        case .pushFocused(let direction):
+            if await performPush(direction) {
+                return .ok(commandID: commandID)
+            }
+            return .error(
+                commandID: commandID,
+                code: "push_failed",
+                message: "Focused push \(direction.rawValue) failed; see WinMgrApp log"
+            )
+        case .push(let windowID, let direction):
+            if let failure = await performExplicitPush(windowID: windowID, direction: direction) {
+                return .error(commandID: commandID, code: failure.code, message: failure.message)
+            }
+            return .ok(commandID: commandID)
+        case .center, .eject, .focusDirection, .focus, .toggleFloat:
+            return .error(
+                commandID: commandID,
+                code: "not_implemented",
+                message: "IPC command is not implemented in the current MVP rung: \(command)"
+            )
+        }
+    }
+
+    @MainActor
+    private func performExplicitPush(windowID: WindowID, direction: Direction) async -> CommandExecutionFailure? {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            return CommandExecutionFailure(
+                code: "accessibility_not_trusted",
+                message: "Accessibility permission is not trusted"
+            )
+        }
+
+        let displays = displayClient.currentDisplays()
+        let environment = await refreshEnvironment(reason: "ipc push \(direction.rawValue)", displays: displays)
+        guard environment.activeSpace != nil else {
+            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
+        }
+        guard case .complete = environment.quality else {
+            return CommandExecutionFailure(
+                code: "environment_incomplete",
+                message: "IPC push requires a complete AX snapshot; got \(describe(environment.quality))"
+            )
+        }
+
+        switch await worldActor.planPush(windowID, direction: direction) {
+        case .success(let result):
+            if await applyPlannedPush(result, direction: direction, retryOnClamp: true) {
+                return nil
+            }
+            return CommandExecutionFailure(
+                code: "apply_failed",
+                message: "Push \(direction.rawValue) layout write failed; see WinMgrApp log"
+            )
+        case .failure(let error):
+            return CommandExecutionFailure(code: error.code, message: error.message)
+        }
+    }
+
+    @MainActor
     private func persistRestore(reason: String) async {
         let stored = await worldActor.restoreSnapshot()
         do {
@@ -647,6 +750,11 @@ private extension WindowConstraints {
     var debugDescription: String {
         "minWidth=\(minWidth.map { String($0) } ?? "nil") minHeight=\(minHeight.map { String($0) } ?? "nil")"
     }
+}
+
+private struct CommandExecutionFailure {
+    let code: String
+    let message: String
 }
 
 private func describe(_ template: CommandTemplate) -> String {
