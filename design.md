@@ -309,6 +309,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 14 | User LaunchAgent smoke | `scripts/install_local.sh --replace --configuration debug` installs into `~/Applications` and `~/Library/LaunchAgents`; `launchctl print gui/$UID/com.ben.winmgr` reports running; installed `winmgrctl reset` returns `ok` | Notarized installer, brew cask |
 | 15 | Config hot reload | FSEvents watches the active config path; file changes debounce into `reloadConfig`; invalid configs leave the last-good runtime config active and report failure in the menu/log | Notarization, brew cask |
 | 16 | Startup/shutdown smoke | `scripts/smoke_startup_shutdown.sh` proves service startup, temp restore-state path, IPC reset, IPC quit, `applicationWillTerminate`, process exit, and socket cleanup | Unit-level fake service orchestration |
+| 17 | Service lifecycle orchestration | `WinMgrAppSupportTests` prove ordered startup, reverse-order rollback on a later startup failure, and idempotent normal shutdown | Real AX shell startup failure injection |
 
 ### Fast-path constraints
 

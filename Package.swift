@@ -31,9 +31,12 @@ let package = Package(
             name: "WinMgrIPC",
             dependencies: ["WinMgrCore"]
         ),
+        .target(
+            name: "WinMgrAppSupport"
+        ),
         .executableTarget(
             name: "WinMgrApp",
-            dependencies: ["WinMgrCore", "WinMgrIPC", "CLua"]
+            dependencies: ["WinMgrCore", "WinMgrIPC", "WinMgrAppSupport", "CLua"]
         ),
         .executableTarget(
             name: "WinMgrCtl",
@@ -51,6 +54,13 @@ let package = Package(
             dependencies: [
                 "WinMgrCore",
                 "WinMgrIPC",
+                .product(name: "Testing", package: "swift-testing")
+            ]
+        ),
+        .testTarget(
+            name: "WinMgrAppSupportTests",
+            dependencies: [
+                "WinMgrAppSupport",
                 .product(name: "Testing", package: "swift-testing")
             ]
         )

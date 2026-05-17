@@ -233,3 +233,25 @@ Observed Rung 16 results:
 | Date | Commit | Restore path | Startup services | IPC reset | IPC quit | Shutdown cleanup | Known failures |
 |---|---|---|---|---|---|---|---|
 | 2026-05-17 | `a33f825` | `/private/tmp/winmgr-startup-shutdown-smoke/state.json` | Passed: Accessibility, hotkeys, AX focus observer, display observer, config watcher, IPC server, drag zones, and layout loop logged | Passed: `WinMgrCtl reset` returned `ok` and logged `IPC reset layout memory` | Passed: `WinMgrCtl quit` returned `ok` and logged `IPC quit requested` | Passed: process exited, `WinMgrApp stopped` logged, and `/tmp/winmgr-501.sock` was removed | None |
+
+## Rung 17: Service Lifecycle Orchestration
+
+This post-MVP shell-support gate removes the partial-startup hole where an
+early service could remain live after a later service failed to start.
+
+Commands:
+
+```sh
+CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+scripts/smoke_startup_shutdown.sh
+```
+
+Pass criteria:
+
+- Unit tests prove service startup order is exact.
+- Unit tests prove normal shutdown stops services in reverse order and is
+  idempotent.
+- Unit tests prove a later startup failure stops already-started services in
+  reverse order and does not start later services.
+- `WinMgrApp` startup uses the same service sequence primitive.
+- Startup/shutdown smoke still passes, including IPC socket cleanup.

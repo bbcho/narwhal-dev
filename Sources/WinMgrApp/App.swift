@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Darwin
+import WinMgrAppSupport
 import WinMgrCore
 import WinMgrIPC
 
@@ -41,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var environmentRefreshCoalescer = EnvironmentRefreshCoalescerState.empty
     private var environmentRefreshCoalescingTimer: Timer?
     private var environmentRefreshCoalescingTimerGeneration: UInt64?
+    private var runningServices: RunningServices?
     private var servicesStarted = false
 
     static func main() {
@@ -137,19 +139,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environmentRefreshCoalescingTimer?.invalidate()
         environmentRefreshCoalescingTimer = nil
         environmentRefreshCoalescingTimerGeneration = nil
-        axObserverService?.stop()
-        axObserverService = nil
-        displayObserverService?.stop()
-        displayObserverService = nil
-        configFileWatcherService?.stop()
-        configFileWatcherService = nil
-        ipcServer?.stop()
-        ipcServer = nil
-        eventTapClient?.stop()
-        eventTapClient = nil
-        hotkeyManager?.stop()
-        hotkeyManager = nil
-        menubar.stop()
+        runningServices?.stopAll()
+        runningServices = nil
+        servicesStarted = false
         overlay.stop()
         reporter.info("WinMgrApp stopped")
     }
@@ -353,27 +345,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startServices() {
         guard !servicesStarted else { return }
-        startMenubar()
 
-        let manager = HotkeyManager(bindings: config.keymap, reporter: reporter) { [weak self] action in
-            Task { @MainActor in
-                await self?.performHotkey(action)
-            }
-        }
-
-        do {
-            try manager.start()
-            hotkeyManager = manager
-            startAXObserver()
-            startDisplayObserver()
-            startConfigFileWatcher()
-            startIPCServer()
-            startEventTap()
+        switch startServiceSequence(serviceStartSteps()) {
+        case .success(let services):
+            runningServices = services
             servicesStarted = true
             reporter.info("Layout command loop ready")
-        } catch {
-            reporter.error("Hotkey startup failed: \(String(describing: error))")
+        case .failure(let error):
+            runningServices = nil
+            servicesStarted = false
+            reporter.error(error.description)
         }
+    }
+
+    private func serviceStartSteps() -> [ServiceStartStep] {
+        [
+            ServiceStartStep(name: "menubar") {
+                self.startMenubar()
+                return { [weak self] in
+                    self?.menubar.stop()
+                }
+            },
+            ServiceStartStep(name: "hotkeys") {
+                try self.installHotkeys()
+            },
+            ServiceStartStep(name: "axObserver") {
+                self.installAXObserver()
+            },
+            ServiceStartStep(name: "displayObserver") {
+                self.installDisplayObserver()
+            },
+            ServiceStartStep(name: "configWatcher") {
+                try self.installConfigFileWatcher()
+            },
+            ServiceStartStep(name: "ipcServer") {
+                try self.installIPCServer()
+            },
+            ServiceStartStep(name: "dragZones") {
+                try self.installEventTap()
+            }
+        ]
     }
 
     @MainActor
@@ -397,8 +408,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func startAXObserver() {
-        guard axObserverService == nil else { return }
+    private func installHotkeys() throws -> ServiceStop {
+        let manager = HotkeyManager(bindings: config.keymap, reporter: reporter) { [weak self] action in
+            Task { @MainActor in
+                await self?.performHotkey(action)
+            }
+        }
+        try manager.start()
+        hotkeyManager = manager
+        return { [weak self, manager] in
+            manager.stop()
+            if self?.hotkeyManager === manager {
+                self?.hotkeyManager = nil
+            }
+        }
+    }
+
+    @MainActor
+    private func installAXObserver() -> ServiceStop {
+        guard axObserverService == nil else {
+            return {}
+        }
         let service = AXObserverService(
             axClient: axClient,
             echoSuppressor: echoSuppressor,
@@ -414,22 +444,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         service.start()
         axObserverService = service
+        return { [weak self, service] in
+            service.stop()
+            if self?.axObserverService === service {
+                self?.axObserverService = nil
+            }
+        }
     }
 
     @MainActor
-    private func startDisplayObserver() {
-        guard displayObserverService == nil else { return }
+    private func installDisplayObserver() -> ServiceStop {
+        guard displayObserverService == nil else {
+            return {}
+        }
         let service = DisplayObserverService(reporter: reporter) { [weak self] in
             self?.overlay.updateFocusBorder(.hide)
             self?.scheduleCoalescedEnvironmentRefresh(.displayChanged)
         }
         service.start()
         displayObserverService = service
+        return { [weak self, service] in
+            service.stop()
+            if self?.displayObserverService === service {
+                self?.displayObserverService = nil
+            }
+        }
     }
 
     @MainActor
-    private func startConfigFileWatcher() {
-        guard configFileWatcherService == nil else { return }
+    private func installConfigFileWatcher() throws -> ServiceStop {
+        guard configFileWatcherService == nil else {
+            return {}
+        }
         switch startupConfigRequestFromArguments() {
         case .success(let request):
             let service = ConfigFileWatcherService(configURL: request.url, reporter: reporter) { [weak self] in
@@ -439,14 +485,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             service.start()
             configFileWatcherService = service
+            return { [weak self, service] in
+                service.stop()
+                if self?.configFileWatcherService === service {
+                    self?.configFileWatcherService = nil
+                }
+            }
         case .failure(let error):
-            reporter.error("Config watcher skipped: \(error.description)")
+            throw error
         }
     }
 
     @MainActor
-    private func startIPCServer() {
-        guard ipcServer == nil else { return }
+    private func installIPCServer() throws -> ServiceStop {
+        guard ipcServer == nil else {
+            return {}
+        }
         let server = IPCServer(
             socketPath: IPCDefaults.socketPath,
             handle: { [weak self] command in
@@ -462,28 +516,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         )
-        do {
-            try server.start()
-            ipcServer = server
-            reporter.info("IPC server ready at \(IPCDefaults.socketPath)")
-        } catch {
-            reporter.error("IPC server startup failed: \(String(describing: error))")
+        try server.start()
+        ipcServer = server
+        reporter.info("IPC server ready at \(IPCDefaults.socketPath)")
+        return { [weak self, server] in
+            server.stop()
+            if self?.ipcServer === server {
+                self?.ipcServer = nil
+            }
         }
     }
 
     @MainActor
-    private func startEventTap() {
-        guard eventTapClient == nil else { return }
+    private func installEventTap() throws -> ServiceStop {
+        guard eventTapClient == nil else {
+            return {}
+        }
         let client = EventTapClient(modifier: config.dragModifier, reporter: reporter) { [weak self] location in
             Task { @MainActor in
                 await self?.performDragDrop(at: location)
             }
         }
-        do {
-            try client.start()
-            eventTapClient = client
-        } catch {
-            reporter.error("Drag-zone event tap startup failed: \(String(describing: error))")
+        try client.start()
+        eventTapClient = client
+        return { [weak self, client] in
+            client.stop()
+            if self?.eventTapClient === client {
+                self?.eventTapClient = nil
+            }
         }
     }
 
