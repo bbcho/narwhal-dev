@@ -742,7 +742,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let snapshot {
                 overlay.updateFocusBorder(.show(windowID, snapshot.frame))
             }
-        case .windowOpened, .windowClosed, .windowMoved, .windowResized:
+        case .windowMoved(let windowID, _), .windowResized(let windowID, _):
+            if let snapshot {
+                overlay.updateFocusBorder(.show(windowID, snapshot.frame))
+            }
+        case .windowOpened, .windowClosed:
             break
         }
     }

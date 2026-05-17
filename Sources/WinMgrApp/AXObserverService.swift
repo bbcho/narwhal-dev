@@ -4,6 +4,7 @@ import WinMgrCore
 @MainActor
 final class AXObserverService {
     private static let pollInterval: TimeInterval = 0.15
+    private static let frameTolerance: CGFloat = 1
 
     private let axClient: AXClient
     private let echoSuppressor: AXEchoSuppressor
@@ -13,7 +14,7 @@ final class AXObserverService {
     private var timer: Timer?
     private var settleTimers: [Timer] = []
     private var workspaceObserver: NSObjectProtocol?
-    private var lastFocusedWindowID: WindowID?
+    private var focusedGeometryState = FocusedWindowGeometryState.empty
 
     init(
         axClient: AXClient,
@@ -63,7 +64,7 @@ final class AXObserverService {
     private func activeSpaceChanged() {
         settleTimers.forEach { $0.invalidate() }
         settleTimers.removeAll()
-        lastFocusedWindowID = nil
+        focusedGeometryState = .empty
         spaceChanged()
         reporter.info("Active Space changed; focus border hidden pending focused-window refresh")
         pollFocusedWindowAfterDelay(0.05)
@@ -93,12 +94,16 @@ final class AXObserverService {
 
     private func pollFocusedWindow() {
         guard case .success(let snapshot) = axClient.focusedWindowSnapshot() else { return }
-        guard snapshot.id != lastFocusedWindowID else { return }
-        lastFocusedWindowID = snapshot.id
-
-        let event = AXEvent.windowFocused(snapshot.id)
+        let poll = pollFocusedWindowGeometry(
+            previous: focusedGeometryState,
+            currentWindowID: snapshot.id,
+            currentFrame: snapshot.frame,
+            tolerance: Self.frameTolerance
+        )
+        focusedGeometryState = poll.state
+        guard let event = poll.event else { return }
         guard !echoSuppressor.isExpectedEcho(event) else {
-            reporter.info("Suppressed expected AX focus echo for \(snapshot.id.description)")
+            reporter.info("Suppressed expected AX echo for \(snapshot.id.description)")
             return
         }
         emit(event, snapshot)
