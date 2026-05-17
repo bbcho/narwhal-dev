@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let axClient = AXClient()
     private let displayClient = DisplayClient()
+    private let spaceClient = SpaceClient()
     private var worldActor = MVPWorldActor()
     private let reporter = StartupReporter()
     private var config = Config.default
@@ -47,7 +48,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             Task { @MainActor in
                 let focused = reportFocusedWindowSnapshot()
-                await refreshEnvironment(reason: "check")
+                let environment = await refreshEnvironment(reason: "check")
+                guard environment.activeSpace != nil else {
+                    reporter.error("Environment check failed: active Space unavailable")
+                    reporter.info("WinMgrApp stopped")
+                    Darwin.exit(1)
+                }
                 if let focused {
                     await worldActor.recordExternalFocus(focused.id)
                 }
@@ -142,7 +148,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !mvpServicesStarted else { return }
         reporter.info("Rung 1 complete: AppKit run loop is active and Accessibility is trusted")
         let focused = reportFocusedWindowSnapshot()
-        await refreshEnvironment(reason: "startup")
+        let environment = await refreshEnvironment(reason: "startup")
+        guard environment.activeSpace != nil else {
+            reporter.error("MVP services not started: active Space unavailable")
+            return
+        }
         if let focused {
             await worldActor.recordExternalFocus(focused.id)
         }
@@ -160,11 +170,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @discardableResult
     @MainActor
-    private func refreshEnvironment(reason: String) async {
-        let displays = displayClient.currentDisplays()
+    private func refreshEnvironment(
+        reason: String,
+        displays providedDisplays: [DisplayID: DisplayInfo]? = nil
+    ) async -> EnvironmentRefreshResult {
+        let displays = providedDisplays ?? displayClient.currentDisplays()
+        let activeSpace: SpaceID?
+        switch spaceClient.activeSpaceID() {
+        case .success(let spaceID):
+            activeSpace = spaceID
+        case .failure(let error):
+            activeSpace = nil
+            reporter.error("Active Space refresh failed (\(reason)): \(error.description)")
+        }
         let snapshot = EnvironmentSnapshot(
-            activeSpace: nil,
+            activeSpace: activeSpace,
             displays: displays,
             axSnapshot: axClient.windowSnapshot()
         )
@@ -172,6 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reporter.info(
             "Environment refreshed (\(reason)): activeSpace=\(result.activeSpace?.raw.description ?? "nil") displays=\(result.displayCount) windows=\(result.windowCount) quality=\(describe(result.quality))"
         )
+        return result
     }
 
     @discardableResult
@@ -258,7 +281,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         Task { @MainActor in
-            await refreshEnvironment(reason: "one-shot push")
+            let environment = await refreshEnvironment(reason: "one-shot push")
+            guard environment.activeSpace != nil else {
+                reporter.error("Push \(direction.rawValue) skipped because active Space is unavailable")
+                NSApplication.shared.terminate(nil)
+                return
+            }
             await performPush(direction)
             NSApplication.shared.terminate(nil)
         }
@@ -352,6 +380,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         reporter.info("Push \(direction.rawValue) selected display \(displayID.raw)")
+        let environment = await refreshEnvironment(reason: "pre-push \(direction.rawValue)", displays: displays)
+        guard environment.activeSpace != nil else {
+            reporter.error("Push \(direction.rawValue) rejected before planning: active Space unavailable")
+            return
+        }
 
         switch axClient.visibleWindowIDs() {
         case .success(let liveWindowIDs):
@@ -359,7 +392,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .failure(let error):
             reporter.error("Push \(direction.rawValue) skipped live-window reconciliation: \(error.description)")
         }
-        await worldActor.upsertWindow(snapshot.metadata, displayID: displayID, displays: displays)
+        switch await worldActor.upsertWindow(snapshot.metadata, displayID: displayID, displays: displays) {
+        case .success:
+            break
+        case .failure(let error):
+            reporter.error("Push \(direction.rawValue) failed updating focused window state: \(error.message)")
+            return
+        }
 
         switch await worldActor.planPush(snapshot.id, direction: direction) {
         case .success(let result):

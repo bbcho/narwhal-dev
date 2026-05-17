@@ -30,6 +30,7 @@ public enum CommandError: Error, Equatable, Sendable {
     case windowIsFloating(WindowID)
     case windowIsTiled(WindowID)
     case windowNotResizable(WindowID)
+    case activeSpaceUnavailable
     case spaceNotFound(SpaceID)
     case displayNotFound(DisplayID)
     case noNeighbor(Direction)
@@ -48,6 +49,8 @@ public enum CommandError: Error, Equatable, Sendable {
             return "window_is_tiled"
         case .windowNotResizable:
             return "window_not_resizable"
+        case .activeSpaceUnavailable:
+            return "active_space_unavailable"
         case .spaceNotFound:
             return "space_not_found"
         case .displayNotFound:
@@ -67,6 +70,8 @@ public enum CommandError: Error, Equatable, Sendable {
 
     public var message: String {
         switch self {
+        case .activeSpaceUnavailable:
+            return "active Space unavailable"
         case .layoutUnsatisfiable(let layout):
             return "layout unsatisfiable on display \(layout.displayID.raw) axis=\(layout.axis.rawValue) required=\(layout.required) available=\(layout.available) windows=\(layout.windows.map(\.description).joined(separator: ","))"
         default:

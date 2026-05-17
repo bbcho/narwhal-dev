@@ -62,8 +62,10 @@ private func applyPush(_ windowID: WindowID, direction: Direction, to world: Wor
     guard world.displays[displayID] != nil else {
         return .failure(.displayNotFound(displayID))
     }
+    guard let activeSpace = world.activeSpace else {
+        return .failure(.activeSpaceUnavailable)
+    }
 
-    let activeSpace = world.activeSpace ?? SpaceID(raw: 1)
     let currentSpace = world.spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
     let currentDisplayState = currentSpace.displays[displayID] ?? DisplaySpaceState(
         displayID: displayID,

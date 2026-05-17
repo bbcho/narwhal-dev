@@ -56,8 +56,15 @@ actor MVPWorldActor {
         world = pruneWorld(world, keepingLiveWindows: liveWindowIDs)
     }
 
-    func upsertWindow(_ metadata: WindowMetadata, displayID: DisplayID, displays: [DisplayID: DisplayInfo]) {
-        let activeSpace = world.activeSpace ?? SpaceID(raw: 1)
+    func upsertWindow(
+        _ metadata: WindowMetadata,
+        displayID: DisplayID,
+        displays: [DisplayID: DisplayInfo]
+    ) -> Result<Void, CommandError> {
+        guard let activeSpace = world.activeSpace else {
+            return .failure(.activeSpaceUnavailable)
+        }
+
         var windows = world.windows
         windows[metadata.id] = metadata
 
@@ -79,6 +86,7 @@ actor MVPWorldActor {
             pendingRules: world.pendingRules,
             config: world.config
         )
+        return .success(())
     }
 
     func planPush(_ windowID: WindowID, direction: Direction) -> Result<MVPCommandResult, CommandError> {

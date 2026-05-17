@@ -36,7 +36,7 @@ public func reconcileEnvironment(_ snapshot: EnvironmentSnapshot, in world: Worl
     case .partial, .permissionDenied:
         return World(
             displays: snapshot.displays,
-            activeSpace: snapshot.activeSpace ?? world.activeSpace,
+            activeSpace: snapshot.activeSpace,
             spaces: world.spaces,
             windows: world.windows,
             windowDisplay: world.windowDisplay,
@@ -48,13 +48,24 @@ public func reconcileEnvironment(_ snapshot: EnvironmentSnapshot, in world: Worl
 }
 
 private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in world: World) -> World {
-    let activeSpace = snapshot.activeSpace ?? world.activeSpace ?? SpaceID(raw: 1)
     let liveWindows = snapshot.axSnapshot.windows.reduce(into: [:]) { result, metadata in
         result[metadata.id] = metadata
     }
     let liveWindowIDs = Set(liveWindows.keys)
     let windowDisplay = displayOwnership(for: liveWindows.values, displays: snapshot.displays)
     let pruned = pruneWorld(world, keepingLiveWindows: liveWindowIDs)
+    guard let activeSpace = snapshot.activeSpace else {
+        return World(
+            displays: snapshot.displays,
+            activeSpace: nil,
+            spaces: pruned.spaces,
+            windows: liveWindows,
+            windowDisplay: windowDisplay,
+            windowConstraints: pruned.windowConstraints,
+            pendingRules: pruned.pendingRules,
+            config: world.config
+        )
+    }
 
     var spaces = pruned.spaces
     let previousSpace = spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)

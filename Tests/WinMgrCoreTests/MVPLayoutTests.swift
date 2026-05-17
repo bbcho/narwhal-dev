@@ -387,6 +387,52 @@ struct MVPLayoutTests {
         #expect(next.spaces[space]?.displays[rightDisplay]?.floating == [second])
     }
 
+    @Test("Complete environment snapshot without active Space does not fabricate Space 1")
+    func completeEnvironmentSnapshotWithoutActiveSpaceDoesNotFabricateSpaceOne() throws {
+        let displayID = DisplayID(raw: 7)
+        let oldSpace = SpaceID(raw: 99)
+        let window = WindowID(raw: 42)
+        let oldTree = pushIntoTree(window, .left, .void)
+        let oldWorld = World(
+            displays: [displayID: display(displayID, x: 0, width: 1000)],
+            activeSpace: oldSpace,
+            spaces: [
+                oldSpace: SpaceState(
+                    id: oldSpace,
+                    displays: [displayID: DisplaySpaceState(displayID: displayID, tree: oldTree, floating: [])],
+                    focused: window
+                )
+            ],
+            windows: [window: metadata(for: window)],
+            windowDisplay: [window: displayID],
+            windowConstraints: [window: WindowConstraints(minWidth: 500)],
+            pendingRules: [window: .forceFloat],
+            config: .default
+        )
+        let snapshot = EnvironmentSnapshot(
+            activeSpace: nil,
+            displays: [displayID: display(displayID, x: 0, width: 1000)],
+            axSnapshot: AXWindowSnapshot(
+                windows: [metadata(for: window, frame: CGRect(x: 100, y: 50, width: 400, height: 300))],
+                quality: .complete
+            )
+        )
+
+        guard case .success(let next) = apply(.environmentChanged(snapshot), to: oldWorld) else {
+            Issue.record("Expected environmentChanged to succeed")
+            return
+        }
+
+        #expect(next.activeSpace == nil)
+        #expect(next.windows == [window: metadata(for: window, frame: CGRect(x: 100, y: 50, width: 400, height: 300))])
+        #expect(next.windowDisplay == [window: displayID])
+        #expect(next.spaces[SpaceID(raw: 1)] == nil)
+        #expect(next.spaces[oldSpace]?.displays[displayID]?.tree == oldTree)
+        #expect(next.spaces[oldSpace]?.focused == window)
+        #expect(next.windowConstraints == [window: WindowConstraints(minWidth: 500)])
+        #expect(next.pendingRules == [window: .forceFloat])
+    }
+
     @Test("Complete environment snapshot prunes closed windows but preserves zone shape")
     func completeEnvironmentSnapshotPrunesClosedWindowsPreservingTreeShape() throws {
         let displayID = DisplayID(raw: 1)
@@ -475,6 +521,44 @@ struct MVPLayoutTests {
         #expect(next.pendingRules == world.pendingRules)
     }
 
+    @Test("Incomplete environment snapshot without active Space clears active Space without deleting windows")
+    func incompleteEnvironmentSnapshotWithoutActiveSpaceClearsActiveSpaceOnly() throws {
+        let displayID = DisplayID(raw: 1)
+        let space = SpaceID(raw: 10)
+        let window = WindowID(raw: 1)
+        let world = World(
+            displays: [displayID: display(displayID, x: 0, width: 1000)],
+            activeSpace: space,
+            spaces: [space: SpaceState(id: space, displays: [:], focused: window)],
+            windows: [window: metadata(for: window)],
+            windowDisplay: [window: displayID],
+            windowConstraints: [window: WindowConstraints(minWidth: 500)],
+            pendingRules: [window: .forceFloat],
+            config: .default
+        )
+        let snapshot = EnvironmentSnapshot(
+            activeSpace: nil,
+            displays: [displayID: display(displayID, x: 0, width: 1200)],
+            axSnapshot: AXWindowSnapshot(
+                windows: [],
+                quality: .partial([AXWindowReadError(windowID: nil, pid: nil, message: "AX read failed")])
+            )
+        )
+
+        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
+            Issue.record("Expected environmentChanged to succeed")
+            return
+        }
+
+        #expect(next.activeSpace == nil)
+        #expect(next.displays == [displayID: display(displayID, x: 0, width: 1200)])
+        #expect(next.spaces == world.spaces)
+        #expect(next.windows == world.windows)
+        #expect(next.windowDisplay == world.windowDisplay)
+        #expect(next.windowConstraints == world.windowConstraints)
+        #expect(next.pendingRules == world.pendingRules)
+    }
+
     @Test("Reload config updates world config used by layout")
     func reloadConfigUpdatesWorldConfig() throws {
         let config = Config(
@@ -555,6 +639,39 @@ struct MVPLayoutTests {
         #expect(result[e] == CGRect(x: 504, y: 33, width: 504, height: 436.5))
         #expect(result[b] == CGRect(x: 1008, y: 33, width: 504, height: 436.5))
         #expect(result.values.allSatisfy { $0.width >= 500 })
+    }
+
+    @Test("Apply push fails when active Space is unavailable")
+    func applyPushFailsWithoutActiveSpace() throws {
+        let display = DisplayID(raw: 1)
+        let window = WindowID(raw: 1)
+        let world = World(
+            displays: [
+                display: DisplayInfo(
+                    id: display,
+                    slot: 0,
+                    fingerprint: nil,
+                    frame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+                    visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 800)
+                )
+            ],
+            activeSpace: nil,
+            spaces: [:],
+            windows: [window: metadata(for: window)],
+            windowDisplay: [window: display],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        guard case .failure(let error) = apply(.push(window, .left), to: world) else {
+            Issue.record("Expected push without active Space to fail")
+            return
+        }
+
+        #expect(error == .activeSpaceUnavailable)
+        #expect(error.code == "active_space_unavailable")
+        #expect(error.message == "active Space unavailable")
     }
 
     @Test("Apply push updates the active display tree")
