@@ -194,7 +194,7 @@ public enum DefaultConfigLua {
           },
           border = { width = \(number(config.border.width)), color = \(quoted(config.border.colorHex)) },
           hud = { enabled = \(config.hud.enabled ? "true" : "false"), duration_millis = \(config.hud.durationMillis) },
-          rules = {},
+          rules = \(renderRules(config.rules)),
         }
         """ + "\n"
     }
@@ -252,6 +252,44 @@ public enum DefaultConfigLua {
             return "{ type = \"insert_as_center\" }"
         case .insertAtSubtree(let path):
             return "{ type = \"insert_at_subtree\", path = { \(path.map(String.init).joined(separator: ", ")) } }"
+        }
+    }
+
+    private static func renderRules(_ rules: [WindowRule]) -> String {
+        guard !rules.isEmpty else { return "{}" }
+        let entries = rules.map { rule in
+            "    { predicate = \(renderRulePredicate(rule.predicate)), action = \(renderRuleAction(rule.action)) },"
+        }.joined(separator: "\n")
+        return "{\n\(entries)\n  }"
+    }
+
+    private static func renderRulePredicate(_ predicate: RulePredicate) -> String {
+        switch predicate {
+        case .bundleID(let value):
+            return "{ type = \"bundle_id\", value = \(quoted(value)) }"
+        case .bundleIDMatches(let regex):
+            return "{ type = \"bundle_id_matches\", pattern = \(quoted(regex)) }"
+        case .role(let value):
+            return "{ type = \"role\", value = \(quoted(value)) }"
+        case .titleMatches(let regex):
+            return "{ type = \"title_matches\", pattern = \(quoted(regex)) }"
+        case .and(let predicates):
+            return "{ type = \"and\", predicates = { \(predicates.map(renderRulePredicate).joined(separator: ", ")) } }"
+        case .or(let predicates):
+            return "{ type = \"or\", predicates = { \(predicates.map(renderRulePredicate).joined(separator: ", ")) } }"
+        case .not(let predicate):
+            return "{ type = \"not\", predicate = \(renderRulePredicate(predicate)) }"
+        }
+    }
+
+    private static func renderRuleAction(_ action: RuleAction) -> String {
+        switch action {
+        case .forceFloat:
+            return "{ type = \"force_float\" }"
+        case .ignore:
+            return "{ type = \"ignore\" }"
+        case .pinToDisplay(let slot):
+            return "{ type = \"pin_to_display\", slot = \(slot) }"
         }
     }
 

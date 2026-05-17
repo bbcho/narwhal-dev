@@ -117,13 +117,98 @@ struct ConfigTests {
         ))
     }
 
-    @Test("Lua config parser rejects non-empty rules until rules are implemented")
-    func luaConfigParserRejectsNonEmptyRules() {
+    @Test("Lua config parser accepts exact, regex, composite, and display-pin rules")
+    func luaConfigParserAcceptsRules() throws {
         var root = defaultLuaRoot()
-        root["rules"] = .array([.table(["predicate": .string("placeholder")])])
+        let rules = [
+            WindowRule(predicate: .bundleID("com.apple.finder"), action: .forceFloat),
+            WindowRule(
+                predicate: .and([
+                    .bundleIDMatches(regex: "^net\\.kovidgoyal\\."),
+                    .not(.titleMatches(regex: "scratch"))
+                ]),
+                action: .pinToDisplay(slot: 1)
+            ),
+            WindowRule(predicate: .role("AXDialog"), action: .ignore),
+            WindowRule(predicate: .or([.bundleID("com.apple.systempreferences"), .role("AXSheet")]), action: .ignore)
+        ]
+        root["rules"] = .array([
+            .table([
+                "predicate": .table(["type": .string("bundle_id"), "value": .string("com.apple.finder")]),
+                "action": .table(["type": .string("force_float")])
+            ]),
+            .table([
+                "predicate": .table([
+                    "type": .string("and"),
+                    "predicates": .array([
+                        .table(["type": .string("bundle_id_matches"), "pattern": .string("^net\\.kovidgoyal\\.")]),
+                        .table([
+                            "type": .string("not"),
+                            "predicate": .table(["type": .string("title_matches"), "pattern": .string("scratch")])
+                        ])
+                    ])
+                ]),
+                "action": .table(["type": .string("pin_to_display"), "slot": .number(1)])
+            ]),
+            .table([
+                "predicate": .table(["type": .string("role"), "value": .string("AXDialog")]),
+                "action": .table(["type": .string("ignore")])
+            ]),
+            .table([
+                "predicate": .table([
+                    "type": .string("or"),
+                    "predicates": .array([
+                        .table(["type": .string("bundle_id"), "value": .string("com.apple.systempreferences")]),
+                        .table(["type": .string("role"), "value": .string("AXSheet")])
+                    ])
+                ]),
+                "action": .table(["type": .string("ignore")])
+            ])
+        ])
+
+        guard case .success(let config) = parseConfig(LuaConfigData(root: root)) else {
+            Issue.record("Expected rules to parse")
+            return
+        }
+
+        #expect(config == Config(
+            keymap: Config.default.keymap,
+            rules: rules,
+            zones: DefaultZones.entries,
+            gaps: Config.default.gaps,
+            border: .default,
+            hud: .default,
+            dragModifier: [.shift]
+        ))
+    }
+
+    @Test("Lua config parser rejects invalid rule regex at the exact key")
+    func luaConfigParserRejectsInvalidRuleRegex() {
+        var root = defaultLuaRoot()
+        root["rules"] = .array([
+            .table([
+                "predicate": .table(["type": .string("bundle_id_matches"), "pattern": .string("[")]),
+                "action": .table(["type": .string("ignore")])
+            ])
+        ])
 
         #expect(parseConfig(LuaConfigData(root: root)) == .failure(
-            .invalidValue(key: "rules", reason: "window rules are not implemented by the startup loader")
+            .invalidValue(key: "rules[1].predicate.pattern", reason: "invalid regex")
+        ))
+    }
+
+    @Test("Lua config parser rejects empty composite rule predicates")
+    func luaConfigParserRejectsEmptyCompositeRulePredicates() {
+        var root = defaultLuaRoot()
+        root["rules"] = .array([
+            .table([
+                "predicate": .table(["type": .string("and"), "predicates": .array([])]),
+                "action": .table(["type": .string("ignore")])
+            ])
+        ])
+
+        #expect(parseConfig(LuaConfigData(root: root)) == .failure(
+            .invalidValue(key: "rules[1].predicate.predicates", reason: "and predicates cannot be empty")
         ))
     }
 

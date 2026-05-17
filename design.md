@@ -349,7 +349,7 @@ winMgr/
 │   │   ├── Layout.swift                (unconstrained layout, diff)
 │   │   ├── LayoutSolver.swift          (min-size-aware layout solve)
 │   │   ├── Focus.swift                 (nearestWindowInDirection)
-│   │   ├── Rules.swift                 (applyRules, RulePredicate, RuleAction)
+│   │   ├── Rules.swift                 (matchRule, windowOpenDecision)
 │   │   └── Config.swift                (Config, HotkeyBinding, Zone, Gaps)
 │   ├── WinMgrShell/           ← IMPURE. AppKit + AX + IPC + Lua.
 │   │   ├── AXClient.swift              (read+write AX)
@@ -1298,6 +1298,38 @@ struct AXWindowSnapshot: Equatable {
     let quality: AXSnapshotQuality
 }
 ```
+
+### Lua rule schema
+
+Rules are explicit data at the Lua boundary. Supported predicate `type` values are `bundle_id`, `bundle_id_matches`, `role`, `title_matches`, `and`, `or`, and `not`. Supported action `type` values are `force_float`, `ignore`, and `pin_to_display`.
+
+```lua
+rules = {
+  {
+    predicate = { type = "bundle_id", value = "com.apple.finder" },
+    action = { type = "force_float" },
+  },
+  {
+    predicate = {
+      type = "and",
+      predicates = {
+        { type = "bundle_id_matches", pattern = "^net\\.kovidgoyal\\." },
+        { type = "not", predicate = { type = "title_matches", pattern = "scratch" } },
+      },
+    },
+    action = { type = "pin_to_display", slot = 1 },
+  },
+  {
+    predicate = { type = "or", predicates = {
+      { type = "bundle_id", value = "com.apple.systempreferences" },
+      { type = "role", value = "AXSheet" },
+    } },
+    action = { type = "ignore" },
+  },
+}
+```
+
+Regex syntax is validated during config parsing. Invalid runtime-constructed regex predicates evaluate to false in the pure matcher so `matchRule` remains total.
 
 ### Tree invariants (enforced at construction)
 

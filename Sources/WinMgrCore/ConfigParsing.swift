@@ -81,10 +81,74 @@ private struct ConfigParser {
             return []
         case .table(let values) where values.isEmpty:
             return []
-        case .array, .table:
-            throw ConfigError.invalidValue(key: "rules", reason: "window rules are not implemented by the startup loader")
+        case .array(let values):
+            return try values.enumerated().map { index, item in
+                try parseRule(item, key: "rules[\(index + 1)]")
+            }
+        case .table:
+            throw ConfigError.wrongType(key: "rules", expected: "array")
         default:
             throw ConfigError.wrongType(key: "rules", expected: "array")
+        }
+    }
+
+    private func parseRule(_ value: LuaValue, key: String) throws -> WindowRule {
+        let table = try table(value, key: key)
+        return WindowRule(
+            predicate: try parseRulePredicate(required("predicate", in: table, path: key), key: "\(key).predicate"),
+            action: try parseRuleAction(required("action", in: table, path: key), key: "\(key).action")
+        )
+    }
+
+    private func parseRulePredicate(_ value: LuaValue, key: String) throws -> RulePredicate {
+        let table = try table(value, key: key)
+        let type = try string(required("type", in: table, path: key), key: "\(key).type")
+        switch type {
+        case "bundle_id":
+            return .bundleID(try nonEmptyString(required("value", in: table, path: key), key: "\(key).value"))
+        case "bundle_id_matches":
+            return .bundleIDMatches(regex: try regexPattern(required("pattern", in: table, path: key), key: "\(key).pattern"))
+        case "role":
+            return .role(try nonEmptyString(required("value", in: table, path: key), key: "\(key).value"))
+        case "title_matches":
+            return .titleMatches(regex: try regexPattern(required("pattern", in: table, path: key), key: "\(key).pattern"))
+        case "and":
+            let predicates = try parsePredicateArray(required("predicates", in: table, path: key), key: "\(key).predicates")
+            guard !predicates.isEmpty else {
+                throw ConfigError.invalidValue(key: "\(key).predicates", reason: "and predicates cannot be empty")
+            }
+            return .and(predicates)
+        case "or":
+            let predicates = try parsePredicateArray(required("predicates", in: table, path: key), key: "\(key).predicates")
+            guard !predicates.isEmpty else {
+                throw ConfigError.invalidValue(key: "\(key).predicates", reason: "or predicates cannot be empty")
+            }
+            return .or(predicates)
+        case "not":
+            return .not(try parseRulePredicate(required("predicate", in: table, path: key), key: "\(key).predicate"))
+        default:
+            throw ConfigError.invalidValue(key: "\(key).type", reason: "unsupported rule predicate '\(type)'")
+        }
+    }
+
+    private func parsePredicateArray(_ value: LuaValue, key: String) throws -> [RulePredicate] {
+        try array(value, key: key).enumerated().map { index, item in
+            try parseRulePredicate(item, key: "\(key)[\(index + 1)]")
+        }
+    }
+
+    private func parseRuleAction(_ value: LuaValue, key: String) throws -> RuleAction {
+        let table = try table(value, key: key)
+        let type = try string(required("type", in: table, path: key), key: "\(key).type")
+        switch type {
+        case "force_float":
+            return .forceFloat
+        case "ignore":
+            return .ignore
+        case "pin_to_display":
+            return .pinToDisplay(slot: try nonNegativeInt(required("slot", in: table, path: key), key: "\(key).slot"))
+        default:
+            throw ConfigError.invalidValue(key: "\(key).type", reason: "unsupported rule action '\(type)'")
         }
     }
 
@@ -255,6 +319,24 @@ private struct ConfigParser {
             throw ConfigError.wrongType(key: key, expected: "string")
         }
         return string
+    }
+
+    private func nonEmptyString(_ value: LuaValue, key: String) throws -> String {
+        let value = try string(value, key: key)
+        guard !value.isEmpty else {
+            throw ConfigError.invalidValue(key: key, reason: "value cannot be empty")
+        }
+        return value
+    }
+
+    private func regexPattern(_ value: LuaValue, key: String) throws -> String {
+        let pattern = try nonEmptyString(value, key: key)
+        do {
+            _ = try Regex(pattern)
+        } catch {
+            throw ConfigError.invalidValue(key: key, reason: "invalid regex")
+        }
+        return pattern
     }
 
     private func bool(_ value: LuaValue, key: String) throws -> Bool {
