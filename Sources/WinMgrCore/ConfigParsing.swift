@@ -80,7 +80,7 @@ private struct ConfigParser {
         case .table(let values) where values.isEmpty:
             return []
         case .array, .table:
-            throw ConfigError.invalidValue(key: "rules", reason: "window rules are not implemented by the MVP startup loader")
+            throw ConfigError.invalidValue(key: "rules", reason: "window rules are not implemented by the startup loader")
         default:
             throw ConfigError.wrongType(key: "rules", expected: "array")
         }

@@ -48,55 +48,16 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
 }
 
 private func commandNotImplemented(_ command: Command) -> Result<World, CommandError> {
-    .failure(.configInvalid("command not implemented in MVP core: \(String(describing: command))"))
+    .failure(.configInvalid("command not implemented in current core: \(String(describing: command))"))
 }
 
 private func applyPush(_ windowID: WindowID, direction: Direction, to world: World) -> Result<World, CommandError> {
-    guard let metadata = world.windows[windowID] else {
-        return .failure(.windowNotFound(windowID))
+    switch retileTarget(windowID, displayID: nil, in: world) {
+    case .success(let target):
+        return .success(worldByRetiling(target, insertion: .edge(direction), in: world))
+    case .failure(let error):
+        return .failure(error)
     }
-    guard metadata.isResizable else {
-        return .failure(.windowNotResizable(windowID))
-    }
-    guard let displayID = world.windowDisplay[windowID] else {
-        return .failure(.displayNotFound(DisplayID(raw: 0)))
-    }
-    guard world.displays[displayID] != nil else {
-        return .failure(.displayNotFound(displayID))
-    }
-    guard let activeSpace = world.activeSpace else {
-        return .failure(.activeSpaceUnavailable)
-    }
-
-    let currentSpace = world.spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
-    let currentDisplayState = currentSpace.displays[displayID] ?? DisplaySpaceState(
-        displayID: displayID,
-        tree: .void,
-        floating: []
-    )
-
-    let nextDisplayState = DisplaySpaceState(
-        displayID: displayID,
-        tree: pushIntoTree(windowID, direction, currentDisplayState.tree),
-        floating: currentDisplayState.floating.filter { $0 != windowID }
-    )
-
-    var nextDisplayStates = currentSpace.displays
-    nextDisplayStates[displayID] = nextDisplayState
-
-    var nextSpaces = world.spaces
-    nextSpaces[activeSpace] = SpaceState(id: activeSpace, displays: nextDisplayStates, focused: windowID)
-
-    return .success(World(
-        displays: world.displays,
-        activeSpace: activeSpace,
-        spaces: nextSpaces,
-        windows: world.windows,
-        windowDisplay: world.windowDisplay,
-        windowConstraints: world.windowConstraints,
-        pendingRules: world.pendingRules,
-        config: world.config
-    ))
 }
 
 private func applyDropAtZone(
@@ -105,39 +66,67 @@ private func applyDropAtZone(
     zoneID: ZoneID,
     to world: World
 ) -> Result<World, CommandError> {
-    guard let metadata = world.windows[windowID] else {
-        return .failure(.windowNotFound(windowID))
-    }
-    guard metadata.isResizable else {
-        return .failure(.windowNotResizable(windowID))
-    }
-    guard world.displays[displayID] != nil else {
-        return .failure(.displayNotFound(displayID))
-    }
-    guard let activeSpace = world.activeSpace else {
-        return .failure(.activeSpaceUnavailable)
+    let target: RetileTarget
+    switch retileTarget(windowID, displayID: displayID, in: world) {
+    case .success(let value):
+        target = value
+    case .failure(let error):
+        return .failure(error)
     }
     guard let zone = world.config.zones.first(where: { $0.id == zoneID }) else {
         return .failure(.zoneNotFound(zoneID))
     }
     switch zone.action {
     case .insertAsHalf(let direction):
-        return applyDropAsHalf(windowID, direction: direction, displayID: displayID, activeSpace: activeSpace, to: world)
+        return .success(worldByRetiling(target, insertion: .edge(direction), in: world))
     case .insertAsCenter:
-        return applyDropAsCenter(windowID, displayID: displayID, activeSpace: activeSpace, to: world)
+        return .success(worldByRetiling(target, insertion: .center, in: world))
     case .insertAsQuarter, .insertAtSubtree:
-        return .failure(.configInvalid("zone action is not implemented in the current MVP rung: \(String(describing: zone.action))"))
+        return .failure(.configInvalid("zone action is not implemented in the current build: \(String(describing: zone.action))"))
     }
 }
 
 private func applyCenter(_ windowID: WindowID, to world: World) -> Result<World, CommandError> {
+    switch retileTarget(windowID, displayID: nil, in: world) {
+    case .success(let target):
+        return .success(worldByRetiling(target, insertion: .center, in: world))
+    case .failure(let error):
+        return .failure(error)
+    }
+}
+
+private struct RetileTarget {
+    let windowID: WindowID
+    let displayID: DisplayID
+    let activeSpace: SpaceID
+}
+
+private enum RetileInsertion {
+    case edge(Direction)
+    case center
+
+    func insert(_ windowID: WindowID, into tree: Node) -> Node {
+        switch self {
+        case .edge(let direction):
+            return pushIntoTree(windowID, direction, tree)
+        case .center:
+            return centerIntoTree(windowID, tree)
+        }
+    }
+}
+
+private func retileTarget(
+    _ windowID: WindowID,
+    displayID requestedDisplayID: DisplayID?,
+    in world: World
+) -> Result<RetileTarget, CommandError> {
     guard let metadata = world.windows[windowID] else {
         return .failure(.windowNotFound(windowID))
     }
     guard metadata.isResizable else {
         return .failure(.windowNotResizable(windowID))
     }
-    guard let displayID = world.windowDisplay[windowID] else {
+    guard let displayID = requestedDisplayID ?? world.windowDisplay[windowID] else {
         return .failure(.displayNotFound(DisplayID(raw: 0)))
     }
     guard world.displays[displayID] != nil else {
@@ -147,94 +136,45 @@ private func applyCenter(_ windowID: WindowID, to world: World) -> Result<World,
         return .failure(.activeSpaceUnavailable)
     }
 
-    return applyDropAsCenter(windowID, displayID: displayID, activeSpace: activeSpace, to: world)
+    return .success(RetileTarget(windowID: windowID, displayID: displayID, activeSpace: activeSpace))
 }
 
-private func applyDropAsHalf(
-    _ windowID: WindowID,
-    direction: Direction,
-    displayID: DisplayID,
-    activeSpace: SpaceID,
-    to world: World
-) -> Result<World, CommandError> {
-    let currentSpace = world.spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
+private func worldByRetiling(_ target: RetileTarget, insertion: RetileInsertion, in world: World) -> World {
+    let currentSpace = world.spaces[target.activeSpace] ?? SpaceState(id: target.activeSpace, displays: [:], focused: nil)
     var displayStates = currentSpace.displays.mapValues { displayState in
         DisplaySpaceState(
             displayID: displayState.displayID,
-            tree: ejectFromTree(windowID, displayState.tree),
-            floating: displayState.floating.filter { $0 != windowID }
+            tree: ejectFromTree(target.windowID, displayState.tree),
+            floating: displayState.floating.filter { $0 != target.windowID }
         )
     }
-    let targetDisplayState = displayStates[displayID] ?? DisplaySpaceState(
-        displayID: displayID,
+    let targetDisplayState = displayStates[target.displayID] ?? DisplaySpaceState(
+        displayID: target.displayID,
         tree: .void,
         floating: []
     )
-    displayStates[displayID] = DisplaySpaceState(
-        displayID: displayID,
-        tree: pushIntoTree(windowID, direction, targetDisplayState.tree),
-        floating: targetDisplayState.floating.filter { $0 != windowID }
+    displayStates[target.displayID] = DisplaySpaceState(
+        displayID: target.displayID,
+        tree: insertion.insert(target.windowID, into: targetDisplayState.tree),
+        floating: targetDisplayState.floating.filter { $0 != target.windowID }
     )
 
     var spaces = world.spaces
-    spaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: windowID)
+    spaces[target.activeSpace] = SpaceState(id: target.activeSpace, displays: displayStates, focused: target.windowID)
 
     var windowDisplay = world.windowDisplay
-    windowDisplay[windowID] = displayID
+    windowDisplay[target.windowID] = target.displayID
 
-    return .success(World(
+    return World(
         displays: world.displays,
-        activeSpace: activeSpace,
+        activeSpace: target.activeSpace,
         spaces: spaces,
         windows: world.windows,
         windowDisplay: windowDisplay,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config
-    ))
-}
-
-private func applyDropAsCenter(
-    _ windowID: WindowID,
-    displayID: DisplayID,
-    activeSpace: SpaceID,
-    to world: World
-) -> Result<World, CommandError> {
-    let currentSpace = world.spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
-    var displayStates = currentSpace.displays.mapValues { displayState in
-        DisplaySpaceState(
-            displayID: displayState.displayID,
-            tree: ejectFromTree(windowID, displayState.tree),
-            floating: displayState.floating.filter { $0 != windowID }
-        )
-    }
-    let targetDisplayState = displayStates[displayID] ?? DisplaySpaceState(
-        displayID: displayID,
-        tree: .void,
-        floating: []
     )
-    displayStates[displayID] = DisplaySpaceState(
-        displayID: displayID,
-        tree: centerIntoTree(windowID, targetDisplayState.tree),
-        floating: targetDisplayState.floating.filter { $0 != windowID }
-    )
-
-    var spaces = world.spaces
-    spaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: windowID)
-
-    var windowDisplay = world.windowDisplay
-    windowDisplay[windowID] = displayID
-
-    return .success(World(
-        displays: world.displays,
-        activeSpace: activeSpace,
-        spaces: spaces,
-        windows: world.windows,
-        windowDisplay: windowDisplay,
-        windowConstraints: world.windowConstraints,
-        pendingRules: world.pendingRules,
-        config: world.config
-    ))
 }
 
 public func resetTilingState(in world: World) -> World {

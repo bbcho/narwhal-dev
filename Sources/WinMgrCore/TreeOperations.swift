@@ -95,18 +95,6 @@ private func centerRoot(center: Node) -> Node {
 
 private func normalizedCenterRootCells(from cells: [Cell]) -> [Cell] {
     switch cells.count {
-    case 0:
-        return [
-            makeCell(weight: 1, node: .void),
-            makeCell(weight: 2, node: .void),
-            makeCell(weight: 1, node: .void)
-        ]
-    case 1:
-        return [
-            makeCell(weight: 1, node: .void),
-            makeCell(weight: 2, node: cells[0].node),
-            makeCell(weight: 1, node: .void)
-        ]
     case 2:
         return [
             makeCell(weight: 1, node: cells[0].node),

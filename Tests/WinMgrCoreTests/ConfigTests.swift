@@ -119,7 +119,7 @@ struct ConfigTests {
         root["rules"] = .array([.table(["predicate": .string("placeholder")])])
 
         #expect(parseConfig(LuaConfigData(root: root)) == .failure(
-            .invalidValue(key: "rules", reason: "window rules are not implemented by the MVP startup loader")
+            .invalidValue(key: "rules", reason: "window rules are not implemented by the startup loader")
         ))
     }
 

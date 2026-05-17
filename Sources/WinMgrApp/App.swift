@@ -16,7 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let echoSuppressor = AXEchoSuppressor()
     private let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
     private let menubar = Menubar()
-    private var worldActor = MVPWorldActor()
+    private var worldActor = WorldActor()
     private let reporter = StartupReporter()
     private var config = Config.default
     private var accessibilityPollTimer: Timer?
@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var axObserverService: AXObserverService?
     private var ipcServer: IPCServer?
     private var eventTapClient: EventTapClient?
-    private var mvpServicesStarted = false
+    private var servicesStarted = false
 
     static func main() {
         let app = NSApplication.shared
@@ -35,7 +35,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         reporter.info("WinMgrApp started")
-        reporter.info("Build marker: mvp-frame-debug-2026-05-16.1")
         reporter.info("Log file: \(StartupReporter.defaultLogPath)")
 
         if ProcessInfo.processInfo.arguments.contains("--check-config") {
@@ -69,11 +68,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 reporter.info("WinMgrApp stopped")
                 Darwin.exit(0)
             }
-            return
-        }
-
-        if ProcessInfo.processInfo.arguments.contains("--left-half") {
-            runLeftHalfOnceAndTerminate()
             return
         }
 
@@ -162,12 +156,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func startAfterAccessibilityTrusted() async {
-        guard !mvpServicesStarted else { return }
+        guard !servicesStarted else { return }
         reporter.info("Rung 1 complete: AppKit run loop is active and Accessibility is trusted")
         let focused = reportFocusedWindowSnapshot()
         let environment = await refreshEnvironment(reason: "startup")
         guard environment.activeSpace != nil else {
-            reporter.error("MVP services not started: active Space unavailable")
+            reporter.error("Window manager services not started: active Space unavailable")
             return
         }
         guard await loadRestoreState(using: environment.snapshot) else { return }
@@ -176,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             overlay.updateFocusBorder(.show(focused.id, focused.frame))
         }
         await applyStartupConverge()
-        startMVPServices()
+        startServices()
     }
 
     private func reportFocusedWindowSnapshot() -> FocusedWindowSnapshot? {
@@ -231,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch startupConfigLoad() {
         case .success(let loaded):
             config = loaded.config
-            worldActor = MVPWorldActor(config: loaded.config)
+            worldActor = WorldActor(config: loaded.config)
             overlay.updateConfig(border: loaded.config.border, hud: loaded.config.hud)
             logStartupConfig(loaded)
             return true
@@ -278,22 +272,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reporter.info("Startup config active: \(loaded.config.keymap.count) hotkeys, \(loaded.config.zones.count) zones")
     }
 
-    private func runLeftHalfOnceAndTerminate() {
-        let status = reportAccessibilityStatus(prompt: false)
-        guard status.isTrusted else {
-            reporter.error("Left-half command skipped because Accessibility is not trusted")
-            NSApplication.shared.terminate(nil)
-            return
-        }
-
-        if let error = moveFocusedWindowToLeftHalf() {
-            reporter.error("Left-half command failed: \(error)")
-        } else {
-            reporter.info("Left-half command completed")
-        }
-        NSApplication.shared.terminate(nil)
-    }
-
     private func runPushOnceAndTerminate(_ direction: Direction) {
         guard loadStartupConfigOrTerminate() else { return }
 
@@ -320,8 +298,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func startMVPServices() {
-        guard !mvpServicesStarted else { return }
+    private func startServices() {
+        guard !servicesStarted else { return }
         startMenubar()
 
         let manager = HotkeyManager(bindings: config.keymap, reporter: reporter) { [weak self] action in
@@ -336,8 +314,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             startAXObserver()
             startIPCServer()
             startEventTap()
-            mvpServicesStarted = true
-            reporter.info("MVP push loop ready")
+            servicesStarted = true
+            reporter.info("Layout command loop ready")
         } catch {
             reporter.error("Hotkey startup failed: \(String(describing: error))")
         }
@@ -425,36 +403,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func moveFocusedWindowToLeftHalf() -> String? {
-        let snapshot: FocusedWindowSnapshot
-        switch axClient.focusedWindowSnapshot() {
-        case .success(let value):
-            snapshot = value
-        case .failure(let error):
-            return error.description
-        }
-
-        let displays = displayClient.currentDisplays()
-        logDisplays(displays)
-        guard let displayID = displayClient.displayContaining(frame: snapshot.frame, displays: displays),
-              let display = displays[displayID]
-        else {
-            return "No display found for focused window"
-        }
-
-        let targetFrame = displayClient.leftHalf(of: display)
-        reporter.info("Left-half target display=\(displayID.raw) focused=\(snapshot.frame.debugDescription) target=\(targetFrame.debugDescription)")
-        switch axClient.setFocusedWindowFrame(targetFrame) {
-        case .converged(let actual):
-            reporter.info("Moved focused window to left half of display \(displayID.raw) actual=\(actual.debugDescription)")
-            return nil
-        case .clamped(let actual, let observed):
-            return "left-half command clamped actual=\(actual.debugDescription) observed=\(observed.debugDescription)"
-        case .failed(let error):
-            return error.description
-        }
-    }
-
     @MainActor
     private func performHotkey(_ action: HotkeyAction) async {
         switch action {
@@ -472,7 +420,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             overlay.updateFocusBorder(.hide)
             await persistRestore(reason: "reset")
         case .command(let template):
-            reporter.error("Hotkey action not implemented in MVP: \(describe(template))")
+            reporter.error("Hotkey action not implemented in this build: \(describe(template))")
         case .reloadConfig:
             await reloadConfig(reason: "hotkey")
         }
@@ -547,7 +495,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func focusWindow(_ result: MVPFocusResult, reason: String) async -> Bool {
+    private func focusWindow(_ result: FocusPlanResult, reason: String) async -> Bool {
         switch axClient.focusWindow(result.window) {
         case .success:
             echoSuppressor.expectFocus(windowID: result.window.id)
@@ -564,49 +512,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     @discardableResult
     private func performPush(_ direction: Direction) async -> Bool {
-        guard AccessibilityTrust.current(prompt: false).isTrusted else {
-            reporter.error("Push \(direction.rawValue) skipped because Accessibility is not trusted")
-            return false
-        }
+        let operation = "Push \(direction.rawValue)"
+        guard let context = focusedLayoutContext(operation: operation),
+              let displayID = displayForFocusedWindow(context, operation: operation),
+              await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-push \(direction.rawValue)")
+        else { return false }
 
-        let snapshot: FocusedWindowSnapshot
-        switch axClient.focusedWindowSnapshot() {
-        case .success(let value):
-            snapshot = value
-        case .failure(let error):
-            reporter.error("Push \(direction.rawValue) failed reading focused window: \(error.description)")
-            return false
-        }
-
-        let displays = displayClient.currentDisplays()
-        reporter.info("Push \(direction.rawValue) focused \(snapshot.logDescription)")
-        logDisplays(displays)
-        guard let displayID = displayClient.displayContaining(frame: snapshot.frame, displays: displays) else {
-            reporter.error("Push \(direction.rawValue) failed: no display for focused window")
-            return false
-        }
-        reporter.info("Push \(direction.rawValue) selected display \(displayID.raw)")
-        let environment = await refreshEnvironment(reason: "pre-push \(direction.rawValue)", displays: displays)
-        guard environment.activeSpace != nil else {
-            reporter.error("Push \(direction.rawValue) rejected before planning: active Space unavailable")
-            return false
-        }
-
-        switch axClient.visibleWindowIDs() {
-        case .success(let liveWindowIDs):
-            await worldActor.reconcileLiveWindows(liveWindowIDs.union([snapshot.id]))
-        case .failure(let error):
-            reporter.error("Push \(direction.rawValue) skipped live-window reconciliation: \(error.description)")
-        }
-        switch await worldActor.upsertWindow(snapshot.metadata, displayID: displayID, displays: displays) {
-        case .success:
-            break
-        case .failure(let error):
-            reporter.error("Push \(direction.rawValue) failed updating focused window state: \(error.message)")
-            return false
-        }
-
-        switch await worldActor.planPush(snapshot.id, direction: direction) {
+        switch await worldActor.planPush(context.snapshot.id, direction: direction) {
         case .success(let result):
             return await applyPlannedPush(result, direction: direction, retryOnClamp: true)
         case .failure(let error):
@@ -618,51 +530,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     @discardableResult
     private func performCenter() async -> Bool {
-        guard AccessibilityTrust.current(prompt: false).isTrusted else {
-            reporter.error("Center skipped because Accessibility is not trusted")
-            return false
-        }
+        let operation = "Center"
+        guard let context = focusedLayoutContext(operation: operation),
+              let displayID = displayForFocusedWindow(context, operation: operation),
+              await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-center")
+        else { return false }
 
-        let snapshot: FocusedWindowSnapshot
-        switch axClient.focusedWindowSnapshot() {
-        case .success(let value):
-            snapshot = value
-        case .failure(let error):
-            reporter.error("Center failed reading focused window: \(error.description)")
-            return false
-        }
-
-        let displays = displayClient.currentDisplays()
-        reporter.info("Center focused \(snapshot.logDescription)")
-        logDisplays(displays)
-        guard let displayID = displayClient.displayContaining(frame: snapshot.frame, displays: displays) else {
-            reporter.error("Center failed: no display for focused window")
-            return false
-        }
-        reporter.info("Center selected display \(displayID.raw)")
-        let environment = await refreshEnvironment(reason: "pre-center", displays: displays)
-        guard environment.activeSpace != nil else {
-            reporter.error("Center rejected before planning: active Space unavailable")
-            return false
-        }
-
-        switch axClient.visibleWindowIDs() {
-        case .success(let liveWindowIDs):
-            await worldActor.reconcileLiveWindows(liveWindowIDs.union([snapshot.id]))
-        case .failure(let error):
-            reporter.error("Center skipped live-window reconciliation: \(error.description)")
-        }
-        switch await worldActor.upsertWindow(snapshot.metadata, displayID: displayID, displays: displays) {
-        case .success:
-            break
-        case .failure(let error):
-            reporter.error("Center failed updating focused window state: \(error.message)")
-            return false
-        }
-
-        switch await worldActor.planCenter(snapshot.id) {
+        switch await worldActor.planCenter(context.snapshot.id) {
         case .success(let result):
-            return await applyPlannedCenter(result, windowID: snapshot.id, retryOnClamp: true)
+            return await applyPlannedCenter(result, windowID: context.snapshot.id, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Center rejected by core: \(error.message)")
             return false
@@ -671,23 +547,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func performDragDrop(at location: CGPoint) async {
-        guard AccessibilityTrust.current(prompt: false).isTrusted else {
-            reporter.error("Drag drop skipped because Accessibility is not trusted")
-            return
-        }
-
-        let snapshot: FocusedWindowSnapshot
-        switch axClient.focusedWindowSnapshot() {
-        case .success(let value):
-            snapshot = value
-        case .failure(let error):
-            reporter.error("Drag drop failed reading focused window: \(error.description)")
-            return
-        }
-
-        let displays = displayClient.currentDisplays()
-        let drag = DragEvent(windowID: snapshot.id, location: location, displayID: nil)
-        guard let command = resolveDrop(drag, zones: config.zones, displays: displays) else {
+        let operation = "Drag drop"
+        guard let context = focusedLayoutContext(operation: operation) else { return }
+        let drag = DragEvent(windowID: context.snapshot.id, location: location, displayID: nil)
+        guard let command = resolveDrop(drag, zones: config.zones, displays: context.displays) else {
             reporter.info("Drag drop ignored: no matching exclusive zone at \(location.debugDescription)")
             return
         }
@@ -697,27 +560,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         reporter.info(
-            "Drag drop resolved focused=\(snapshot.id.description) display=\(displayID.raw) zone=\(zoneID.raw) location=\(location.debugDescription)"
+            "Drag drop resolved focused=\(context.snapshot.id.description) display=\(displayID.raw) zone=\(zoneID.raw) location=\(location.debugDescription)"
         )
-        let environment = await refreshEnvironment(reason: "pre-drag drop", displays: displays)
-        guard environment.activeSpace != nil else {
-            reporter.error("Drag drop rejected before planning: active Space unavailable")
-            return
-        }
-
-        switch axClient.visibleWindowIDs() {
-        case .success(let liveWindowIDs):
-            await worldActor.reconcileLiveWindows(liveWindowIDs.union([snapshot.id]))
-        case .failure(let error):
-            reporter.error("Drag drop skipped live-window reconciliation: \(error.description)")
-        }
-        switch await worldActor.upsertWindow(snapshot.metadata, displayID: displayID, displays: displays) {
-        case .success:
-            break
-        case .failure(let error):
-            reporter.error("Drag drop failed updating focused window state: \(error.message)")
-            return
-        }
+        guard await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-drag drop") else { return }
 
         switch await worldActor.planDrop(windowID: windowID, displayID: displayID, zoneID: zoneID) {
         case .success(let result):
@@ -728,7 +573,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func applyPlannedPush(_ result: MVPCommandResult, direction: Direction, retryOnClamp: Bool) async -> Bool {
+    private func focusedLayoutContext(operation: String) -> FocusedLayoutContext? {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            reporter.error("\(operation) skipped because Accessibility is not trusted")
+            return nil
+        }
+
+        let snapshot: FocusedWindowSnapshot
+        switch axClient.focusedWindowSnapshot() {
+        case .success(let value):
+            snapshot = value
+        case .failure(let error):
+            reporter.error("\(operation) failed reading focused window: \(error.description)")
+            return nil
+        }
+
+        let displays = displayClient.currentDisplays()
+        reporter.info("\(operation) focused \(snapshot.logDescription)")
+        logDisplays(displays)
+        return FocusedLayoutContext(snapshot: snapshot, displays: displays)
+    }
+
+    @MainActor
+    private func displayForFocusedWindow(_ context: FocusedLayoutContext, operation: String) -> DisplayID? {
+        guard let displayID = displayClient.displayContaining(frame: context.snapshot.frame, displays: context.displays) else {
+            reporter.error("\(operation) failed: no display for focused window")
+            return nil
+        }
+        reporter.info("\(operation) selected display \(displayID.raw)")
+        return displayID
+    }
+
+    @MainActor
+    private func prepareLayoutWorld(
+        _ context: FocusedLayoutContext,
+        displayID: DisplayID,
+        operation: String,
+        refreshReason: String
+    ) async -> Bool {
+        let environment = await refreshEnvironment(reason: refreshReason, displays: context.displays)
+        guard environment.activeSpace != nil else {
+            reporter.error("\(operation) rejected before planning: active Space unavailable")
+            return false
+        }
+
+        switch axClient.visibleWindowIDs() {
+        case .success(let liveWindowIDs):
+            await worldActor.reconcileLiveWindows(liveWindowIDs.union([context.snapshot.id]))
+        case .failure(let error):
+            reporter.error("\(operation) skipped live-window reconciliation: \(error.description)")
+        }
+        switch await worldActor.upsertWindow(context.snapshot.metadata, displayID: displayID, displays: context.displays) {
+        case .success:
+            return true
+        case .failure(let error):
+            reporter.error("\(operation) failed updating focused window state: \(error.message)")
+            return false
+        }
+    }
+
+    @MainActor
+    private func applyPlannedPush(_ result: CommandPlanResult, direction: Direction, retryOnClamp: Bool) async -> Bool {
         guard let focusedWindowID = result.focusedWindowID else {
             reporter.error("Push \(direction.rawValue) cannot retry or commit without a focused window")
             return false
@@ -745,7 +650,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func applyPlannedDrop(
-        _ result: MVPCommandResult,
+        _ result: CommandPlanResult,
         windowID: WindowID,
         displayID: DisplayID,
         zoneID: ZoneID,
@@ -763,7 +668,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func applyPlannedCenter(
-        _ result: MVPCommandResult,
+        _ result: CommandPlanResult,
         windowID: WindowID,
         retryOnClamp: Bool
     ) async -> Bool {
@@ -779,11 +684,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func applyPlannedLayout(
-        _ result: MVPCommandResult,
+        _ result: CommandPlanResult,
         operation: String,
         persistReason: String,
         retryOnClamp: Bool,
-        replanAfterClamp: () async -> Result<MVPCommandResult, CommandError>
+        replanAfterClamp: () async -> Result<CommandPlanResult, CommandError>
     ) async -> Bool {
         let applyResult = LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
         if applyResult.succeeded {
@@ -995,7 +900,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .error(
                 commandID: commandID,
                 code: "not_implemented",
-                message: "IPC command is not implemented in the current MVP rung: \(command)"
+                message: "IPC command is not implemented in the current build: \(command)"
             )
         }
     }
@@ -1097,6 +1002,11 @@ private extension WindowConstraints {
 private struct CommandExecutionFailure {
     let code: String
     let message: String
+}
+
+private struct FocusedLayoutContext {
+    let snapshot: FocusedWindowSnapshot
+    let displays: [DisplayID: DisplayInfo]
 }
 
 private func describe(_ template: CommandTemplate) -> String {

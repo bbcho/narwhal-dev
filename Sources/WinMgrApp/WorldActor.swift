@@ -1,14 +1,14 @@
 import CoreGraphics
 import WinMgrCore
 
-struct MVPCommandResult: Sendable {
+struct CommandPlanResult: Sendable {
     let focusedWindowID: WindowID?
     let desiredLayout: DesiredLayout
     let windows: [WindowID: WindowMetadata]
     let plannedWorld: World
 }
 
-struct MVPFocusResult: Sendable {
+struct FocusPlanResult: Sendable {
     let window: WindowMetadata
     let frame: CGRect
 }
@@ -21,7 +21,7 @@ struct EnvironmentRefreshResult: Sendable {
     let quality: AXSnapshotQuality
 }
 
-actor MVPWorldActor {
+actor WorldActor {
     private var world: World
     private var nextGeneration: UInt64 = 1
 
@@ -115,22 +115,22 @@ actor MVPWorldActor {
         return .success(())
     }
 
-    func planPush(_ windowID: WindowID, direction: Direction) -> Result<MVPCommandResult, CommandError> {
+    func planPush(_ windowID: WindowID, direction: Direction) -> Result<CommandPlanResult, CommandError> {
         planLayoutCommand(.push(windowID, direction), focusedWindowID: windowID)
     }
 
-    func planCenter(_ windowID: WindowID) -> Result<MVPCommandResult, CommandError> {
+    func planCenter(_ windowID: WindowID) -> Result<CommandPlanResult, CommandError> {
         planLayoutCommand(.center(windowID), focusedWindowID: windowID)
     }
 
-    func planDrop(windowID: WindowID, displayID: DisplayID, zoneID: ZoneID) -> Result<MVPCommandResult, CommandError> {
+    func planDrop(windowID: WindowID, displayID: DisplayID, zoneID: ZoneID) -> Result<CommandPlanResult, CommandError> {
         planLayoutCommand(.dropAtZone(windowID, displayID, zoneID), focusedWindowID: windowID)
     }
 
     private func planLayoutCommand(
         _ command: Command,
         focusedWindowID: WindowID?
-    ) -> Result<MVPCommandResult, CommandError> {
+    ) -> Result<CommandPlanResult, CommandError> {
         let oldLayout: Layout
         switch flattenedLayout(of: world) {
         case .success(let layout):
@@ -154,7 +154,7 @@ actor MVPWorldActor {
                 delta: diff(old: oldLayout, new: newLayout)
             )
             nextGeneration += 1
-            return .success(MVPCommandResult(
+            return .success(CommandPlanResult(
                 focusedWindowID: focusedWindowID,
                 desiredLayout: desired,
                 windows: newWorld.windows,
@@ -165,7 +165,7 @@ actor MVPWorldActor {
         }
     }
 
-    func planCurrentLayout() -> Result<MVPCommandResult?, CommandError> {
+    func planCurrentLayout() -> Result<CommandPlanResult?, CommandError> {
         let newLayout: Layout
         switch flattenedLayout(of: world) {
         case .success(let layout):
@@ -188,7 +188,7 @@ actor MVPWorldActor {
             )
         )
         nextGeneration += 1
-        return .success(MVPCommandResult(
+        return .success(CommandPlanResult(
             focusedWindowID: nil,
             desiredLayout: desired,
             windows: world.windows,
@@ -196,7 +196,7 @@ actor MVPWorldActor {
         ))
     }
 
-    func planFocusDirection(from focusedWindowID: WindowID, direction: Direction) -> Result<MVPFocusResult, CommandError> {
+    func planFocusDirection(from focusedWindowID: WindowID, direction: Direction) -> Result<FocusPlanResult, CommandError> {
         guard world.windows[focusedWindowID] != nil else {
             return .failure(.windowNotFound(focusedWindowID))
         }
@@ -213,10 +213,10 @@ actor MVPWorldActor {
         guard let target = world.windows[targetWindowID] else {
             return .failure(.windowNotFound(targetWindowID))
         }
-        return .success(MVPFocusResult(window: target, frame: currentLayout.tiled[targetWindowID] ?? target.frame))
+        return .success(FocusPlanResult(window: target, frame: currentLayout.tiled[targetWindowID] ?? target.frame))
     }
 
-    func planFocusCycle(from focusedWindowID: WindowID?, direction: FocusCycleDirection) -> Result<MVPFocusResult, CommandError> {
+    func planFocusCycle(from focusedWindowID: WindowID?, direction: FocusCycleDirection) -> Result<FocusPlanResult, CommandError> {
         guard let targetWindowID = focusCycleTarget(
             windows: Array(world.windows.values),
             from: focusedWindowID,
@@ -234,7 +234,7 @@ actor MVPWorldActor {
         case .failure:
             targetFrame = target.frame
         }
-        return .success(MVPFocusResult(window: target, frame: targetFrame))
+        return .success(FocusPlanResult(window: target, frame: targetFrame))
     }
 
     func recordObservedConstraints(_ observations: [WindowID: WindowConstraints]) {
@@ -256,7 +256,7 @@ actor MVPWorldActor {
         storedWorld(from: world)
     }
 
-    func commit(_ result: MVPCommandResult, appliedFrames: [WindowID: CGRect]) {
+    func commit(_ result: CommandPlanResult, appliedFrames: [WindowID: CGRect]) {
         world = worldByRecording(frames: appliedFrames, in: result.plannedWorld)
     }
 

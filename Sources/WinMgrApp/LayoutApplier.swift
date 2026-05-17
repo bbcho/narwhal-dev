@@ -42,7 +42,7 @@ struct LayoutApplier {
         self.echoSuppressor = echoSuppressor
     }
 
-    func apply(_ result: MVPCommandResult) -> LayoutApplyResult {
+    func apply(_ result: CommandPlanResult) -> LayoutApplyResult {
         var applied: [WindowID: CGRect] = [:]
         var clamps: [LayoutApplyClamp] = []
         var failures: [LayoutApplyFailure] = []

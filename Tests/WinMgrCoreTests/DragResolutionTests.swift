@@ -162,7 +162,7 @@ struct DragResolutionTests {
 
         let result = apply(.dropAtZone(window, display, ZoneID(raw: "top-left")), to: world)
 
-        #expect(result == .failure(.configInvalid("zone action is not implemented in the current MVP rung: insertAsQuarter(corner: WinMgrCore.Corner.topLeft)")))
+        #expect(result == .failure(.configInvalid("zone action is not implemented in the current build: insertAsQuarter(corner: WinMgrCore.Corner.topLeft)")))
     }
 
     private func zone(

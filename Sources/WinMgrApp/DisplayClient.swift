@@ -42,11 +42,6 @@ struct DisplayClient {
         })?.key
     }
 
-    func leftHalf(of display: DisplayInfo, gaps: Gaps = .init(inner: 0, outer: .init(top: 0, left: 0, bottom: 0, right: 0))) -> CGRect {
-        let frame = display.visibleFrame
-        return CGRect(x: frame.minX, y: frame.minY, width: frame.width / 2, height: frame.height)
-    }
-
     private func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
         guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
             return nil

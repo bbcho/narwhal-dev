@@ -776,6 +776,52 @@ struct MVPLayoutTests {
         #expect(next.spaces[space]?.focused == window)
     }
 
+    @Test("Apply push clears stale leaves from other displays")
+    func applyPushClearsStaleLeavesFromOtherDisplays() throws {
+        let leftDisplay = DisplayID(raw: 1)
+        let rightDisplay = DisplayID(raw: 2)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 1)
+        let world = World(
+            displays: [
+                leftDisplay: display(leftDisplay, x: 0, width: 1000),
+                rightDisplay: display(rightDisplay, x: 1000, width: 1000)
+            ],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [
+                        leftDisplay: DisplaySpaceState(
+                            displayID: leftDisplay,
+                            tree: pushIntoTree(window, .left, .void),
+                            floating: []
+                        ),
+                        rightDisplay: DisplaySpaceState(displayID: rightDisplay, tree: .void, floating: [])
+                    ],
+                    focused: nil
+                )
+            ],
+            windows: [window: metadata(for: window)],
+            windowDisplay: [window: rightDisplay],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.push(window, .right), to: world) else {
+            Issue.record("Expected push to succeed")
+            return
+        }
+
+        #expect(slots(in: try #require(next.spaces[space]?.displays[leftDisplay]?.tree)) == [
+            TreeSlot(path: [0], occupancy: .empty),
+            TreeSlot(path: [1], occupancy: .empty)
+        ])
+        #expect(frames(for: try #require(next.spaces[space]?.displays[rightDisplay]?.tree), frame: try #require(next.displays[rightDisplay]?.visibleFrame))[window] == CGRect(x: 1500, y: 0, width: 500, height: 800))
+        #expect(next.windowDisplay[window] == rightDisplay)
+    }
+
     @Test("Frame writes apply focused window last to avoid AX rematching during swaps")
     func frameWriteOrderMovesFocusedWindowLast() {
         let focused = WindowID(raw: 1)
