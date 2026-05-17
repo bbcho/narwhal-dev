@@ -14,6 +14,7 @@ struct IPCDTOTests {
         #expect(try encode(.focusDirection(.up)) == #"{"command":"focusDirection","direction":"up"}"#)
         #expect(try encode(.focusCycle(.next)) == #"{"command":"focusCycle","direction":"next"}"#)
         #expect(try encode(.resetLayout) == #"{"command":"resetLayout"}"#)
+        #expect(try encode(.quit) == #"{"command":"quit"}"#)
     }
 
     @Test("Command JSON decodes focused and explicit push commands")
@@ -31,6 +32,7 @@ struct IPCDTOTests {
         #expect(try decodeCommand(#"{"command":"swap","direction":"left"}"#).toCommand(focusedWindowID: WindowID(raw: 567)) == .success(.swapInTree(WindowID(raw: 567), .left)))
         #expect(try decodeCommand(#"{"command":"swap","direction":"right","windowID":678}"#).toCommand() == .success(.swapInTree(WindowID(raw: 678), .right)))
         #expect(try decodeCommand(#"{"command":"focusCycle","direction":"previous"}"#).toCommand() == .success(.focusCycle(.previous)))
+        #expect(try decodeCommand(#"{"command":"quit"}"#).toCommand() == .failure(.shellCommandOnly))
     }
 
     @Test("Reply JSON uses stable status shape")

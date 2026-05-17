@@ -71,6 +71,7 @@ private enum WinMgrCtlError: Error, CustomStringConvertible {
         \(message)
         usage:
           winmgrctl reset [--socket PATH]
+          winmgrctl quit [--socket PATH]
           winmgrctl push <left|right|up|down> [--window WINDOW_ID] [--socket PATH]
           winmgrctl swap <left|right|up|down> [--window WINDOW_ID] [--socket PATH]
           winmgrctl center --window WINDOW_ID [--socket PATH]
@@ -111,6 +112,9 @@ private func parseInvocation(_ arguments: [String]) throws -> Invocation {
     case "reset", "reset-layout", "resetLayout":
         guard positional.count == 1 else { throw WinMgrCtlError.unexpectedArgument(positional[1]) }
         return Invocation(socketPath: socketPath, command: .resetLayout)
+    case "quit":
+        guard positional.count == 1 else { throw WinMgrCtlError.unexpectedArgument(positional[1]) }
+        return Invocation(socketPath: socketPath, command: .quit)
     case "push":
         guard positional.indices.contains(1) else { throw WinMgrCtlError.missingDirection }
         guard positional.count == 2 else { throw WinMgrCtlError.unexpectedArgument(positional[2]) }

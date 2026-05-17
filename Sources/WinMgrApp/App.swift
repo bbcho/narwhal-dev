@@ -4,6 +4,17 @@ import Darwin
 import WinMgrCore
 import WinMgrIPC
 
+private enum StartupArgumentError: Error, CustomStringConvertible {
+    case missingRestoreStatePath
+
+    var description: String {
+        switch self {
+        case .missingRestoreStatePath:
+            return "--restore-state requires a file path"
+        }
+    }
+}
+
 @main
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -13,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let axClient = AXClient()
     private let displayClient = DisplayClient()
     private let spaceClient = SpaceClient()
-    private let restoreManager = RestoreManager()
+    private var restoreManager = RestoreManager()
     private let echoSuppressor = AXEchoSuppressor()
     private let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
     private let menubar = Menubar()
@@ -42,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         reporter.info("WinMgrApp started")
         reporter.info("Log file: \(StartupReporter.defaultLogPath)")
+        guard configureRestoreManagerOrTerminate() else { return }
 
         if ProcessInfo.processInfo.arguments.contains("--check-config") {
             let ok = loadStartupConfig()
@@ -231,6 +243,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApplication.shared.terminate(nil)
         }
         return ok
+    }
+
+    @discardableResult
+    private func configureRestoreManagerOrTerminate() -> Bool {
+        switch restoreStateURLFromArguments() {
+        case .success(let url):
+            restoreManager = RestoreManager(url: url)
+            if url != RestoreManager.defaultURL {
+                reporter.info("Using restore state path \(url.path)")
+            }
+            return true
+        case .failure(let error):
+            reporter.error(error.description)
+            reporter.info("WinMgrApp stopped")
+            Darwin.exit(1)
+        }
+    }
+
+    private func restoreStateURLFromArguments() -> Result<URL, StartupArgumentError> {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--restore-state") else {
+            return .success(RestoreManager.defaultURL)
+        }
+        let pathIndex = arguments.index(after: index)
+        guard arguments.indices.contains(pathIndex) else {
+            return .failure(.missingRestoreStatePath)
+        }
+        return .success(URL(fileURLWithPath: arguments[pathIndex]).standardizedFileURL)
     }
 
     @discardableResult
@@ -994,6 +1034,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.info("IPC reset layout memory: cleared BSP trees, floating lists, focus, pending rules, and observed window minimums")
             overlay.updateFocusBorder(.hide)
             await persistRestore(reason: "ipc reset")
+            return .ok(commandID: commandID)
+        case .quit:
+            reporter.info("IPC quit requested")
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                NSApplication.shared.terminate(nil)
+            }
             return .ok(commandID: commandID)
         case .pushFocused(let direction):
             if await performPush(direction) {

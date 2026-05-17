@@ -167,6 +167,7 @@ public enum IPCReplyDTO: Codable, Equatable, Sendable {
 
 public enum IPCCommandResolutionError: Error, Equatable, Sendable {
     case focusedWindowRequired
+    case shellCommandOnly
 }
 
 public enum IPCCommandDTO: Codable, Equatable, Sendable {
@@ -181,6 +182,7 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
     case focus(windowID: WindowID)
     case toggleFloat(windowID: WindowID)
     case resetLayout
+    case quit
 
     private enum CodingKeys: String, CodingKey {
         case command
@@ -198,6 +200,7 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
         case focus
         case toggleFloat
         case resetLayout
+        case quit
     }
 
     public func toCommand(focusedWindowID: WindowID? = nil) -> Result<Command, IPCCommandResolutionError> {
@@ -226,6 +229,8 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             return .success(.toggleFloat(windowID))
         case .resetLayout:
             return .success(.resetLayout)
+        case .quit:
+            return .failure(.shellCommandOnly)
         }
     }
 
@@ -260,6 +265,8 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             self = .toggleFloat(windowID: try Self.decodeWindowID(from: container))
         case .resetLayout:
             self = .resetLayout
+        case .quit:
+            self = .quit
         }
     }
 
@@ -300,6 +307,8 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             try container.encode(windowID.raw, forKey: .windowID)
         case .resetLayout:
             try container.encode(CommandName.resetLayout, forKey: .command)
+        case .quit:
+            try container.encode(CommandName.quit, forKey: .command)
         }
     }
 
