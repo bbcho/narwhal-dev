@@ -4,8 +4,8 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
     switch command {
     case .push(let windowID, let direction):
         return applyPush(windowID, direction: direction, to: world)
-    case .center:
-        return commandNotImplemented(command)
+    case .center(let windowID):
+        return applyCenter(windowID, to: world)
     case .eject:
         return commandNotImplemented(command)
     case .focusDirection:
@@ -120,10 +120,43 @@ private func applyDropAtZone(
     guard let zone = world.config.zones.first(where: { $0.id == zoneID }) else {
         return .failure(.zoneNotFound(zoneID))
     }
-    guard case .insertAsHalf(let direction) = zone.action else {
+    switch zone.action {
+    case .insertAsHalf(let direction):
+        return applyDropAsHalf(windowID, direction: direction, displayID: displayID, activeSpace: activeSpace, to: world)
+    case .insertAsCenter:
+        return applyDropAsCenter(windowID, displayID: displayID, activeSpace: activeSpace, to: world)
+    case .insertAsQuarter, .insertAtSubtree:
         return .failure(.configInvalid("zone action is not implemented in the current MVP rung: \(String(describing: zone.action))"))
     }
+}
 
+private func applyCenter(_ windowID: WindowID, to world: World) -> Result<World, CommandError> {
+    guard let metadata = world.windows[windowID] else {
+        return .failure(.windowNotFound(windowID))
+    }
+    guard metadata.isResizable else {
+        return .failure(.windowNotResizable(windowID))
+    }
+    guard let displayID = world.windowDisplay[windowID] else {
+        return .failure(.displayNotFound(DisplayID(raw: 0)))
+    }
+    guard world.displays[displayID] != nil else {
+        return .failure(.displayNotFound(displayID))
+    }
+    guard let activeSpace = world.activeSpace else {
+        return .failure(.activeSpaceUnavailable)
+    }
+
+    return applyDropAsCenter(windowID, displayID: displayID, activeSpace: activeSpace, to: world)
+}
+
+private func applyDropAsHalf(
+    _ windowID: WindowID,
+    direction: Direction,
+    displayID: DisplayID,
+    activeSpace: SpaceID,
+    to world: World
+) -> Result<World, CommandError> {
     let currentSpace = world.spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
     var displayStates = currentSpace.displays.mapValues { displayState in
         DisplaySpaceState(
@@ -140,6 +173,49 @@ private func applyDropAtZone(
     displayStates[displayID] = DisplaySpaceState(
         displayID: displayID,
         tree: pushIntoTree(windowID, direction, targetDisplayState.tree),
+        floating: targetDisplayState.floating.filter { $0 != windowID }
+    )
+
+    var spaces = world.spaces
+    spaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: windowID)
+
+    var windowDisplay = world.windowDisplay
+    windowDisplay[windowID] = displayID
+
+    return .success(World(
+        displays: world.displays,
+        activeSpace: activeSpace,
+        spaces: spaces,
+        windows: world.windows,
+        windowDisplay: windowDisplay,
+        windowConstraints: world.windowConstraints,
+        pendingRules: world.pendingRules,
+        config: world.config
+    ))
+}
+
+private func applyDropAsCenter(
+    _ windowID: WindowID,
+    displayID: DisplayID,
+    activeSpace: SpaceID,
+    to world: World
+) -> Result<World, CommandError> {
+    let currentSpace = world.spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
+    var displayStates = currentSpace.displays.mapValues { displayState in
+        DisplaySpaceState(
+            displayID: displayState.displayID,
+            tree: ejectFromTree(windowID, displayState.tree),
+            floating: displayState.floating.filter { $0 != windowID }
+        )
+    }
+    let targetDisplayState = displayStates[displayID] ?? DisplaySpaceState(
+        displayID: displayID,
+        tree: .void,
+        floating: []
+    )
+    displayStates[displayID] = DisplaySpaceState(
+        displayID: displayID,
+        tree: centerIntoTree(windowID, targetDisplayState.tree),
         floating: targetDisplayState.floating.filter { $0 != windowID }
     )
 

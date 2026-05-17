@@ -47,6 +47,11 @@ public func pushIntoTree(_ window: WindowID, _ direction: Direction, _ node: Nod
     return insertAtRootEdge(window, direction, treeWithoutWindow)
 }
 
+public func centerIntoTree(_ window: WindowID, _ node: Node) -> Node {
+    let treeWithoutWindow = clearWindowPreservingZones(window, from: node)
+    return insertAtCenter(window, treeWithoutWindow)
+}
+
 private func clearWindowPreservingZones(_ window: WindowID, from node: Node) -> Node {
     switch node {
     case .void:
@@ -58,6 +63,92 @@ private func clearWindowPreservingZones(_ window: WindowID, from node: Node) -> 
             makeCell(weight: cell.weight, node: clearWindowPreservingZones(window, from: cell.node))
         }
         return .split(makeSplit(axis: split.axis, cells: cells))
+    }
+}
+
+private func insertAtCenter(_ window: WindowID, _ node: Node) -> Node {
+    switch node {
+    case .void:
+        return centerRoot(center: .leaf(window))
+    case .leaf:
+        return centerRoot(center: insertIntoCenterStack(window, node))
+    case .split(let split) where split.axis == .horizontal:
+        let cells = normalizedCenterRootCells(from: split.cells)
+        let center = cells[1]
+        return .split(makeSplit(axis: .horizontal, cells: [
+            cells[0],
+            makeCell(weight: 2, node: insertIntoCenterStack(window, center.node)),
+            cells[2]
+        ]))
+    case .split:
+        return centerRoot(center: insertIntoCenterStack(window, node))
+    }
+}
+
+private func centerRoot(center: Node) -> Node {
+    .split(makeSplit(axis: .horizontal, cells: [
+        makeCell(weight: 1, node: .void),
+        makeCell(weight: 2, node: center),
+        makeCell(weight: 1, node: .void)
+    ]))
+}
+
+private func normalizedCenterRootCells(from cells: [Cell]) -> [Cell] {
+    switch cells.count {
+    case 0:
+        return [
+            makeCell(weight: 1, node: .void),
+            makeCell(weight: 2, node: .void),
+            makeCell(weight: 1, node: .void)
+        ]
+    case 1:
+        return [
+            makeCell(weight: 1, node: .void),
+            makeCell(weight: 2, node: cells[0].node),
+            makeCell(weight: 1, node: .void)
+        ]
+    case 2:
+        return [
+            makeCell(weight: 1, node: cells[0].node),
+            makeCell(weight: 2, node: .void),
+            makeCell(weight: 1, node: cells[1].node)
+        ]
+    case 3:
+        return [
+            makeCell(weight: 1, node: cells[0].node),
+            makeCell(weight: 2, node: cells[1].node),
+            makeCell(weight: 1, node: cells[2].node)
+        ]
+    default:
+        let middleCells = Array(cells.dropFirst().dropLast())
+        let middleNode = Node.split(makeSplit(axis: .horizontal, cells: middleCells))
+        return [
+            makeCell(weight: 1, node: cells[0].node),
+            makeCell(weight: 2, node: middleNode),
+            makeCell(weight: 1, node: cells[cells.count - 1].node)
+        ]
+    }
+}
+
+private func insertIntoCenterStack(_ window: WindowID, _ node: Node) -> Node {
+    switch node {
+    case .void:
+        return .leaf(window)
+    case .leaf:
+        return .split(makeSplit(axis: .vertical, cells: [
+            makeCell(weight: 1, node: node),
+            makeCell(weight: 1, node: .leaf(window))
+        ]))
+    case .split(let split) where split.axis == .vertical:
+        return .split(makeSplit(
+            axis: .vertical,
+            cells: split.cells + [makeCell(weight: 1, node: .leaf(window))]
+        ))
+    case .split:
+        return .split(makeSplit(axis: .vertical, cells: [
+            makeCell(weight: 1, node: node),
+            makeCell(weight: 1, node: .leaf(window))
+        ]))
     }
 }
 

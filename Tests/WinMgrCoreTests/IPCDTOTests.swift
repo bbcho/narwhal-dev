@@ -8,6 +8,7 @@ struct IPCDTOTests {
     func commandJSONShapeIsStable() throws {
         #expect(try encode(.pushFocused(.left)) == #"{"command":"push","direction":"left"}"#)
         #expect(try encode(.push(windowID: WindowID(raw: 123), direction: .right)) == #"{"command":"push","direction":"right","windowID":123}"#)
+        #expect(try encode(.center(windowID: WindowID(raw: 234))) == #"{"command":"center","windowID":234}"#)
         #expect(try encode(.focusDirection(.up)) == #"{"command":"focusDirection","direction":"up"}"#)
         #expect(try encode(.focusCycle(.next)) == #"{"command":"focusCycle","direction":"next"}"#)
         #expect(try encode(.resetLayout) == #"{"command":"resetLayout"}"#)
@@ -23,6 +24,7 @@ struct IPCDTOTests {
         #expect(focused.toCommand() == .failure(.focusedWindowRequired))
         #expect(focused.toCommand(focusedWindowID: WindowID(raw: 789)) == .success(.push(WindowID(raw: 789), .up)))
         #expect(explicit.toCommand() == .success(.push(WindowID(raw: 456), .down)))
+        #expect(try decodeCommand(#"{"command":"center","windowID":234}"#).toCommand() == .success(.center(WindowID(raw: 234))))
         #expect(try decodeCommand(#"{"command":"focusCycle","direction":"previous"}"#).toCommand() == .success(.focusCycle(.previous)))
     }
 

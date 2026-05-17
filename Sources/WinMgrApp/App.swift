@@ -460,6 +460,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch action {
         case .command(.push(let direction)):
             await performPush(direction)
+        case .command(.center):
+            await performCenter()
         case .command(.focusDirection(let direction)):
             await performFocusDirection(direction)
         case .command(.focusCycle(let direction)):
@@ -614,6 +616,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    @discardableResult
+    private func performCenter() async -> Bool {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            reporter.error("Center skipped because Accessibility is not trusted")
+            return false
+        }
+
+        let snapshot: FocusedWindowSnapshot
+        switch axClient.focusedWindowSnapshot() {
+        case .success(let value):
+            snapshot = value
+        case .failure(let error):
+            reporter.error("Center failed reading focused window: \(error.description)")
+            return false
+        }
+
+        let displays = displayClient.currentDisplays()
+        reporter.info("Center focused \(snapshot.logDescription)")
+        logDisplays(displays)
+        guard let displayID = displayClient.displayContaining(frame: snapshot.frame, displays: displays) else {
+            reporter.error("Center failed: no display for focused window")
+            return false
+        }
+        reporter.info("Center selected display \(displayID.raw)")
+        let environment = await refreshEnvironment(reason: "pre-center", displays: displays)
+        guard environment.activeSpace != nil else {
+            reporter.error("Center rejected before planning: active Space unavailable")
+            return false
+        }
+
+        switch axClient.visibleWindowIDs() {
+        case .success(let liveWindowIDs):
+            await worldActor.reconcileLiveWindows(liveWindowIDs.union([snapshot.id]))
+        case .failure(let error):
+            reporter.error("Center skipped live-window reconciliation: \(error.description)")
+        }
+        switch await worldActor.upsertWindow(snapshot.metadata, displayID: displayID, displays: displays) {
+        case .success:
+            break
+        case .failure(let error):
+            reporter.error("Center failed updating focused window state: \(error.message)")
+            return false
+        }
+
+        switch await worldActor.planCenter(snapshot.id) {
+        case .success(let result):
+            return await applyPlannedCenter(result, windowID: snapshot.id, retryOnClamp: true)
+        case .failure(let error):
+            reporter.error("Center rejected by core: \(error.message)")
+            return false
+        }
+    }
+
+    @MainActor
     private func performDragDrop(at location: CGPoint) async {
         guard AccessibilityTrust.current(prompt: false).isTrusted else {
             reporter.error("Drag drop skipped because Accessibility is not trusted")
@@ -702,6 +758,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             retryOnClamp: retryOnClamp
         ) {
             await self.worldActor.planDrop(windowID: windowID, displayID: displayID, zoneID: zoneID)
+        }
+    }
+
+    @MainActor
+    private func applyPlannedCenter(
+        _ result: MVPCommandResult,
+        windowID: WindowID,
+        retryOnClamp: Bool
+    ) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: "Center",
+            persistReason: "center",
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.worldActor.planCenter(windowID)
         }
     }
 
@@ -896,6 +968,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return .error(commandID: commandID, code: failure.code, message: failure.message)
             }
             return .ok(commandID: commandID)
+        case .center(let windowID):
+            if let failure = await performExplicitCenter(windowID: windowID) {
+                return .error(commandID: commandID, code: failure.code, message: failure.message)
+            }
+            return .ok(commandID: commandID)
         case .focusDirection(let direction):
             if await performFocusDirection(direction) {
                 return .ok(commandID: commandID)
@@ -914,7 +991,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 code: "focus_failed",
                 message: "Focus cycle \(direction.rawValue) failed; see WinMgrApp log"
             )
-        case .center, .eject, .focus, .toggleFloat:
+        case .eject, .focus, .toggleFloat:
             return .error(
                 commandID: commandID,
                 code: "not_implemented",
@@ -952,6 +1029,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return CommandExecutionFailure(
                 code: "apply_failed",
                 message: "Push \(direction.rawValue) layout write failed; see WinMgrApp log"
+            )
+        case .failure(let error):
+            return CommandExecutionFailure(code: error.code, message: error.message)
+        }
+    }
+
+    @MainActor
+    private func performExplicitCenter(windowID: WindowID) async -> CommandExecutionFailure? {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            return CommandExecutionFailure(
+                code: "accessibility_not_trusted",
+                message: "Accessibility permission is not trusted"
+            )
+        }
+
+        let displays = displayClient.currentDisplays()
+        let environment = await refreshEnvironment(reason: "ipc center", displays: displays)
+        guard environment.activeSpace != nil else {
+            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
+        }
+        guard case .complete = environment.quality else {
+            return CommandExecutionFailure(
+                code: "environment_incomplete",
+                message: "IPC center requires a complete AX snapshot; got \(describe(environment.quality))"
+            )
+        }
+
+        switch await worldActor.planCenter(windowID) {
+        case .success(let result):
+            if await applyPlannedCenter(result, windowID: windowID, retryOnClamp: true) {
+                return nil
+            }
+            return CommandExecutionFailure(
+                code: "apply_failed",
+                message: "Center layout write failed; see WinMgrApp log"
             )
         case .failure(let error):
             return CommandExecutionFailure(code: error.code, message: error.message)

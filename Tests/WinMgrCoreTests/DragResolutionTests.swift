@@ -110,14 +110,42 @@ struct DragResolutionTests {
         #expect(targetFrames[window] == CGRect(x: 1500, y: 0, width: 500, height: 800))
     }
 
+    @Test("Drop at center zone creates the center anchor")
+    func dropAtCenterZoneCreatesCenterAnchor() throws {
+        let window = WindowID(raw: 21)
+        let display = DisplayID(raw: 1)
+        let world = worldWith(
+            window: window,
+            activeSpace: SpaceID(raw: 1),
+            displays: [display: displayInfo(display, x: 0, y: 0, width: 1000, height: 800)],
+            displayStates: [display: DisplaySpaceState(displayID: display, tree: .void, floating: [])],
+            windowDisplay: display,
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.dropAtZone(window, display, ZoneID(raw: "center")), to: world) else {
+            Issue.record("Expected center-zone drop to succeed")
+            return
+        }
+
+        let frames = layout(
+            spaceState: try #require(next.spaces[SpaceID(raw: 1)]),
+            displayID: display,
+            frame: try #require(next.displays[display]?.visibleFrame),
+            gaps: Gaps(inner: 0, outer: Insets(top: 0, left: 0, bottom: 0, right: 0))
+        ).tiled
+
+        #expect(frames[window] == CGRect(x: 250, y: 0, width: 500, height: 800))
+    }
+
     @Test("Drop at unsupported zone action fails explicitly")
     func dropAtUnsupportedZoneActionFailsExplicitly() {
-        let window = WindowID(raw: 21)
+        let window = WindowID(raw: 22)
         let display = DisplayID(raw: 1)
         let config = Config(
             keymap: [],
             rules: [],
-            zones: [zone("center", x: 0.4, y: 0.4, w: 0.2, h: 0.2, action: .insertAsCenter)],
+            zones: [zone("top-left", x: 0, y: 0, w: 0.5, h: 0.5, action: .insertAsQuarter(corner: .topLeft))],
             gaps: Gaps(inner: 0, outer: Insets(top: 0, left: 0, bottom: 0, right: 0)),
             border: .default,
             hud: .default,
@@ -132,9 +160,9 @@ struct DragResolutionTests {
             config: config
         )
 
-        let result = apply(.dropAtZone(window, display, ZoneID(raw: "center")), to: world)
+        let result = apply(.dropAtZone(window, display, ZoneID(raw: "top-left")), to: world)
 
-        #expect(result == .failure(.configInvalid("zone action is not implemented in the current MVP rung: insertAsCenter")))
+        #expect(result == .failure(.configInvalid("zone action is not implemented in the current MVP rung: insertAsQuarter(corner: WinMgrCore.Corner.topLeft)")))
     }
 
     private func zone(

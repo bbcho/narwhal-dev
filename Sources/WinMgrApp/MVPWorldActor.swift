@@ -119,6 +119,10 @@ actor MVPWorldActor {
         planLayoutCommand(.push(windowID, direction), focusedWindowID: windowID)
     }
 
+    func planCenter(_ windowID: WindowID) -> Result<MVPCommandResult, CommandError> {
+        planLayoutCommand(.center(windowID), focusedWindowID: windowID)
+    }
+
     func planDrop(windowID: WindowID, displayID: DisplayID, zoneID: ZoneID) -> Result<MVPCommandResult, CommandError> {
         planLayoutCommand(.dropAtZone(windowID, displayID, zoneID), focusedWindowID: windowID)
     }

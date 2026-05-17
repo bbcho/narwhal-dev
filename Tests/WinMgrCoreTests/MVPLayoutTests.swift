@@ -110,6 +110,64 @@ struct MVPLayoutTests {
         #expect(result.tiled[second] == CGRect(x: 600, y: 0, width: 600, height: 800))
     }
 
+    @Test("Center creates a three-column root with a half-width center anchor")
+    func centerCreatesThreeColumnRoot() throws {
+        let window = WindowID(raw: 1)
+        let tree = centerIntoTree(window, .void)
+
+        #expect(slots(in: tree) == [
+            TreeSlot(path: [0], occupancy: .empty),
+            TreeSlot(path: [1], occupancy: .occupied(window)),
+            TreeSlot(path: [2], occupancy: .empty)
+        ])
+        #expect(frames(for: tree)[window] == CGRect(x: 300, y: 0, width: 600, height: 800))
+    }
+
+    @Test("Repeated center pushes stack top to bottom inside the center anchor")
+    func repeatedCenterPushesStackTopToBottom() throws {
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let tree = centerIntoTree(second, centerIntoTree(first, .void))
+        let result = frames(for: tree)
+
+        #expect(occupiedWindows(in: tree) == [first, second])
+        #expect(result[first] == CGRect(x: 300, y: 0, width: 600, height: 400))
+        #expect(result[second] == CGRect(x: 300, y: 400, width: 600, height: 400))
+    }
+
+    @Test("Center preserves existing left and right edge lanes")
+    func centerPreservesExistingLeftAndRightEdgeLanes() throws {
+        let left = WindowID(raw: 1)
+        let right = WindowID(raw: 2)
+        let center = WindowID(raw: 3)
+        let tree = centerIntoTree(center, pushIntoTree(right, .right, pushIntoTree(left, .left, .void)))
+        let result = frames(for: tree)
+
+        #expect(occupiedWindows(in: tree) == [left, center, right])
+        #expect(result[left] == CGRect(x: 0, y: 0, width: 300, height: 800))
+        #expect(result[center] == CGRect(x: 300, y: 0, width: 600, height: 800))
+        #expect(result[right] == CGRect(x: 900, y: 0, width: 300, height: 800))
+    }
+
+    @Test("Center normalization preserves every occupied cell in a wider root")
+    func centerNormalizationPreservesEveryOccupiedCellInWiderRoot() throws {
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let third = WindowID(raw: 3)
+        let fourth = WindowID(raw: 4)
+        let center = WindowID(raw: 5)
+        let root = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .leaf(first)),
+            try cell(weight: 1, node: .leaf(second)),
+            try cell(weight: 1, node: .leaf(third)),
+            try cell(weight: 1, node: .leaf(fourth))
+        ]))
+
+        let tree = centerIntoTree(center, root)
+
+        #expect(Set(occupiedWindows(in: tree)) == [first, second, third, fourth, center])
+    }
+
     @Test("Left right left with three windows splits the left half vertically")
     func threeWindowBSPKeepsRightHalfAndSplitsLeftHalfVertically() throws {
         let first = WindowID(raw: 1)
@@ -875,5 +933,23 @@ struct MVPLayoutTests {
         let overlap = lhs.intersection(rhs)
         guard !overlap.isNull && !overlap.isInfinite else { return 0 }
         return max(0, overlap.width) * max(0, overlap.height)
+    }
+
+    private func cell(weight: Double, node: Node) throws -> Cell {
+        switch Cell.create(weight: weight, node: node) {
+        case .success(let cell):
+            return cell
+        case .failure(let error):
+            throw error
+        }
+    }
+
+    private func split(axis: Axis, cells: [Cell]) throws -> Split {
+        switch Split.create(axis: axis, cells: cells) {
+        case .success(let split):
+            return split
+        case .failure(let error):
+            throw error
+        }
     }
 }
