@@ -202,3 +202,9 @@ Pass criteria:
 - An invalid config edit logs `Config reload failed (file watcher)`.
 - After an invalid config edit, the previous hotkeys and drag modifier still
   work. This proves last-good fallback, not just error reporting.
+
+Observed Rung 15 results:
+
+| Date | Commit | Config path | Watcher ready | Valid edit | Invalid edit | Last-good proof | Known failures |
+|---|---|---|---|---|---|---|---|
+| 2026-05-17 | `2aed5dc` | `/private/tmp/winmgr-hot-reload-smoke/init.lua` | Passed: `Config watcher ready` logged | Passed: `duration_millis` edit logged `Config reload completed (file watcher)`, `Rebound hotkeys`, and `Updated drag-zone modifier to shift` | Passed: invalid Lua logged `Config reload failed (file watcher)` | Passed: process stayed alive and `.build/debug/WinMgrCtl reset` returned `ok ipc-D9598BD7-5D08-4C18-B1EA-120C807241F3` afterward | Hotkey keypress behavior not manually retested in this smoke |
