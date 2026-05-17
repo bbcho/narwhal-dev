@@ -184,12 +184,8 @@ normal app services start.
 Commands:
 
 ```sh
-mkdir -p "$HOME/.config/winmgr"
-cp DefaultConfig/init.lua "$HOME/.config/winmgr/init.lua"
-swift run WinMgrApp
+scripts/smoke_config_hot_reload.sh
 ```
-
-In another shell, edit `~/.config/winmgr/init.lua`.
 
 Pass criteria:
 
