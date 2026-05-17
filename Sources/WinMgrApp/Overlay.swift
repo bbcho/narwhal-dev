@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import WinMgrCore
 
 @MainActor
@@ -99,10 +100,20 @@ final class Overlay {
 
 @MainActor
 private final class BorderView: NSView {
+    private static let macWindowCornerRadius: CGFloat = 10
+
+    private let shapeLayer = CAShapeLayer()
+    private var border: BorderConfig
+
     init(border: BorderConfig) {
+        self.border = border
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
+        shapeLayer.fillColor = NSColor.clear.cgColor
+        shapeLayer.lineJoin = .round
+        shapeLayer.lineCap = .round
+        layer?.addSublayer(shapeLayer)
         update(border: border)
     }
 
@@ -110,9 +121,33 @@ private final class BorderView: NSView {
         nil
     }
 
+    override func layout() {
+        super.layout()
+        updatePath()
+    }
+
     func update(border: BorderConfig) {
-        layer?.borderWidth = border.width
-        layer?.borderColor = NSColor(hexRGB: border.colorHex)?.cgColor ?? NSColor.systemBlue.cgColor
+        self.border = border
+        shapeLayer.strokeColor = NSColor(hexRGB: border.colorHex)?.cgColor ?? NSColor.systemBlue.cgColor
+        shapeLayer.lineWidth = border.width
+        shapeLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        updatePath()
+    }
+
+    private func updatePath() {
+        shapeLayer.frame = bounds
+        let strokeInset = border.width / 2
+        let rect = bounds.insetBy(dx: strokeInset, dy: strokeInset)
+        let radius = min(
+            Self.macWindowCornerRadius + strokeInset,
+            min(rect.width, rect.height) / 2
+        )
+        shapeLayer.path = CGPath(
+            roundedRect: rect,
+            cornerWidth: radius,
+            cornerHeight: radius,
+            transform: nil
+        )
     }
 }
 
