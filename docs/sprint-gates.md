@@ -227,3 +227,9 @@ Pass criteria:
 - `WinMgrApp stopped` is logged.
 - The WinMgrApp process exits.
 - `/tmp/winmgr-$(id -u).sock` is removed after shutdown.
+
+Observed Rung 16 results:
+
+| Date | Commit | Restore path | Startup services | IPC reset | IPC quit | Shutdown cleanup | Known failures |
+|---|---|---|---|---|---|---|---|
+| 2026-05-17 | `a33f825` | `/private/tmp/winmgr-startup-shutdown-smoke/state.json` | Passed: Accessibility, hotkeys, AX focus observer, display observer, config watcher, IPC server, drag zones, and layout loop logged | Passed: `WinMgrCtl reset` returned `ok` and logged `IPC reset layout memory` | Passed: `WinMgrCtl quit` returned `ok` and logged `IPC quit requested` | Passed: process exited, `WinMgrApp stopped` logged, and `/tmp/winmgr-501.sock` was removed | None |
