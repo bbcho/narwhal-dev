@@ -306,6 +306,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 11b | Drag zones | Shift-drag onto configured zones maps to the same push pipeline | Packaging |
 | 12 | Local packaging | `scripts/build_app_bundle.sh` emits a runnable `.app`, embeds Lua, copies default config into Resources, and generates a LaunchAgent plist | Notarization, brew cask |
 | 13 | Local install lifecycle | `scripts/install_local.sh --no-launchctl --app-dir .build/install-test/Applications --launch-agents-dir .build/install-test/LaunchAgents --replace --configuration debug` installs a test app/plist, and `scripts/uninstall_local.sh --no-launchctl ...` removes them | Notarized installer, brew cask |
+| 14 | User LaunchAgent smoke | `scripts/install_local.sh --replace --configuration debug` installs into `~/Applications` and `~/Library/LaunchAgents`; `launchctl print gui/$UID/com.ben.winmgr` reports running; installed `winmgrctl reset` returns `ok` | Notarized installer, brew cask |
 
 ### Fast-path constraints
 

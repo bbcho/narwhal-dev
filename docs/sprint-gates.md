@@ -6,13 +6,15 @@ pass/fail result.
 
 ## Sprint 1 MVP Gate
 
-Sprint 1 is complete only when all four gates pass:
+Sprint 1 is complete only when all five gates pass:
 
 - Full automated Swift test suite passes.
 - Local package contains the app executable, CLI, embedded Lua runtime, default
   config, valid app plist, valid LaunchAgent plist, and no broken Lua linkage.
 - Local install lifecycle can install into test directories and uninstall the
   installed app and LaunchAgent.
+- User LaunchAgent lifecycle can install into the default user paths, start the
+  app through launchd, and accept an installed `winmgrctl reset`.
 - Manual smoke confirms the packaged app can tile, focus, swap, reset, refresh
   on display/Space changes, and keep the focus border aligned.
 
@@ -93,6 +95,36 @@ Pass criteria:
 - Package scratch files under `.build/install-test/package` may remain; they are
   not installed runtime artifacts.
 
+## Rung 14: User LaunchAgent Smoke
+
+This gate writes to the real user install paths. It should only be run when the
+candidate build is intended to become the active local WinMgr instance.
+
+Commands:
+
+```sh
+scripts/install_local.sh --replace --configuration debug
+plutil -p "$HOME/Library/LaunchAgents/com.ben.winmgr.plist"
+launchctl print "gui/$(id -u)/com.ben.winmgr"
+"$HOME/Applications/WinMgr.app/Contents/MacOS/winmgrctl" reset
+tail -n 40 /tmp/winmgr.log
+```
+
+Pass criteria:
+
+- Install command exits with status 0.
+- Installed LaunchAgent plist is valid.
+- Installed LaunchAgent `ProgramArguments[0]` points at
+  `$HOME/Applications/WinMgr.app/Contents/MacOS/WinMgrApp`.
+- `launchctl print` reports `state = running`.
+- `launchctl print` reports `program =
+  $HOME/Applications/WinMgr.app/Contents/MacOS/WinMgrApp`.
+- Installed `winmgrctl reset` exits with status 0 and prints `ok` followed by an
+  IPC request ID.
+- `/tmp/winmgr.log` records `IPC reset layout memory`.
+- Startup logs show Accessibility trusted, hotkey registration, IPC server,
+  display observer, and drag zones ready.
+
 ## Manual Smoke Gate
 
 Prerequisites:
@@ -106,6 +138,7 @@ Start one of:
 ```sh
 swift run WinMgrApp
 .build/winmgr-package-next/WinMgr.app/Contents/MacOS/WinMgrApp
+scripts/install_local.sh --replace --configuration debug
 ```
 
 Reset state:
@@ -133,8 +166,8 @@ Pass criteria:
 - Switching Spaces and connecting or disconnecting a display emits one coalesced
   environment refresh per burst, not a long sequence of redundant refreshes.
 
-Record manual results here:
+Observed gate results:
 
-| Date | Commit | Automated suite | Package gate | Install gate | Manual tiling/focus/swap/reset | Known failures |
-|---|---|---|---|---|---|---|
-|  |  |  |  |  |  |  |
+| Date | Commit | Automated suite | Package gate | Test install gate | User LaunchAgent gate | Manual tiling/focus/swap/reset | Known failures |
+|---|---|---|---|---|---|---|---|
+| 2026-05-17 | `a80f016` | 113 tests / 16 suites passed | Passed | Passed | Passed: launchctl running PID 23158; installed `winmgrctl reset` returned `ok ipc-AD0BA665-E8B0-48D9-BA9D-D0782146B030` | Not rerun in this gate | None from launch/install gate |
