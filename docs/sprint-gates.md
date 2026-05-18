@@ -504,3 +504,4 @@ Observed Rung 24 results:
 
 | Date | Commit | Core/DTO tests | App smoke | Known failures |
 |---|---|---|---|---|
+| 2026-05-18 | `f14bd27` | Passed: exact core tests cover tiled-to-floating toggle, floating-to-center-tiled toggle, active `SpaceState` creation, non-resizable floating-window rejection, preserved metadata/display/constraints/pending rules, and stable IPC `toggleFloat` JSON; full suite passed 141 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
