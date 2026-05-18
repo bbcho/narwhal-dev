@@ -466,3 +466,4 @@ Observed Rung 23 results:
 
 | Date | Commit | Core/DTO tests | App smoke | Known failures |
 |---|---|---|---|---|
+| 2026-05-18 | `006f000` | Passed: exact core tests cover tiled-window eject to floating, preserved `.void` zone slots, preserved metadata/display/constraints/pending rules, already-floating rejection, missing-window rejection, and stable IPC `eject` JSON; full suite passed 137 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
