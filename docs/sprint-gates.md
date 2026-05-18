@@ -400,3 +400,34 @@ Observed Rung 21 results:
 |---|---|---|---|---|
 | 2026-05-18 | `6e7102a` | Passed: 7 restore scheduler tests cover pure latest-wins state, stale timer rejection, flush-once, cancellation, synchronous shell flush of latest save, failed-save event, and later successful flush; full suite passed 130 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` logged IPC reset, IPC quit, `Restore state saved (ipc reset)` to `/private/tmp/winmgr-startup-shutdown-smoke/state.json`, `WinMgrApp stopped`, process exit, and socket removal; `bash -n` passed for install/uninstall; no-launchctl install/uninstall completed | None |
 | 2026-05-18 | `55d649a` | Passed: 4 scheduler tests cover latest-wins debounce, immediate flush canceling delayed write, explicit cancellation, failed-save event, and later successful save; full suite passed 127 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` logged IPC reset, IPC quit, `Restore state saved (ipc reset)` to `/private/tmp/winmgr-startup-shutdown-smoke/state.json`, `WinMgrApp stopped`, process exit, and socket removal | None |
+
+## Rung 22: Quarter Drag-Zone Actions
+
+This post-MVP core gate makes configured Lua/API zones with
+`insert_as_quarter` executable. The drag hit-test still returns a stable
+`.dropAtZone` command; `apply` owns the zone action lookup and maps a quarter
+zone to pure BSP insertion.
+
+Commands:
+
+```sh
+CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+```
+
+Pass criteria:
+
+- Pure tree tests prove `.topLeft`, `.topRight`, `.bottomLeft`, and
+  `.bottomRight` quarter insertion produce exact corner frames from an empty
+  tree.
+- Pure tree tests prove quarter insertion preserves durable void lanes and
+  repeated insertion splits the corner cell toward the screen center without
+  duplicating windows.
+- Drop-zone integration tests prove each configured quarter zone applies to the
+  exact display corner through `.dropAtZone`.
+- Unsupported `.insertAtSubtree` zones still fail with an exact
+  `.configInvalid` message.
+
+Observed Rung 22 results:
+
+| Date | Commit | Quarter insertion tests | Drop-zone integration | Known failures |
+|---|---|---|---|---|

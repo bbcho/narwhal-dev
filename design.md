@@ -314,6 +314,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 19 | Startup failure matrix | `scripts/smoke_startup_failure_matrix.sh` injects failure at every service boundary and proves each rollback terminates without layout-loop readiness or leftover IPC socket | Adapter-specific failure simulations |
 | 20 | Restore persistence boundary | `WinMgrAppSupportTests` prove missing file, unsupported schema, corrupt JSON, invalid persisted `StoredWorld`, and save/load round-trip from a temp restore path | Debounced async persistence scheduling |
 | 21 | Debounced restore persistence scheduling | `WinMgrAppSupportTests` prove pure latest-wins coalescing, stale generation rejection, immediate flush, cancellation, failed-save reporting, and successful later save; startup/shutdown smoke proves AppKit termination and app-owned quit flush pending restore state before exit; install/uninstall request graceful IPC quit before `launchctl bootout` | Cross-process crash recovery while a save is still pending |
+| 22 | Quarter drag-zone actions | `WinMgrCoreTests` prove configured `.insertAsQuarter` zones place a dragged window into each exact display corner and preserve persistent void lanes; unsupported subtree actions still fail explicitly | Custom subtree-targeted zones |
 
 ### Fast-path constraints
 
@@ -414,6 +415,7 @@ Apply the 5-question test to every planned function. Tag `[CORE]` or `[SHELL]`.
 | `recordObservedConstraints(_:WindowConstraints, for:WindowID, in:World) -> World` | Apply.swift | Pure merge of AX clamp feedback into `world.windowConstraints`; maxes minimums, never lowers them during a session. |
 | `pushIntoTree(_:WindowID, _:Direction, _:Node) -> Node` | Tree.swift | Center-facing edge-recursive insertion; each edge lane alternates split axes and places the new window inward. Existing-window reposition replaces the old leaf with `.void` without collapsing. |
 | `centerIntoTree(_:WindowID, _:Node) -> Node` | Tree.swift | Establishes 3-column root or splits center vertically. |
+| `quarterIntoTree(_:WindowID, _:Corner, _:Node) -> Node` | Tree.swift | Creates or targets the left/right side lane, then splits its top/bottom half for exact corner drag-zone placement while preserving void lanes. |
 | `swapWindowsInTree(_:WindowID, _:WindowID, _:Node) -> Node` | Tree.swift | Exchanges two occupied leaves without changing split shape, weights, or void leaves. |
 | `ejectFromTree(_:WindowID, _:Node) -> Node` | Tree.swift | Replaces the leaf with `.void` and preserves the zone shape. |
 | `nodesInTree(_:Node) -> [(NodePath, Node)]` | Tree.swift | Pure traversal materialized as values; callers cannot hide effects in a visitor closure. |
@@ -430,7 +432,7 @@ Apply the 5-question test to every planned function. Tag `[CORE]` or `[SHELL]`.
 | `windowOpenDecision(_:WindowMetadata, rules:[WindowRule]) -> WindowOpenDecision` | Rules.swift | Converts a first-match rule into a typed open decision. |
 | `validateCommand(_:Command, world:World) -> Result<Command, CommandError>` | Command.swift | Cross-checks command identity/scope before transition. |
 | `resolveTemplate(_:CommandTemplate, focused:WindowID?) -> Command?` | Command.swift | Hotkey template + focused window → executable command or nil. |
-| `resolveDrop(_:DragEvent, zones:[Zone], displays:[DisplayID:DisplayInfo]) -> Command?` | Rules.swift | Pure zone hit-test with half-open zone bounds and drag-to-command mapping. |
+| `resolveDrop(_:DragEvent, zones:[Zone], displays:[DisplayID:DisplayInfo]) -> Command?` | Rules.swift | Pure zone hit-test with half-open zone bounds and drag-to-command mapping. `.insertAsHalf`, `.insertAsQuarter`, and `.insertAsCenter` are executable; `.insertAtSubtree` remains explicitly unsupported until custom subtree targeting is designed. |
 | `restoreWorld(from:StoredWorld, liveWindows:[WindowMetadata], displays:[DisplayID:DisplayInfo], activeSpace:SpaceID?, config:Config) -> World` | Restore.swift | Pure remap from stable stored descriptors to live window IDs. |
 | `storedWorld(from:World) -> StoredWorld` | Restore.swift | Pure projection from live World to stable restore DTO. |
 | `parseConfig(_:LuaConfigData) -> Result<Config, ConfigError>` | Config.swift | Pure validator on already-decoded Lua values. (Decode lives in shell.) |
@@ -1817,6 +1819,7 @@ Generators needed:
 | Function | Min tests | Property tests |
 |---|---|---|
 | pushIntoTree | 10 (each Direction × {empty, occupied lane, opposite lane, repeated lane}, plus `HLHHL` and `HLJK`) | edge-lane shape examples + leaf-count + no duplicates |
+| quarterIntoTree | 6 (each corner from empty tree, persistent opposite void lane, repeated corner into existing side lane) | exact corner frame + no duplicate occupied windows |
 | centerIntoTree | 4 (empty / has root / center already populated / center deeply nested) | preserves outer cells |
 | ejectFromTree | 6 (leaf in {top, mid, deep}, with/without sibling voids) | leaf removed, zone shape preserved |
 | layout | 8 (void / leaf / binary split / 3-cell / nested / with gaps / degenerate ratios / zero-area) | sum-of-areas + disjoint |

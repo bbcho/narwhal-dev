@@ -138,14 +138,33 @@ struct DragResolutionTests {
         #expect(frames[window] == CGRect(x: 250, y: 0, width: 500, height: 800))
     }
 
-    @Test("Drop at unsupported zone action fails explicitly")
-    func dropAtUnsupportedZoneActionFailsExplicitly() {
+    @Test("Drop at quarter zones tiles the exact corner")
+    func dropAtQuarterZonesTilesExactCorner() throws {
         let window = WindowID(raw: 22)
         let display = DisplayID(raw: 1)
         let config = Config(
             keymap: [],
             rules: [],
-            zones: [zone("top-left", x: 0, y: 0, w: 0.5, h: 0.5, action: .insertAsQuarter(corner: .topLeft))],
+            zones: [
+                zone("top-left", x: 0, y: 0, w: 0.5, h: 0.5, action: .insertAsQuarter(corner: .topLeft)),
+                zone("top-right", x: 0.5, y: 0, w: 0.5, h: 0.5, action: .insertAsQuarter(corner: .topRight)),
+                zone(
+                    "bottom-left",
+                    x: 0,
+                    y: 0.5,
+                    w: 0.5,
+                    h: 0.5,
+                    action: .insertAsQuarter(corner: .bottomLeft)
+                ),
+                zone(
+                    "bottom-right",
+                    x: 0.5,
+                    y: 0.5,
+                    w: 0.5,
+                    h: 0.5,
+                    action: .insertAsQuarter(corner: .bottomRight)
+                )
+            ],
             gaps: Gaps(inner: 0, outer: Insets(top: 0, left: 0, bottom: 0, right: 0)),
             border: .default,
             hud: .default,
@@ -160,9 +179,42 @@ struct DragResolutionTests {
             config: config
         )
 
-        let result = apply(.dropAtZone(window, display, ZoneID(raw: "top-left")), to: world)
+        let topLeft = try frameAfterDrop("top-left", window: window, display: display, world: world)
+        let topRight = try frameAfterDrop("top-right", window: window, display: display, world: world)
+        let bottomLeft = try frameAfterDrop("bottom-left", window: window, display: display, world: world)
+        let bottomRight = try frameAfterDrop("bottom-right", window: window, display: display, world: world)
 
-        #expect(result == .failure(.configInvalid("zone action is not implemented in the current build: insertAsQuarter(corner: WinMgrCore.Corner.topLeft)")))
+        #expect(topLeft == CGRect(x: 0, y: 0, width: 500, height: 400))
+        #expect(topRight == CGRect(x: 500, y: 0, width: 500, height: 400))
+        #expect(bottomLeft == CGRect(x: 0, y: 400, width: 500, height: 400))
+        #expect(bottomRight == CGRect(x: 500, y: 400, width: 500, height: 400))
+    }
+
+    @Test("Drop at unsupported subtree zone action fails explicitly")
+    func dropAtUnsupportedSubtreeZoneActionFailsExplicitly() {
+        let window = WindowID(raw: 23)
+        let display = DisplayID(raw: 1)
+        let config = Config(
+            keymap: [],
+            rules: [],
+            zones: [zone("subtree", x: 0, y: 0, w: 0.5, h: 0.5, action: .insertAtSubtree([0, 1]))],
+            gaps: Gaps(inner: 0, outer: Insets(top: 0, left: 0, bottom: 0, right: 0)),
+            border: .default,
+            hud: .default,
+            dragModifier: [.shift]
+        )
+        let world = worldWith(
+            window: window,
+            activeSpace: SpaceID(raw: 1),
+            displays: [display: displayInfo(display, x: 0, y: 0, width: 1000, height: 800)],
+            displayStates: [display: DisplaySpaceState(displayID: display, tree: .void, floating: [])],
+            windowDisplay: display,
+            config: config
+        )
+
+        let result = apply(.dropAtZone(window, display, ZoneID(raw: "subtree")), to: world)
+
+        #expect(result == .failure(.configInvalid("zone action is not implemented in the current build: insertAtSubtree([0, 1])")))
     }
 
     private func zone(
@@ -224,4 +276,27 @@ struct DragResolutionTests {
             config: config
         )
     }
+
+    private func frameAfterDrop(
+        _ zoneID: String,
+        window: WindowID,
+        display: DisplayID,
+        world: World
+    ) throws -> CGRect? {
+        guard case .success(let next) = apply(.dropAtZone(window, display, ZoneID(raw: zoneID)), to: world) else {
+            Issue.record("Expected quarter-zone drop \(zoneID) to succeed")
+            throw DragResolutionTestError.unexpectedFailure
+        }
+
+        return layout(
+            spaceState: try #require(next.spaces[SpaceID(raw: 1)]),
+            displayID: display,
+            frame: try #require(next.displays[display]?.visibleFrame),
+            gaps: Gaps(inner: 0, outer: Insets(top: 0, left: 0, bottom: 0, right: 0))
+        ).tiled[window]
+    }
+}
+
+private enum DragResolutionTestError: Error {
+    case unexpectedFailure
 }

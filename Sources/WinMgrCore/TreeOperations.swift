@@ -52,6 +52,11 @@ public func centerIntoTree(_ window: WindowID, _ node: Node) -> Node {
     return insertAtCenter(window, treeWithoutWindow)
 }
 
+public func quarterIntoTree(_ window: WindowID, _ corner: Corner, _ node: Node) -> Node {
+    let treeWithoutWindow = clearWindowPreservingZones(window, from: node)
+    return insertAtRootCorner(window, corner, treeWithoutWindow)
+}
+
 public func swapWindowsInTree(_ first: WindowID, _ second: WindowID, _ node: Node) -> Node {
     guard first != second else { return node }
 
@@ -102,6 +107,55 @@ private func insertAtCenter(_ window: WindowID, _ node: Node) -> Node {
         ]))
     case .split:
         return centerRoot(center: insertIntoCenterStack(window, node))
+    }
+}
+
+private func insertAtRootCorner(_ window: WindowID, _ corner: Corner, _ node: Node) -> Node {
+    switch node {
+    case .split(let split) where split.axis == .horizontal:
+        var cells = split.cells
+        let targetIndex = corner.horizontalDirection.edgeInsertionIndex(count: cells.count)
+        let target = cells[targetIndex]
+        cells[targetIndex] = makeCell(
+            weight: target.weight,
+            node: insertIntoCornerSide(window, corner, target.node)
+        )
+        return .split(makeSplit(axis: split.axis, cells: cells))
+    case .void, .leaf, .split:
+        let side = insertIntoCornerSide(window, corner, node)
+        switch corner {
+        case .topLeft, .bottomLeft:
+            return .split(makeSplit(axis: .horizontal, cells: [
+                makeCell(weight: 1, node: side),
+                makeCell(weight: 1, node: .void)
+            ]))
+        case .topRight, .bottomRight:
+            return .split(makeSplit(axis: .horizontal, cells: [
+                makeCell(weight: 1, node: .void),
+                makeCell(weight: 1, node: side)
+            ]))
+        }
+    }
+}
+
+private func insertIntoCornerSide(_ window: WindowID, _ corner: Corner, _ node: Node) -> Node {
+    let verticalDirection = corner.verticalDirection
+    switch node {
+    case .void:
+        return edgeSplit(inserted: .leaf(window), existing: .void, direction: verticalDirection)
+    case .leaf:
+        return edgeSplit(inserted: .leaf(window), existing: node, direction: verticalDirection)
+    case .split(let split) where split.axis == .vertical:
+        var cells = split.cells
+        let targetIndex = verticalDirection.edgeInsertionIndex(count: cells.count)
+        let target = cells[targetIndex]
+        cells[targetIndex] = makeCell(
+            weight: target.weight,
+            node: insertIntoLane(window, corner.horizontalDirection, target.node, nextAxis: .horizontal)
+        )
+        return .split(makeSplit(axis: split.axis, cells: cells))
+    case .split:
+        return edgeSplit(inserted: .leaf(window), existing: node, direction: verticalDirection)
     }
 }
 
@@ -306,6 +360,26 @@ private extension Direction {
             return 0
         case (.left, .vertical), (.right, .vertical), (.up, .horizontal), (.down, .horizontal):
             return count - 1
+        }
+    }
+}
+
+private extension Corner {
+    var horizontalDirection: Direction {
+        switch self {
+        case .topLeft, .bottomLeft:
+            return .left
+        case .topRight, .bottomRight:
+            return .right
+        }
+    }
+
+    var verticalDirection: Direction {
+        switch self {
+        case .topLeft, .topRight:
+            return .up
+        case .bottomLeft, .bottomRight:
+            return .down
         }
     }
 }

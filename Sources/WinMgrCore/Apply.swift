@@ -79,9 +79,11 @@ private func applyDropAtZone(
     switch zone.action {
     case .insertAsHalf(let direction):
         return .success(worldByRetiling(target, insertion: .edge(direction), in: world))
+    case .insertAsQuarter(let corner):
+        return .success(worldByRetiling(target, insertion: .quarter(corner), in: world))
     case .insertAsCenter:
         return .success(worldByRetiling(target, insertion: .center, in: world))
-    case .insertAsQuarter, .insertAtSubtree:
+    case .insertAtSubtree:
         return .failure(.configInvalid("zone action is not implemented in the current build: \(String(describing: zone.action))"))
     }
 }
@@ -169,12 +171,15 @@ private struct RetileTarget {
 
 private enum RetileInsertion {
     case edge(Direction)
+    case quarter(Corner)
     case center
 
     func insert(_ windowID: WindowID, into tree: Node) -> Node {
         switch self {
         case .edge(let direction):
             return pushIntoTree(windowID, direction, tree)
+        case .quarter(let corner):
+            return quarterIntoTree(windowID, corner, tree)
         case .center:
             return centerIntoTree(windowID, tree)
         }

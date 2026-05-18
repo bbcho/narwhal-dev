@@ -135,6 +135,54 @@ struct MVPLayoutTests {
         #expect(result[second] == CGRect(x: 300, y: 400, width: 600, height: 400))
     }
 
+    @Test("Quarter insertion creates exact corner cells from an empty tree")
+    func quarterInsertionCreatesExactCornerCells() throws {
+        let topLeft = WindowID(raw: 1)
+        let topRight = WindowID(raw: 2)
+        let bottomLeft = WindowID(raw: 3)
+        let bottomRight = WindowID(raw: 4)
+
+        let topLeftFrames = frames(for: quarterIntoTree(topLeft, .topLeft, .void))
+        let topRightFrames = frames(for: quarterIntoTree(topRight, .topRight, .void))
+        let bottomLeftFrames = frames(for: quarterIntoTree(bottomLeft, .bottomLeft, .void))
+        let bottomRightFrames = frames(for: quarterIntoTree(bottomRight, .bottomRight, .void))
+
+        #expect(topLeftFrames[topLeft] == CGRect(x: 0, y: 0, width: 600, height: 400))
+        #expect(topRightFrames[topRight] == CGRect(x: 600, y: 0, width: 600, height: 400))
+        #expect(bottomLeftFrames[bottomLeft] == CGRect(x: 0, y: 400, width: 600, height: 400))
+        #expect(bottomRightFrames[bottomRight] == CGRect(x: 600, y: 400, width: 600, height: 400))
+    }
+
+    @Test("Quarter insertion preserves opposite side lane as void")
+    func quarterInsertionPreservesOppositeSideLaneAsVoid() throws {
+        let window = WindowID(raw: 1)
+        let tree = quarterIntoTree(window, .topLeft, .void)
+
+        #expect(slots(in: tree) == [
+            TreeSlot(path: [0, 0], occupancy: .occupied(window)),
+            TreeSlot(path: [0, 1], occupancy: .empty),
+            TreeSlot(path: [1], occupancy: .empty)
+        ])
+    }
+
+    @Test("Repeated quarter insertion splits the corner toward center")
+    func repeatedQuarterInsertionSplitsCornerTowardCenter() throws {
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let tree = quarterIntoTree(second, .topLeft, quarterIntoTree(first, .topLeft, .void))
+        let result = frames(for: tree)
+
+        #expect(occupiedWindows(in: tree) == [first, second])
+        #expect(result[first] == CGRect(x: 0, y: 0, width: 300, height: 400))
+        #expect(result[second] == CGRect(x: 300, y: 0, width: 300, height: 400))
+        #expect(slots(in: tree) == [
+            TreeSlot(path: [0, 0, 0], occupancy: .occupied(first)),
+            TreeSlot(path: [0, 0, 1], occupancy: .occupied(second)),
+            TreeSlot(path: [0, 1], occupancy: .empty),
+            TreeSlot(path: [1], occupancy: .empty)
+        ])
+    }
+
     @Test("Center preserves existing left and right edge lanes")
     func centerPreservesExistingLeftAndRightEdgeLanes() throws {
         let left = WindowID(raw: 1)
