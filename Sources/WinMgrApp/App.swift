@@ -38,13 +38,12 @@ private enum ServiceStartupRequestError: Error, CustomStringConvertible {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let instance = AppDelegate()
     private static let environmentRefreshCoalescingDelay: TimeInterval = 0.10
-    private static let restoreSaveDebounceNanoseconds: UInt64 = 250_000_000
+    private static let restoreSaveDebounceInterval: TimeInterval = 0.25
 
     private let axClient = AXClient()
     private let displayClient = DisplayClient()
     private let spaceClient = SpaceClient()
-    private var restoreManager = RestoreManager()
-    private var restoreSaveScheduler = RestoreSaveScheduler(manager: RestoreManager())
+    private var restorePersistence = RestorePersistence(manager: RestoreManager())
     private let echoSuppressor = AXEchoSuppressor()
     private let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
     private let menubar = Menubar()
@@ -153,6 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        restorePersistence.flushPending()
         accessibilityPollTimer?.invalidate()
         accessibilityPollTimer = nil
         environmentRefreshCoalescingTimer?.invalidate()
@@ -261,8 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch restoreStateURLFromArguments() {
         case .success(let url):
             let manager = RestoreManager(url: url)
-            restoreManager = manager
-            restoreSaveScheduler = restoreSaveScheduler(for: manager)
+            restorePersistence = restorePersistence(for: manager)
             if url != RestoreManager.defaultURL {
                 reporter.info("Using restore state path \(url.path)")
             }
@@ -286,14 +285,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .success(URL(fileURLWithPath: arguments[pathIndex]).standardizedFileURL)
     }
 
-    private func restoreSaveScheduler(for manager: RestoreManager) -> RestoreSaveScheduler {
-        RestoreSaveScheduler(
+    private func restorePersistence(for manager: RestoreManager) -> RestorePersistence {
+        RestorePersistence(
             manager: manager,
-            debounceNanoseconds: Self.restoreSaveDebounceNanoseconds
+            debounceInterval: Self.restoreSaveDebounceInterval
         ) { [reporter] event in
-            await MainActor.run {
-                logRestoreSaveEvent(event, reporter: reporter)
-            }
+            logRestoreSaveEvent(event, reporter: reporter)
         }
     }
 
@@ -383,7 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             await performPush(direction)
-            await terminateAfterFlushingRestore()
+            terminateAfterFlushingRestore()
         }
     }
 
@@ -476,7 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             quit: { [weak self] in
                 Task { @MainActor in
-                    await self?.terminateAfterFlushingRestore()
+                    self?.terminateAfterFlushingRestore()
                 }
             }
         )
@@ -1011,12 +1008,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         do {
-            guard let stored = try restoreManager.load() else {
-                reporter.info("Restore state not found at \(restoreManager.url.path)")
+            guard let stored = try restorePersistence.load() else {
+                reporter.info("Restore state not found at \(restorePersistence.url.path)")
                 return true
             }
             let restoredCount = await worldActor.restore(stored, from: snapshot)
-            reporter.info("Restore state loaded from \(restoreManager.url.path); restored tiled windows=\(restoredCount)")
+            reporter.info("Restore state loaded from \(restorePersistence.url.path); restored tiled windows=\(restoredCount)")
             return true
         } catch {
             reporter.error("Restore state failed: \(String(describing: error))")
@@ -1175,7 +1172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.info("IPC quit requested")
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 100_000_000)
-                await self?.terminateAfterFlushingRestore()
+                self?.terminateAfterFlushingRestore()
             }
             return .ok(commandID: commandID)
         case .pushFocused(let direction):
@@ -1346,12 +1343,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func persistRestore(reason: String) async {
         let stored = await worldActor.restoreSnapshot()
-        await restoreSaveScheduler.scheduleSave(stored, reason: reason)
+        restorePersistence.scheduleSave(stored, reason: reason)
     }
 
     @MainActor
-    private func terminateAfterFlushingRestore() async {
-        await restoreSaveScheduler.flushPending()
+    private func terminateAfterFlushingRestore() {
+        restorePersistence.flushPending()
         NSApplication.shared.terminate(nil)
     }
 

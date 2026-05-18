@@ -92,13 +92,72 @@ struct RestoreManagerTests {
         #expect(savedJSON.contains(#""displayFingerprint" : "main-display""#))
     }
 
-    @Test("Scheduled saves debounce to the latest stored world")
-    func scheduledSavesDebounceToLatestStoredWorld() async throws {
+    @Test("Restore save scheduling keeps latest pending request")
+    func restoreSaveSchedulingKeepsLatestPendingRequest() {
+        let first = storedWorldFixture(title: "first")
+        let second = storedWorldFixture(title: "second")
+
+        let firstSchedule = scheduleRestoreSave(first, reason: "first", in: .empty)
+        let secondSchedule = scheduleRestoreSave(second, reason: "second", in: firstSchedule.state)
+
+        #expect(firstSchedule.request == RestoreSaveRequest(generation: 1, stored: first, reason: "first"))
+        #expect(secondSchedule.request == RestoreSaveRequest(generation: 2, stored: second, reason: "second"))
+        #expect(secondSchedule.state == RestoreSaveSchedulerState(
+            nextGeneration: 3,
+            pending: secondSchedule.request
+        ))
+    }
+
+    @Test("Restore save timer ignores stale generation and saves current generation")
+    func restoreSaveTimerIgnoresStaleGenerationAndSavesCurrentGeneration() {
+        let first = storedWorldFixture(title: "first")
+        let second = storedWorldFixture(title: "second")
+        let firstSchedule = scheduleRestoreSave(first, reason: "first", in: .empty)
+        let secondSchedule = scheduleRestoreSave(second, reason: "second", in: firstSchedule.state)
+
+        let staleFire = fireRestoreSaveTimer(generation: firstSchedule.request.generation, in: secondSchedule.state)
+        let currentFire = fireRestoreSaveTimer(generation: secondSchedule.request.generation, in: staleFire.state)
+
+        #expect(staleFire.state == secondSchedule.state)
+        #expect(staleFire.decision == .stale(pending: secondSchedule.request))
+        #expect(currentFire.state == RestoreSaveSchedulerState(nextGeneration: 3, pending: nil))
+        #expect(currentFire.decision == .save(secondSchedule.request))
+    }
+
+    @Test("Restore save flush returns pending request once")
+    func restoreSaveFlushReturnsPendingRequestOnce() {
+        let stored = storedWorldFixture(title: "flush")
+        let scheduled = scheduleRestoreSave(stored, reason: "flush", in: .empty)
+
+        let firstFlush = flushRestoreSave(in: scheduled.state)
+        let secondFlush = flushRestoreSave(in: firstFlush.state)
+
+        #expect(firstFlush.request == scheduled.request)
+        #expect(firstFlush.state == RestoreSaveSchedulerState(nextGeneration: 2, pending: nil))
+        #expect(secondFlush.request == nil)
+        #expect(secondFlush.state == RestoreSaveSchedulerState(nextGeneration: 2, pending: nil))
+    }
+
+    @Test("Restore save cancellation clears pending request")
+    func restoreSaveCancellationClearsPendingRequest() {
+        let scheduled = scheduleRestoreSave(storedWorldFixture(title: "cancel"), reason: "cancel", in: .empty)
+
+        let canceled = cancelRestoreSave(in: scheduled.state)
+        let fired = fireRestoreSaveTimer(generation: scheduled.request.generation, in: canceled)
+
+        #expect(canceled == RestoreSaveSchedulerState(nextGeneration: 2, pending: nil))
+        #expect(fired.state == canceled)
+        #expect(fired.decision == .idle)
+    }
+
+    @Test("Scheduler flush writes latest pending save immediately")
+    @MainActor
+    func schedulerFlushWritesLatestPendingSaveImmediately() {
         let saves = RecordedRestoreSaves()
         let events = RecordedRestoreEvents()
         let scheduler = RestoreSaveScheduler(
             urlPath: "/tmp/winmgr-state.json",
-            debounceNanoseconds: 20_000_000,
+            debounceInterval: 60.0,
             save: { stored in
                 try saves.save(stored)
             },
@@ -109,13 +168,9 @@ struct RestoreManagerTests {
         let first = storedWorldFixture(title: "first")
         let second = storedWorldFixture(title: "second")
 
-        await scheduler.scheduleSave(first, reason: "first")
-        await scheduler.scheduleSave(second, reason: "second")
-
-        try await waitUntil("latest debounced save") {
-            saves.savedWorlds().count == 1
-        }
-        try await Task.sleep(nanoseconds: 50_000_000)
+        scheduler.scheduleSave(first, reason: "first")
+        scheduler.scheduleSave(second, reason: "second")
+        scheduler.flushPending()
 
         #expect(saves.savedWorlds() == [second])
         #expect(events.events() == [
@@ -127,43 +182,14 @@ struct RestoreManagerTests {
         ])
     }
 
-    @Test("Flush writes pending save immediately and cancels delayed write")
-    func flushWritesPendingSaveImmediatelyAndCancelsDelayedWrite() async throws {
-        let saves = RecordedRestoreSaves()
-        let events = RecordedRestoreEvents()
-        let scheduler = RestoreSaveScheduler(
-            urlPath: "/tmp/winmgr-state.json",
-            debounceNanoseconds: 50_000_000,
-            save: { stored in
-                try saves.save(stored)
-            },
-            observe: { event in
-                events.record(event)
-            }
-        )
-        let stored = storedWorldFixture(title: "flush")
-
-        await scheduler.scheduleSave(stored, reason: "flush")
-        await scheduler.flushPending()
-        try await Task.sleep(nanoseconds: 80_000_000)
-
-        #expect(saves.savedWorlds() == [stored])
-        #expect(events.events() == [
-            .saved(RestoreSaveSuccess(
-                generation: 1,
-                reason: "flush",
-                urlPath: "/tmp/winmgr-state.json"
-            ))
-        ])
-    }
-
-    @Test("Failed save reports failure and next schedule can save")
-    func failedSaveReportsFailureAndNextScheduleCanSave() async throws {
+    @Test("Scheduler failed save reports failure and later flush can save")
+    @MainActor
+    func schedulerFailedSaveReportsFailureAndLaterFlushCanSave() {
         let saves = RecordedRestoreSaves(failuresBeforeSuccess: 1)
         let events = RecordedRestoreEvents()
         let scheduler = RestoreSaveScheduler(
             urlPath: "/tmp/winmgr-state.json",
-            debounceNanoseconds: 20_000_000,
+            debounceInterval: 60.0,
             save: { stored in
                 try saves.save(stored)
             },
@@ -174,14 +200,10 @@ struct RestoreManagerTests {
         let failed = storedWorldFixture(title: "failed")
         let saved = storedWorldFixture(title: "saved")
 
-        await scheduler.scheduleSave(failed, reason: "first")
-        try await waitUntil("failed save event") {
-            events.events().count == 1
-        }
-        await scheduler.scheduleSave(saved, reason: "second")
-        try await waitUntil("successful retry save") {
-            events.events().count == 2
-        }
+        scheduler.scheduleSave(failed, reason: "first")
+        scheduler.flushPending()
+        scheduler.scheduleSave(saved, reason: "second")
+        scheduler.flushPending()
 
         #expect(saves.savedWorlds() == [saved])
         #expect(events.events() == [
@@ -199,13 +221,14 @@ struct RestoreManagerTests {
         ])
     }
 
-    @Test("Cancel drops pending save without writing")
-    func cancelDropsPendingSaveWithoutWriting() async throws {
+    @Test("Scheduler cancel drops pending save without writing")
+    @MainActor
+    func schedulerCancelDropsPendingSaveWithoutWriting() {
         let saves = RecordedRestoreSaves()
         let events = RecordedRestoreEvents()
         let scheduler = RestoreSaveScheduler(
             urlPath: "/tmp/winmgr-state.json",
-            debounceNanoseconds: 20_000_000,
+            debounceInterval: 60.0,
             save: { stored in
                 try saves.save(stored)
             },
@@ -214,9 +237,9 @@ struct RestoreManagerTests {
             }
         )
 
-        await scheduler.scheduleSave(storedWorldFixture(title: "cancel"), reason: "cancel")
-        await scheduler.cancelPending()
-        try await Task.sleep(nanoseconds: 50_000_000)
+        scheduler.scheduleSave(storedWorldFixture(title: "cancel"), reason: "cancel")
+        scheduler.cancelPending()
+        scheduler.flushPending()
 
         #expect(saves.savedWorlds() == [])
         #expect(events.events() == [])
@@ -292,10 +315,9 @@ private func requireRestoreManagerError(
 private enum RestoreManagerTestError: Error {
     case unexpectedSuccess
     case unexpectedError
-    case timeout
 }
 
-private final class RecordedRestoreSaves: @unchecked Sendable {
+private final class RecordedRestoreSaves {
     private let lock = NSLock()
     private var failuresBeforeSuccess: Int
     private var saved: [StoredWorld] = []
@@ -321,7 +343,7 @@ private final class RecordedRestoreSaves: @unchecked Sendable {
     }
 }
 
-private final class RecordedRestoreEvents: @unchecked Sendable {
+private final class RecordedRestoreEvents {
     private let lock = NSLock()
     private var recorded: [RestoreSaveEvent] = []
 
@@ -344,13 +366,4 @@ private enum FakeRestoreSaveError: Error, CustomStringConvertible {
     var description: String {
         "boom"
     }
-}
-
-private func waitUntil(_ description: String, condition: () -> Bool) async throws {
-    for _ in 0..<100 {
-        if condition() { return }
-        try await Task.sleep(nanoseconds: 5_000_000)
-    }
-    Issue.record("Timed out waiting for \(description)")
-    throw RestoreManagerTestError.timeout
 }

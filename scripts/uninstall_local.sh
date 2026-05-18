@@ -65,8 +65,32 @@ fi
 
 installed_app="$app_dir/WinMgr.app"
 launch_agent="$launch_agents_dir/com.ben.winmgr.plist"
+socket_path="/tmp/winmgr-$(id -u).sock"
+
+wait_for_socket_absent() {
+  local attempts="$1"
+  local delay="$2"
+  for ((i = 0; i < attempts; i++)); do
+    [ ! -S "$socket_path" ] && return 0
+    sleep "$delay"
+  done
+  [ ! -S "$socket_path" ]
+}
+
+graceful_quit_existing_app() {
+  local ctl="$installed_app/Contents/MacOS/winmgrctl"
+  if [ "$use_launchctl" != "true" ]; then
+    return 0
+  fi
+  if [ -x "$ctl" ] && [ -S "$socket_path" ]; then
+    echo "Requesting WinMgr quit before LaunchAgent bootout"
+    "$ctl" quit >/dev/null 2>&1 || true
+    wait_for_socket_absent 50 0.1 || true
+  fi
+}
 
 if [ "$use_launchctl" = "true" ] && [ -e "$launch_agent" ]; then
+  graceful_quit_existing_app
   launchctl bootout "gui/$(id -u)" "$launch_agent" 2>/dev/null || true
 fi
 

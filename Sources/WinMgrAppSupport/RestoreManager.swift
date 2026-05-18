@@ -93,32 +93,105 @@ public enum RestoreSaveEvent: Equatable, Sendable {
     case failed(RestoreSaveFailure)
 }
 
-public actor RestoreSaveScheduler {
-    public typealias Save = @Sendable (StoredWorld) throws -> Void
-    public typealias Observe = @Sendable (RestoreSaveEvent) async -> Void
+public struct RestoreSaveRequest: Equatable, Sendable {
+    public let generation: UInt64
+    public let stored: StoredWorld
+    public let reason: String
 
-    private struct PendingSave: Sendable {
-        let generation: UInt64
-        let stored: StoredWorld
-        let reason: String
+    public init(generation: UInt64, stored: StoredWorld, reason: String) {
+        self.generation = generation
+        self.stored = stored
+        self.reason = reason
     }
+}
+
+public struct RestoreSaveSchedulerState: Equatable, Sendable {
+    public static let empty = RestoreSaveSchedulerState(nextGeneration: 1, pending: nil)
+
+    public let nextGeneration: UInt64
+    public let pending: RestoreSaveRequest?
+
+    public init(nextGeneration: UInt64, pending: RestoreSaveRequest?) {
+        self.nextGeneration = nextGeneration
+        self.pending = pending
+    }
+}
+
+public enum RestoreSaveTimerDecision: Equatable, Sendable {
+    case idle
+    case stale(pending: RestoreSaveRequest)
+    case save(RestoreSaveRequest)
+}
+
+public func scheduleRestoreSave(
+    _ stored: StoredWorld,
+    reason: String,
+    in state: RestoreSaveSchedulerState
+) -> (state: RestoreSaveSchedulerState, request: RestoreSaveRequest) {
+    let request = RestoreSaveRequest(
+        generation: state.nextGeneration,
+        stored: stored,
+        reason: reason
+    )
+    return (
+        RestoreSaveSchedulerState(
+            nextGeneration: state.nextGeneration + 1,
+            pending: request
+        ),
+        request
+    )
+}
+
+public func fireRestoreSaveTimer(
+    generation: UInt64,
+    in state: RestoreSaveSchedulerState
+) -> (state: RestoreSaveSchedulerState, decision: RestoreSaveTimerDecision) {
+    guard let pending = state.pending else {
+        return (state, .idle)
+    }
+    guard pending.generation == generation else {
+        return (state, .stale(pending: pending))
+    }
+    return (
+        RestoreSaveSchedulerState(nextGeneration: state.nextGeneration, pending: nil),
+        .save(pending)
+    )
+}
+
+public func flushRestoreSave(
+    in state: RestoreSaveSchedulerState
+) -> (state: RestoreSaveSchedulerState, request: RestoreSaveRequest?) {
+    (
+        RestoreSaveSchedulerState(nextGeneration: state.nextGeneration, pending: nil),
+        state.pending
+    )
+}
+
+public func cancelRestoreSave(in state: RestoreSaveSchedulerState) -> RestoreSaveSchedulerState {
+    RestoreSaveSchedulerState(nextGeneration: state.nextGeneration, pending: nil)
+}
+
+@MainActor
+public final class RestoreSaveScheduler {
+    public typealias Save = (StoredWorld) throws -> Void
+    public typealias Observe = (RestoreSaveEvent) -> Void
 
     private let urlPath: String
-    private let debounceNanoseconds: UInt64
+    private let debounceInterval: TimeInterval
     private let save: Save
     private let observe: Observe
-    private var nextGeneration: UInt64 = 0
-    private var pending: PendingSave?
-    private var scheduledTask: Task<Void, Never>?
+    private var state = RestoreSaveSchedulerState.empty
+    private var timer: Timer?
+    private var timerGeneration: UInt64?
 
-    public init(
+    public convenience init(
         manager: RestoreManager,
-        debounceNanoseconds: UInt64 = 250_000_000,
+        debounceInterval: TimeInterval = 0.25,
         observe: @escaping Observe = { _ in }
     ) {
         self.init(
             urlPath: manager.url.path,
-            debounceNanoseconds: debounceNanoseconds,
+            debounceInterval: debounceInterval,
             save: { stored in
                 try manager.save(stored)
             },
@@ -128,68 +201,118 @@ public actor RestoreSaveScheduler {
 
     public init(
         urlPath: String,
-        debounceNanoseconds: UInt64,
+        debounceInterval: TimeInterval,
         save: @escaping Save,
         observe: @escaping Observe = { _ in }
     ) {
         self.urlPath = urlPath
-        self.debounceNanoseconds = debounceNanoseconds
+        self.debounceInterval = debounceInterval
         self.save = save
         self.observe = observe
     }
 
     public func scheduleSave(_ stored: StoredWorld, reason: String) {
-        nextGeneration += 1
-        let scheduled = PendingSave(generation: nextGeneration, stored: stored, reason: reason)
-        pending = scheduled
+        let scheduled = scheduleRestoreSave(stored, reason: reason, in: state)
+        state = scheduled.state
+        scheduleTimer(generation: scheduled.request.generation)
+    }
 
-        scheduledTask?.cancel()
-        scheduledTask = Task { [debounceNanoseconds] in
-            do {
-                try await Task.sleep(nanoseconds: debounceNanoseconds)
-            } catch {
-                return
-            }
-            await self.flushIfCurrent(generation: scheduled.generation)
+    public func flushPending() {
+        timer?.invalidate()
+        timer = nil
+        timerGeneration = nil
+        let flushed = flushRestoreSave(in: state)
+        state = flushed.state
+        if let request = flushed.request {
+            saveAndObserve(request)
         }
     }
 
-    public func flushPending() async {
-        scheduledTask?.cancel()
-        scheduledTask = nil
-        guard let current = pending else { return }
-        pending = nil
-        await saveAndObserve(current)
-    }
-
     public func cancelPending() {
-        scheduledTask?.cancel()
-        scheduledTask = nil
-        pending = nil
+        timer?.invalidate()
+        timer = nil
+        timerGeneration = nil
+        state = cancelRestoreSave(in: state)
     }
 
-    private func flushIfCurrent(generation: UInt64) async {
-        guard let current = pending, current.generation == generation else { return }
-        scheduledTask = nil
-        pending = nil
-        await saveAndObserve(current)
+    private func scheduleTimer(generation: UInt64) {
+        timer?.invalidate()
+        let scheduled = Timer(timeInterval: debounceInterval, repeats: false) { _ in
+            Task { @MainActor [weak self] in
+                self?.fireTimer(generation: generation)
+            }
+        }
+        timer = scheduled
+        timerGeneration = generation
+        RunLoop.main.add(scheduled, forMode: .common)
     }
 
-    private func saveAndObserve(_ current: PendingSave) async {
+    private func fireTimer(generation: UInt64) {
+        if timerGeneration == generation {
+            timer?.invalidate()
+            timer = nil
+            timerGeneration = nil
+        }
+        let fired = fireRestoreSaveTimer(generation: generation, in: state)
+        state = fired.state
+        guard case .save(let request) = fired.decision else { return }
+        saveAndObserve(request)
+    }
+
+    private func saveAndObserve(_ request: RestoreSaveRequest) {
         do {
-            try save(current.stored)
-            await observe(.saved(RestoreSaveSuccess(
-                generation: current.generation,
-                reason: current.reason,
+            try save(request.stored)
+            observe(.saved(RestoreSaveSuccess(
+                generation: request.generation,
+                reason: request.reason,
                 urlPath: urlPath
             )))
         } catch {
-            await observe(.failed(RestoreSaveFailure(
-                generation: current.generation,
-                reason: current.reason,
+            observe(.failed(RestoreSaveFailure(
+                generation: request.generation,
+                reason: request.reason,
                 urlPath: urlPath,
                 message: String(describing: error)
             )))
         }
+    }
+}
+
+@MainActor
+public final class RestorePersistence {
+    private let manager: RestoreManager
+    private let scheduler: RestoreSaveScheduler
+
+    public var url: URL {
+        manager.url
+    }
+
+    public init(
+        manager: RestoreManager,
+        debounceInterval: TimeInterval = 0.25,
+        observe: @escaping RestoreSaveScheduler.Observe = { _ in }
+    ) {
+        self.manager = manager
+        self.scheduler = RestoreSaveScheduler(
+            manager: manager,
+            debounceInterval: debounceInterval,
+            observe: observe
+        )
+    }
+
+    public func load() throws -> StoredWorld? {
+        try manager.load()
+    }
+
+    public func scheduleSave(_ stored: StoredWorld, reason: String) {
+        scheduler.scheduleSave(stored, reason: reason)
+    }
+
+    public func flushPending() {
+        scheduler.flushPending()
+    }
+
+    public func cancelPending() {
+        scheduler.cancelPending()
     }
 }

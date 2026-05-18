@@ -313,7 +313,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 18 | Startup failure rollback smoke | `scripts/smoke_startup_failure_rollback.sh` injects a failure at `dragZones` after IPC startup; app terminates and the IPC socket is removed without reaching layout-loop ready | Broader failure injection matrix |
 | 19 | Startup failure matrix | `scripts/smoke_startup_failure_matrix.sh` injects failure at every service boundary and proves each rollback terminates without layout-loop readiness or leftover IPC socket | Adapter-specific failure simulations |
 | 20 | Restore persistence boundary | `WinMgrAppSupportTests` prove missing file, unsupported schema, corrupt JSON, invalid persisted `StoredWorld`, and save/load round-trip from a temp restore path | Debounced async persistence scheduling |
-| 21 | Debounced restore persistence scheduling | `WinMgrAppSupportTests` prove latest-wins coalescing, immediate flush, cancellation, failed-save reporting, and successful later save; startup/shutdown smoke proves app-owned quit flushes pending restore state before exit | Cross-process crash recovery while a save is still pending |
+| 21 | Debounced restore persistence scheduling | `WinMgrAppSupportTests` prove pure latest-wins coalescing, stale generation rejection, immediate flush, cancellation, failed-save reporting, and successful later save; startup/shutdown smoke proves AppKit termination and app-owned quit flush pending restore state before exit; install/uninstall request graceful IPC quit before `launchctl bootout` | Cross-process crash recovery while a save is still pending |
 
 ### Fast-path constraints
 
@@ -482,10 +482,11 @@ All "no" on the 5 questions:
 | `Overlay.updateConfig(border:hud:) @MainActor` | Overlay | Rebinds visual config after accepted config reload. |
 | `Menubar.start(reload:quit:) @MainActor -> ServiceHandle` | Menubar | Creates NSStatusItem with reload/quit actions and returns an owned removal handle. |
 | `Menubar.updateConfigStatus(_:) @MainActor` | Menubar | Shows last config load state in the status menu. |
-| `RestoreManager.scheduleSave(_:StoredWorld) async` | RestoreManager | Debounced atomic save to `~/Library/Application Support/winmgr/state.json`. |
+| `scheduleRestoreSave`, `fireRestoreSaveTimer`, `flushRestoreSave`, `cancelRestoreSave` | RestoreManager | Pure latest-wins restore-save coalescing policy. |
+| `RestorePersistence.scheduleSave(_:reason:) @MainActor` | RestoreManager | Debounced atomic save shell for `~/Library/Application Support/winmgr/state.json`; AppKit termination and app-owned quit paths call `flushPending()` synchronously. |
 | `RestoreManager.load() throws -> StoredWorld?` | RestoreManager | Reads restore JSON; returns nil for no file or unsupported schema version. |
 
-**Core:shell ratio**: 21 core / 37 shell function families = ~0.6:1. Target was 4:1, but a window manager is by nature I/O-heavy. The *line-count* ratio matters more here — the core implementations are substantial (tree ops + layout + apply + restore remap/projection) while shell wrappers are thin. Acceptable.
+**Core:shell ratio**: 25 core / 38 shell function families = ~0.7:1. Target was 4:1, but a window manager is by nature I/O-heavy. The *line-count* ratio matters more here — the core implementations are substantial (tree ops + layout + apply + restore remap/projection + coalescing policies) while shell wrappers are thin. Acceptable.
 
 ---
 
@@ -1401,7 +1402,8 @@ Per function, declare exception vs Result vs Optional. Anti-pattern reminder: ne
 | `LayoutApplier.submit(_:)` | `async -> LayoutApplyResult` or callback equivalent | Per-window converged/clamped/failed results are returned or emitted as data so the actor can re-solve or reject. |
 | `LayoutApplier.expectFocus(_:)` | `async` | Adds an expected focus echo; no failure payload. |
 | `LayoutApplier.isExpectedEcho(_:)` | `async -> Bool` (total) | Echo table miss means false. |
-| `RestoreManager.scheduleSave(_:StoredWorld)` | `async` | Save failures are logged and retried on the next successful outcome; never blocks command handling. |
+| `RestorePersistence.scheduleSave(_:reason:)` | `@MainActor -> Void` | Debounces the latest restore snapshot on the AppKit run loop. Save failures are logged and a later successful outcome can schedule another save; command handling does not wait for the normal delayed write. |
+| `RestorePersistence.flushPending()` | `@MainActor -> Void` | Synchronously writes any pending restore snapshot before app-owned quit or AppKit termination returns. |
 | `RestoreManager.load()` | `throws -> StoredWorld?` | Throws on unreadable/corrupt JSON. Returns `nil` for "no file yet" or unsupported `schemaVersion`. |
 
 **Result vs throws decision rule used here**: pure-core failures = `Result` (composable with `.flatMap`, no implicit propagation). Shell I/O = `throws` (idiomatic Swift, integrates with `async` cancellation). No function does both.
@@ -1428,7 +1430,8 @@ For every value the code reads or writes that outlives a call:
 | Display changes | `DisplayClient` | CGDisplay/NSApplication screen-change notification → `AsyncStream`; owned by `ServiceHandle` | Display topology and visible frames can change independently of window events. |
 | AX inventory refresh coalescer | App shell, with pure policy in `WinMgrCore` | `@MainActor` pending timer + latest-generation token | Window open/close bursts can emit many stale-but-complete inventories. Coalesce shell-triggered environment refreshes before they enter `WorldActor`; user commands still bypass coalescing and force an immediate pre-command refresh. |
 | Service task/service handles | `AppDelegate.serviceTasks` + `serviceHandles` | `@MainActor` arrays of `Task<Void, Never>` and `ServiceHandle` | Long-lived stream consumers are cancelled and registered OS services are stopped on startup failure. |
-| Restore state on disk | `RestoreManager` | File written atomically (`.atomic` write option) to `~/Library/Application Support/winmgr/state.json` | One writer, one reader. |
+| Restore save scheduler | Pure scheduler state + `RestorePersistence` shell | `RestoreSaveSchedulerState` is immutable value state; `RestorePersistence` owns one AppKit-run-loop `Timer` and one synchronous atomic writer. | Timer callbacks may be stale; generation checks prevent stale callbacks from clearing or saving newer pending state. |
+| Restore state on disk | `RestoreManager` | File written atomically (`.atomic` write option) to `~/Library/Application Support/winmgr/state.json` | One writer, one reader. `applicationWillTerminate`, app-owned quit paths, and install/uninstall graceful quit flush pending state before process exit. |
 | Logger | `os.Logger` | Apple-provided, thread-safe | Trust framework. |
 | AX echo suppression table | `LayoutApplier` / `AXObserver` bridge | actor-isolated map with expiry | Filters self-generated move/resize/focus events by expected origin, expected size, and expected focused `WindowID` independently. |
 
@@ -1483,6 +1486,7 @@ struct ServiceHandle: Sendable {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let instance = AppDelegate()
     private let logger = AppLogger()
+    private let restorePersistence = RestorePersistence(manager: RestoreManager())
     @MainActor private var serviceTasks: [Task<Void, Never>] = []
     @MainActor private var serviceHandles: [ServiceHandle] = []
 
@@ -1510,6 +1514,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationWillTerminate(_ notification: Notification) {
+        restorePersistence.flushPending()
         Task { await stopStartedServices() }
     }
 
@@ -1725,7 +1730,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 The final `.startupConverge` command is intentional even though `initialWorld` is already restored in memory: it leaves `World` unchanged but causes `WorldActor` to emit the first `DesiredLayout`, focus-border effect, and restore persistence decision before any user input, so AX state converges to the restored tree immediately after services are registered.
 
-All `start()` methods in this snippet are registration methods: they bind sockets, install taps/watchers/observers, launch their owned background loop if needed, and return a `ServiceHandle`. Startup registers each handle immediately; if a later registration fails, `stopStartedServices()` cancels stream-consumer tasks and stops registered services in reverse order. `applicationWillTerminate` uses the same cleanup path for normal shutdown. Process lifetime remains `NSApplication.shared.run()`.
+All `start()` methods in this snippet are registration methods: they bind sockets, install taps/watchers/observers, launch their owned background loop if needed, and return a `ServiceHandle`. Startup registers each handle immediately; if a later registration fails, `stopStartedServices()` cancels stream-consumer tasks and stops registered services in reverse order. `applicationWillTerminate` first flushes pending restore persistence synchronously, then uses the same cleanup path for normal shutdown. Install/uninstall scripts request `winmgrctl quit` before falling back to `launchctl bootout` so the app gets the same flush path when possible. Process lifetime remains `NSApplication.shared.run()`.
 
 **Twenty-parameter caveat (fp-architect Step 7)**: components do approach 4-6 params. Mitigation: pass a `Dependencies` struct only when count exceeds 6. As of design time, each component sits under the threshold; revisit if it creeps.
 
@@ -1995,6 +2000,8 @@ Coalescing rules:
 4. A coalesced refresh persists restore state only after a complete AX snapshot is applied.
 5. Partial or permission-denied AX snapshots do not clear the pending generation; the next complete snapshot still reconciles live inventory.
 
+Restore persistence uses the same split: `RestoreSaveSchedulerState` is pure value state with schedule/fire/flush/cancel transitions, and the shell owns the AppKit timer plus atomic file write. A stale timer generation is data, not control flow: it cannot clear or save a newer pending request. Normal command outcomes schedule a delayed save; app-owned quit, `applicationWillTerminate`, and graceful install/uninstall quit paths call `flushPending()` synchronously before process exit.
+
 For `.startupConverge`, `apply` returns the existing `World` unchanged. The command exists only to drive `effectsForCommand` through the normal outcome stream after startup restore has constructed the initial in-memory World.
 
 **Schema validation between stages**: not formal — we use the type system. Each stage's return type is its schema.
@@ -2070,7 +2077,7 @@ No external lens library needed. Sum types (enums) need custom matchers — done
 | HotkeyManager | Unit test with mock Carbon-bind closure; reload rebinds exact new keymap | `Tests/WinMgrShellTests/HotkeyTests.swift` |
 | LuaEngine | Unit test: eval simple expressions, exposed function calls return | `Tests/WinMgrShellTests/LuaTests.swift` |
 | ConfigLoader | Integration: write a temp init.lua, start watcher with recording callback, mutate file, observe exact callback emission and adapter rebind/update | `Tests/WinMgrShellTests/ConfigLoaderTests.swift` |
-| RestoreManager | Unit/integration: load/save boundary returns nil for no file and unsupported schema, throws typed failures for corrupt JSON and invalid persisted `StoredWorld`, round-trips saved state from a temp path, debounces successful outcome saves to the latest `StoredWorld`, flushes pending state on app-owned quit, cancels pending writes explicitly, and reports save failures without blocking command handling. | `Tests/WinMgrAppSupportTests/RestoreManagerTests.swift` |
+| RestoreManager | Unit/integration: load/save boundary returns nil for no file and unsupported schema, throws typed failures for corrupt JSON and invalid persisted `StoredWorld`, round-trips saved state from a temp path, pure scheduler tests prove latest-wins/stale-generation/flush/cancel semantics exactly, shell tests prove synchronous flush writes the latest `StoredWorld`, cancellation drops pending writes, and failures are reported without blocking later successful saves. | `Tests/WinMgrAppSupportTests/RestoreManagerTests.swift` |
 | IPC | Integration: in-proc client + server, send valid and invalid commands, assert exact `IPCReplyDTO` success/error JSON and open connection reuse | `Tests/WinMgrShellTests/IPCTests.swift` |
 | Menubar | Unit/integration: starts NSStatusItem, reload action invokes loader, quit action terminates app delegate path, stop handle removes item | `Tests/WinMgrShellTests/MenubarTests.swift` |
 | Startup/shutdown orchestration | Unit/integration with fake services: each `start()` returns a `ServiceHandle`; a failing later start cancels retained stream tasks and stops registered handles in reverse order, including Space/Display observer-token removal; normal app termination does the same cleanup and unlinks the IPC socket | `Tests/WinMgrShellTests/StartupTests.swift` |
