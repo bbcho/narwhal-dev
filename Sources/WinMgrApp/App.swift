@@ -1310,12 +1310,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 code: "focus_failed",
                 message: "Focus cycle \(direction.rawValue) failed; see WinMgrApp log"
             )
-        case .focus:
-            return .error(
-                commandID: commandID,
-                code: "not_implemented",
-                message: "IPC command is not implemented in the current build: \(command)"
-            )
+        case .focus(let windowID):
+            if let failure = await performExplicitFocus(windowID: windowID) {
+                return .error(commandID: commandID, code: failure.code, message: failure.message)
+            }
+            return .ok(commandID: commandID)
         }
     }
 
@@ -1453,6 +1452,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return CommandExecutionFailure(
                 code: "apply_failed",
                 message: "Toggle float layout write failed; see WinMgrApp log"
+            )
+        case .failure(let error):
+            return CommandExecutionFailure(code: error.code, message: error.message)
+        }
+    }
+
+    @MainActor
+    private func performExplicitFocus(windowID: WindowID) async -> CommandExecutionFailure? {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            return CommandExecutionFailure(
+                code: "accessibility_not_trusted",
+                message: "Accessibility permission is not trusted"
+            )
+        }
+
+        let displays = displayClient.currentDisplays()
+        let environment = await refreshEnvironment(reason: "ipc focus", displays: displays)
+        guard environment.activeSpace != nil else {
+            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
+        }
+        guard case .complete = environment.quality else {
+            return CommandExecutionFailure(
+                code: "environment_incomplete",
+                message: "IPC focus requires a complete AX snapshot; got \(describe(environment.quality))"
+            )
+        }
+
+        switch await worldActor.planFocus(windowID) {
+        case .success(let result):
+            if await focusWindow(result, reason: "ipc focus") {
+                return nil
+            }
+            return CommandExecutionFailure(
+                code: "focus_failed",
+                message: "Focus \(windowID.description) failed; see WinMgrApp log"
             )
         case .failure(let error):
             return CommandExecutionFailure(code: error.code, message: error.message)

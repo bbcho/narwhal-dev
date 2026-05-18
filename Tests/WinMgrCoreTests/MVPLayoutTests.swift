@@ -553,6 +553,106 @@ struct MVPLayoutTests {
         #expect(apply(.toggleFloat(window), to: world) == .failure(.windowNotResizable(window)))
     }
 
+    @Test("Apply focus records focused window without changing layout state")
+    func applyFocusRecordsFocusedWindowOnly() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let tree = pushIntoTree(second, .right, pushIntoTree(first, .left, .void))
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: tree, floating: [second])],
+                    focused: first
+                )
+            ],
+            windows: [
+                first: metadata(for: first),
+                second: metadata(for: second)
+            ],
+            windowDisplay: [
+                first: display,
+                second: display
+            ],
+            windowConstraints: [second: WindowConstraints(minWidth: 500)],
+            pendingRules: [second: .forceFloat],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.focus(second), to: world) else {
+            Issue.record("Expected focus to succeed")
+            return
+        }
+
+        #expect(next.spaces[space]?.focused == second)
+        #expect(next.spaces[space]?.displays == world.spaces[space]?.displays)
+        #expect(next.displays == world.displays)
+        #expect(next.windows == world.windows)
+        #expect(next.windowDisplay == world.windowDisplay)
+        #expect(next.windowConstraints == world.windowConstraints)
+        #expect(next.pendingRules == world.pendingRules)
+        #expect(next.config == world.config)
+    }
+
+    @Test("Apply focus can create the active Space focus record")
+    func applyFocusCreatesActiveSpaceFocusRecord() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 1)
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [:],
+            windows: [window: metadata(for: window)],
+            windowDisplay: [window: display],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.focus(window), to: world) else {
+            Issue.record("Expected focus to create active Space state")
+            return
+        }
+
+        #expect(next.spaces[space] == SpaceState(id: space, displays: [:], focused: window))
+    }
+
+    @Test("Apply focus rejects missing windows and missing active Space")
+    func applyFocusRejectsInvalidState() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 1)
+        let missing = WindowID(raw: 99)
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [space: SpaceState(id: space, displays: [:], focused: nil)],
+            windows: [window: metadata(for: window)],
+            windowDisplay: [window: display],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+        let noActiveSpace = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: nil,
+            spaces: [:],
+            windows: [window: metadata(for: window)],
+            windowDisplay: [window: display],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        #expect(apply(.focus(missing), to: world) == .failure(.windowNotFound(missing)))
+        #expect(apply(.focus(window), to: noActiveSpace) == .failure(.activeSpaceUnavailable))
+    }
+
     @Test("Third left push splits the bottom-left leaf toward center")
     func thirdLeftPushSplitsCenterFacingLeaf() throws {
         let first = WindowID(raw: 1)

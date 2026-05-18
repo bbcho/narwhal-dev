@@ -249,6 +249,20 @@ actor WorldActor {
         return .success(FocusPlanResult(window: target, frame: targetFrame))
     }
 
+    func planFocus(_ windowID: WindowID) -> Result<FocusPlanResult, CommandError> {
+        guard let target = world.windows[windowID] else {
+            return .failure(.windowNotFound(windowID))
+        }
+        let targetFrame: CGRect
+        switch flattenedLayout(of: world) {
+        case .success(let layout):
+            targetFrame = layout.tiled[windowID] ?? target.frame
+        case .failure:
+            targetFrame = target.frame
+        }
+        return .success(FocusPlanResult(window: target, frame: targetFrame))
+    }
+
     func recordObservedConstraints(_ observations: [WindowID: WindowConstraints]) {
         for (windowID, constraints) in observations {
             world = WinMgrCore.recordObservedConstraints(constraints, for: windowID, in: world)

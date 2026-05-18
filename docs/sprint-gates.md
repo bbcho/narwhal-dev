@@ -505,3 +505,36 @@ Observed Rung 24 results:
 | Date | Commit | Core/DTO tests | App smoke | Known failures |
 |---|---|---|---|---|
 | 2026-05-18 | `f14bd27` | Passed: exact core tests cover tiled-to-floating toggle, floating-to-center-tiled toggle, active `SpaceState` creation, non-resizable floating-window rejection, preserved metadata/display/constraints/pending rules, and stable IPC `toggleFloat` JSON; full suite passed 141 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
+
+## Rung 25: Explicit Focus Command
+
+This post-MVP gate makes existing `Command.focus` and IPC `focus` executable.
+Focus is intentionally not a layout operation: the pure core records active
+Space focus state, and the shell performs the AX raise/focus effect.
+
+Commands:
+
+```sh
+CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+scripts/smoke_startup_shutdown.sh
+```
+
+Pass criteria:
+
+- `apply(.focus(windowID), to:)` records `SpaceState.focused` without changing
+  tree shape, floating order, displays, windows, display ownership,
+  constraints, pending rules, or config.
+- `apply(.focus(windowID), to:)` can create an empty active `SpaceState` when
+  `World.activeSpace` is known.
+- Missing windows fail with `.windowNotFound`; missing active Space fails with
+  `.activeSpaceUnavailable`.
+- IPC JSON encodes and decodes the stable
+  `{"command":"focus","windowID":...}` shape.
+- Explicit IPC focus refreshes a complete environment snapshot, plans against
+  live metadata, calls the existing AX focus path, records the expected focus
+  echo, updates the focus border, and returns structured IPC errors on failure.
+
+Observed Rung 25 results:
+
+| Date | Commit | Core/DTO tests | App smoke | Known failures |
+|---|---|---|---|---|

@@ -160,6 +160,25 @@ Rules:
 
 ---
 
+## Focus Semantics
+
+Focus is not a layout command. It records intent in `World.spaces[active].focused`
+and asks the shell to raise/focus the matching AX window.
+
+Rules:
+
+1. `focus(window)` requires a known live `WindowID` and an active Space.
+2. The pure transition may create an empty active `SpaceState` to record focus,
+   but it must not change BSP trees, floating order, display ownership,
+   constraints, pending rules, or config.
+3. The shell must refresh a complete environment snapshot before explicit IPC
+   focus so stale window IDs fail as `.windowNotFound`.
+4. A successful shell focus call records an expected focus echo and updates the
+   focus border using the current tiled frame if available, otherwise the live
+   window frame.
+
+---
+
 ## Min-size-aware layout solver
 
 macOS apps own their window minimum sizes. Accessibility can request a frame, but it cannot override an app's `NSWindow` or Auto Layout constraints. Finder, for example, may clamp a requested `490.67 px` width to `500 px`.
@@ -341,6 +360,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 22 | Quarter drag-zone actions | `WinMgrCoreTests` prove configured `.insertAsQuarter` zones place a dragged window into each exact display corner and preserve persistent void lanes; unsupported subtree actions still fail explicitly | Custom subtree-targeted zones |
 | 23 | Eject command | `WinMgrCoreTests` prove `.eject` moves a tiled window to the floating layer while preserving the zone shape; IPC DTO tests prove stable JSON; startup/shutdown smoke proves the app shell still boots with the new command route | Toggle-float, resize-split, balance |
 | 24 | Toggle-float command | `WinMgrCoreTests` prove `.toggleFloat` ejects tiled windows, center-tiles floating windows, preserves state metadata, and rejects non-resizable floating windows; IPC DTO tests prove stable JSON; startup/shutdown smoke proves the app shell still boots with the new command route | User-selected default key binding, resize-split, balance |
+| 25 | Explicit focus command | `WinMgrCoreTests` prove `.focus` records focused window state without layout mutation; IPC DTO tests prove stable JSON; startup/shutdown smoke proves explicit IPC focus routing does not break app startup | Resize-split, balance |
 
 ### Fast-path constraints
 
@@ -435,7 +455,7 @@ Apply the 5-question test to every planned function. Tag `[CORE]` or `[SHELL]`.
 
 | Function | Module | Notes |
 |---|---|---|
-| `apply(_ cmd: Command, to: World) -> Result<World, CommandError>` | Apply.swift | Central transition for implemented commands, including push, center, eject, toggle-float, swap, drop-zone actions, reset, restore/reconcile, and config reload. Deterministic. |
+| `apply(_ cmd: Command, to: World) -> Result<World, CommandError>` | Apply.swift | Central transition for implemented commands, including push, center, eject, toggle-float, focus, swap, drop-zone actions, reset, restore/reconcile, and config reload. Deterministic. |
 | `reconcileEnvironment(_:EnvironmentSnapshot, world:World) -> World` | Apply.swift | Updates active Space/display/window maps from a complete AX snapshot; preserves prior window state on partial snapshots. |
 | `resetTilingState(in:World) -> World` | Apply.swift | Clears BSP trees, floating lists, focus, pending rules, and observed min-size constraints while preserving live window/display inventory and config. |
 | `recordObservedConstraints(_:WindowConstraints, for:WindowID, in:World) -> World` | Apply.swift | Pure merge of AX clamp feedback into `world.windowConstraints`; maxes minimums, never lowers them during a session. |
@@ -476,7 +496,7 @@ All "no" on the 5 questions:
 |---|---|---|
 | `AXClient.listWindows() @MainActor async -> AXWindowSnapshot` | AXClient | Reads from OS and returns partial-failure metadata. |
 | `AXClient.setFrame(_:WindowID, _:CGRect) @MainActor async -> AXFrameWriteOutcome` | AXClient | Writes window frame to OS. Separates convergence, app clamp, and infrastructure failure. |
-| `AXClient.focusWindow(_:WindowID) @MainActor async throws` | AXClient | Raises and focuses a macOS window. |
+| `AXClient.focusWindow(_:WindowMetadata) @MainActor -> Result<Void, AXClientError>` | AXClient | Raises and focuses a macOS window. |
 | `AXClient.raiseWindow(_:WindowID) @MainActor async throws` | AXClient | Raises a macOS window without changing core focus. |
 | `AXClient.focusedWindowID() @MainActor async -> WindowID?` | AXClient | Reads focused macOS window for hotkey template resolution. |
 | `AXObserver.events: AsyncStream<AXEvent>` | AXObserver | OS event source. |

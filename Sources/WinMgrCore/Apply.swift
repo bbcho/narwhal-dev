@@ -12,8 +12,8 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
         return commandNotImplemented(command)
     case .focusCycle:
         return commandNotImplemented(command)
-    case .focus:
-        return commandNotImplemented(command)
+    case .focus(let windowID):
+        return applyFocus(windowID, to: world)
     case .swapInTree(let windowID, let direction):
         return applySwap(windowID, direction: direction, to: world)
     case .resizeSplit:
@@ -156,6 +156,30 @@ private func applyToggleFloat(_ windowID: WindowID, to world: World) -> Result<W
     case .failure(let error):
         return .failure(error)
     }
+}
+
+private func applyFocus(_ windowID: WindowID, to world: World) -> Result<World, CommandError> {
+    guard world.windows[windowID] != nil else {
+        return .failure(.windowNotFound(windowID))
+    }
+    guard let activeSpace = world.activeSpace else {
+        return .failure(.activeSpaceUnavailable)
+    }
+
+    var spaces = world.spaces
+    let space = spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
+    spaces[activeSpace] = SpaceState(id: activeSpace, displays: space.displays, focused: windowID)
+
+    return .success(World(
+        displays: world.displays,
+        activeSpace: activeSpace,
+        spaces: spaces,
+        windows: world.windows,
+        windowDisplay: world.windowDisplay,
+        windowConstraints: world.windowConstraints,
+        pendingRules: world.pendingRules,
+        config: world.config
+    ))
 }
 
 private func applySwap(_ windowID: WindowID, direction: Direction, to world: World) -> Result<World, CommandError> {
