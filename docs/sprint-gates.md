@@ -287,3 +287,9 @@ Pass criteria:
 - The app process exits.
 - `/tmp/winmgr-$(id -u).sock` is removed after rollback.
 - Normal startup/shutdown smoke still passes.
+
+Observed Rung 18 results:
+
+| Date | Commit | Failure injection | Rollback proof | Normal startup/shutdown | Known failures |
+|---|---|---|---|---|---|
+| 2026-05-18 | `11902b2` | Passed: `--debug-fail-service-start dragZones` failed before `Drag zones ready` and before `Layout command loop ready` | Passed: IPC server logged ready, failure logged after `ipcServer`, process exited, and `/tmp/winmgr-501.sock` was removed | Passed: `scripts/smoke_startup_shutdown.sh` still completed reset, quit, process exit, and socket cleanup | None |
