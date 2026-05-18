@@ -431,3 +431,4 @@ Observed Rung 22 results:
 
 | Date | Commit | Quarter insertion tests | Drop-zone integration | Known failures |
 |---|---|---|---|---|
+| 2026-05-18 | `0a4fc40` | Passed: pure tests cover all four empty-tree corners, durable opposite void lanes, and repeated top-left insertion splitting toward center without duplicate occupied windows; full suite passed 134 tests / 18 suites | Passed: configured `.insertAsQuarter` zones for top-left, top-right, bottom-left, and bottom-right each produce exact display-corner frames through `.dropAtZone`; unsupported `.insertAtSubtree([0, 1])` still fails explicitly | None |
