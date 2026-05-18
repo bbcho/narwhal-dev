@@ -18,8 +18,8 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
         return applySwap(windowID, direction: direction, to: world)
     case .resizeSplit:
         return commandNotImplemented(command)
-    case .balance:
-        return commandNotImplemented(command)
+    case .balance(let spaceID):
+        return applyBalance(spaceID, to: world)
     case .toggleFloat(let windowID):
         return applyToggleFloat(windowID, to: world)
     case .dropAtZone(let windowID, let displayID, let zoneID):
@@ -232,6 +232,33 @@ private func applySwap(_ windowID: WindowID, direction: Direction, to world: Wor
         spaces: spaces,
         windows: world.windows,
         windowDisplay: windowDisplay,
+        windowConstraints: world.windowConstraints,
+        pendingRules: world.pendingRules,
+        config: world.config
+    ))
+}
+
+private func applyBalance(_ spaceID: SpaceID, to world: World) -> Result<World, CommandError> {
+    guard let space = world.spaces[spaceID] else {
+        return .failure(.spaceNotFound(spaceID))
+    }
+
+    let displayStates = space.displays.mapValues { displayState in
+        DisplaySpaceState(
+            displayID: displayState.displayID,
+            tree: balanceTree(displayState.tree),
+            floating: displayState.floating
+        )
+    }
+    var spaces = world.spaces
+    spaces[spaceID] = SpaceState(id: space.id, displays: displayStates, focused: space.focused)
+
+    return .success(World(
+        displays: world.displays,
+        activeSpace: world.activeSpace,
+        spaces: spaces,
+        windows: world.windows,
+        windowDisplay: world.windowDisplay,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config

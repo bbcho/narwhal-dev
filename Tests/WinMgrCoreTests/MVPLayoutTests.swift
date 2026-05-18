@@ -653,6 +653,112 @@ struct MVPLayoutTests {
         #expect(apply(.focus(window), to: noActiveSpace) == .failure(.activeSpaceUnavailable))
     }
 
+    @Test("Balance tree normalizes every split weight without changing slots")
+    func balanceTreeNormalizesEverySplitWeight() throws {
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let tree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 3, node: .leaf(first)),
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 4, node: .leaf(second)),
+                try cell(weight: 2, node: .void)
+            ])))
+        ]))
+
+        let balanced = balanceTree(tree)
+
+        #expect(balanced == Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .leaf(first)),
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1, node: .leaf(second)),
+                try cell(weight: 1, node: .void)
+            ])))
+        ])))
+        #expect(slots(in: balanced) == [
+            TreeSlot(path: [0], occupancy: .occupied(first)),
+            TreeSlot(path: [1, 0], occupancy: .occupied(second)),
+            TreeSlot(path: [1, 1], occupancy: .empty)
+        ])
+
+        let result = frames(for: balanced)
+        #expect(result[first] == CGRect(x: 0, y: 0, width: 600, height: 800))
+        #expect(result[second] == CGRect(x: 600, y: 0, width: 600, height: 400))
+    }
+
+    @Test("Apply balance normalizes one Space while preserving world metadata")
+    func applyBalanceNormalizesSelectedSpaceOnly() throws {
+        let display = DisplayID(raw: 1)
+        let selectedSpace = SpaceID(raw: 1)
+        let otherSpace = SpaceID(raw: 2)
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let floating = WindowID(raw: 3)
+        let selectedTree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 5, node: .leaf(first)),
+            try cell(weight: 1, node: .leaf(second))
+        ]))
+        let otherTree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 7, node: .leaf(first)),
+            try cell(weight: 1, node: .void)
+        ]))
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: selectedSpace,
+            spaces: [
+                selectedSpace: SpaceState(
+                    id: selectedSpace,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: selectedTree, floating: [floating])],
+                    focused: second
+                ),
+                otherSpace: SpaceState(
+                    id: otherSpace,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: otherTree, floating: [])],
+                    focused: first
+                )
+            ],
+            windows: [
+                first: metadata(for: first),
+                second: metadata(for: second),
+                floating: metadata(for: floating)
+            ],
+            windowDisplay: [
+                first: display,
+                second: display,
+                floating: display
+            ],
+            windowConstraints: [second: WindowConstraints(minWidth: 500)],
+            pendingRules: [floating: .forceFloat],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.balance(selectedSpace), to: world) else {
+            Issue.record("Expected balance to succeed")
+            return
+        }
+
+        #expect(next.spaces[selectedSpace]?.displays[display]?.tree == Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .leaf(first)),
+            try cell(weight: 1, node: .leaf(second))
+        ])))
+        #expect(next.spaces[selectedSpace]?.displays[display]?.floating == [floating])
+        #expect(next.spaces[selectedSpace]?.focused == second)
+        #expect(next.spaces[otherSpace] == world.spaces[otherSpace])
+        #expect(next.displays == world.displays)
+        #expect(next.activeSpace == world.activeSpace)
+        #expect(next.windows == world.windows)
+        #expect(next.windowDisplay == world.windowDisplay)
+        #expect(next.windowConstraints == world.windowConstraints)
+        #expect(next.pendingRules == world.pendingRules)
+        #expect(next.config == world.config)
+    }
+
+    @Test("Apply balance rejects missing Spaces")
+    func applyBalanceRejectsMissingSpace() throws {
+        let missing = SpaceID(raw: 99)
+
+        #expect(apply(.balance(missing), to: World.empty) == .failure(.spaceNotFound(missing)))
+    }
+
     @Test("Third left push splits the bottom-left leaf toward center")
     func thirdLeftPushSplitsCenterFacingLeaf() throws {
         let first = WindowID(raw: 1)

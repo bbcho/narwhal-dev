@@ -77,6 +77,18 @@ public func swapWindowsInTree(_ first: WindowID, _ second: WindowID, _ node: Nod
     }
 }
 
+public func balanceTree(_ node: Node) -> Node {
+    switch node {
+    case .void, .leaf:
+        return node
+    case .split(let split):
+        let cells = split.cells.map { cell in
+            makeCell(weight: 1, node: balanceTree(cell.node))
+        }
+        return .split(makeSplit(axis: split.axis, cells: cells))
+    }
+}
+
 private func clearWindowPreservingZones(_ window: WindowID, from node: Node) -> Node {
     switch node {
     case .void:

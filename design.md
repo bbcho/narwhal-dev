@@ -136,6 +136,30 @@ This makes swap a rearrangement operation, not a new insertion. It must not coll
 
 ---
 
+## Balance Semantics
+
+Balance is a tree-weight normalization operation. It does not insert, remove,
+compact, or reorder windows.
+
+Rules:
+
+1. `balance(spaceID)` targets exactly the supplied Space. If that Space is not
+   in `World.spaces`, the command fails with `.spaceNotFound(spaceID)`.
+2. Every split in every display tree in the selected Space keeps its original
+   `Axis` and cell count.
+3. Every child `Cell.weight` in each split is reset to `1`.
+4. The operation recurses through nested splits and preserves all `.leaf` and
+   `.void` terminal slots at the same paths.
+5. Floating order, focused window, display inventory, live window metadata,
+   display ownership, observed constraints, pending rules, and config are
+   preserved exactly.
+6. Balance is currently a core transition. A user-facing IPC/config binding
+   must choose an explicit active-Space resolution rule before exposing it.
+
+This makes balance a layout-shape cleanup, not a tree rewrite.
+
+---
+
 ## Float Semantics
 
 Floating is tracked per display as back-to-front `WindowID` order. The shell
@@ -361,6 +385,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 23 | Eject command | `WinMgrCoreTests` prove `.eject` moves a tiled window to the floating layer while preserving the zone shape; IPC DTO tests prove stable JSON; startup/shutdown smoke proves the app shell still boots with the new command route | Toggle-float, resize-split, balance |
 | 24 | Toggle-float command | `WinMgrCoreTests` prove `.toggleFloat` ejects tiled windows, center-tiles floating windows, preserves state metadata, and rejects non-resizable floating windows; IPC DTO tests prove stable JSON; startup/shutdown smoke proves the app shell still boots with the new command route | User-selected default key binding, resize-split, balance |
 | 25 | Explicit focus command | `WinMgrCoreTests` prove `.focus` records focused window state without layout mutation; IPC DTO tests prove stable JSON; startup/shutdown smoke proves explicit IPC focus routing does not break app startup | Resize-split, balance |
+| 26 | Balance command core | `WinMgrCoreTests` prove `.balance(spaceID)` recursively normalizes all split weights in the selected Space while preserving tree shape, void leaves, floating order, focus, and world metadata | User-facing balance IPC/key binding, resize-split |
 
 ### Fast-path constraints
 
@@ -463,6 +488,7 @@ Apply the 5-question test to every planned function. Tag `[CORE]` or `[SHELL]`.
 | `centerIntoTree(_:WindowID, _:Node) -> Node` | Tree.swift | Establishes 3-column root or splits center vertically. |
 | `quarterIntoTree(_:WindowID, _:Corner, _:Node) -> Node` | Tree.swift | Creates or targets the left/right side lane, then splits its top/bottom half for exact corner drag-zone placement while preserving void lanes. |
 | `swapWindowsInTree(_:WindowID, _:WindowID, _:Node) -> Node` | Tree.swift | Exchanges two occupied leaves without changing split shape, weights, or void leaves. |
+| `balanceTree(_:Node) -> Node` | Tree.swift | Recursively resets every split cell weight to `1` while preserving axes, cell counts, leaf paths, and void paths. |
 | `ejectFromTree(_:WindowID, _:Node) -> Node` | Tree.swift | Replaces the leaf with `.void` and preserves the zone shape. |
 | `nodesInTree(_:Node) -> [(NodePath, Node)]` | Tree.swift | Pure traversal materialized as values; callers cannot hide effects in a visitor closure. |
 | `nodeAt(_:NodePath, in:Node) -> Node?` | Tree.swift | Path-indexed lookup. |

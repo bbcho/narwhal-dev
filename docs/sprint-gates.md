@@ -539,3 +539,34 @@ Observed Rung 25 results:
 | Date | Commit | Core/DTO tests | App smoke | Known failures |
 |---|---|---|---|---|
 | 2026-05-18 | `c2f64d1` | Passed: exact core tests cover focused-state update without layout mutation, empty active `SpaceState` creation, `.windowNotFound`, `.activeSpaceUnavailable`, and stable IPC `focus` JSON; full suite passed 144 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket; startup logged a transient focused-window AX read error but the gate completed | None |
+
+## Rung 26: Balance Command Core
+
+This post-MVP core gate makes existing `Command.balance(spaceID)` executable
+for pure world transitions. Balance is not yet exposed through IPC or default
+key bindings because the command surface still needs an explicit active-Space
+resolution rule.
+
+Commands:
+
+```sh
+CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+scripts/smoke_startup_shutdown.sh
+```
+
+Pass criteria:
+
+- `balanceTree(_:)` recursively resets every split `Cell.weight` to `1`.
+- Balance preserves every split axis, cell count, occupied leaf path, and
+  `.void` path.
+- `apply(.balance(spaceID), to:)` normalizes every display tree in the selected
+  Space only.
+- Balance preserves floating order, focused window, active Space pointer,
+  display inventory, live window metadata, display ownership, observed
+  constraints, pending rules, and config.
+- Missing Spaces fail with `.spaceNotFound(spaceID)`.
+
+Observed Rung 26 results:
+
+| Date | Commit | Core tests | App smoke | Known failures |
+|---|---|---|---|---|
