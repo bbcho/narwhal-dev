@@ -357,3 +357,4 @@ Observed Rung 20 results:
 
 | Date | Commit | Restore tests | App runtime proof | Known failures |
 |---|---|---|---|---|
+| 2026-05-18 | `3a5ad57` | Passed: 5 `Restore persistence boundary` tests cover missing file, unsupported schema, corrupt JSON, invalid stored world, and save/load round-trip; full suite passed 123 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` used `/private/tmp/winmgr-startup-shutdown-smoke/state.json`, logged restore miss, saved state on IPC reset, handled IPC quit, exited, and removed the socket | None |
