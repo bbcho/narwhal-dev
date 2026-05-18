@@ -640,6 +640,7 @@ Observed Rung 28 results:
 
 | Date | Commit | Core tests | App smoke | Known failures |
 |---|---|---|---|---|
+| 2026-05-18 | `0a00be4` | Passed: exact tests cover nearest matching ancestor selection, exact split weight transfer, preserved occupied and void paths, `.windowNotFound`, `.noNeighbor`, `.nonFiniteDelta`, `.nonPositiveWeight`, stable `CommandError` mapping, non-resizable rejection, and min-size-aware flattened frames; full suite passed 155 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config with unchanged 15 default hotkeys, completed environment refresh, registered hotkeys, brought IPC online, accepted IPC balance/reset/quit, flushed restore state, stopped the app, and removed the socket | None |
 
 ## Rung 29: Resize-Split Shell Route
 
@@ -677,3 +678,4 @@ Observed Rung 29 results:
 
 | Date | Commit | Core/DTO/config tests | App smoke | Known failures |
 |---|---|---|---|---|
+| 2026-05-18 | `0a00be4` | Passed: exact tests cover focused and explicit IPC `resizeSplit` JSON, focused-window resolution failure, explicit `.resizeSplit` resolution, Lua parser support for `resize_split`, exact Lua renderer output, non-finite Lua delta rejection at `keymap[1].action.delta`, CLI build, and unchanged default keymap; full suite passed 155 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` completed the app shell route startup/IPC lifecycle, and `scripts/smoke_config_hot_reload.sh` proved config watcher reload/last-good behavior still works after adding the resize action parser | None |
