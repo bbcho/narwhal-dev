@@ -538,3 +538,4 @@ Observed Rung 25 results:
 
 | Date | Commit | Core/DTO tests | App smoke | Known failures |
 |---|---|---|---|---|
+| 2026-05-18 | `c2f64d1` | Passed: exact core tests cover focused-state update without layout mutation, empty active `SpaceState` creation, `.windowNotFound`, `.activeSpaceUnavailable`, and stable IPC `focus` JSON; full suite passed 144 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket; startup logged a transient focused-window AX read error but the gate completed | None |
