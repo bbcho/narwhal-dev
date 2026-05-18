@@ -320,3 +320,9 @@ Pass criteria:
 - The `dragZones` case proves IPC was live before rollback by observing
   `IPC server ready at /tmp/winmgr-$(id -u).sock`.
 - Normal startup/shutdown smoke still passes.
+
+Observed Rung 19 results:
+
+| Date | Commit | Matrix cases | Rollback proof | Normal startup/shutdown | Known failures |
+|---|---|---|---|---|---|
+| 2026-05-18 | `8a667c0` | Passed: `menubar`, `hotkeys`, `axObserver`, `displayObserver`, `configWatcher`, `ipcServer`, and `dragZones` each logged the exact prior-service list | Passed: no case reached `Drag zones ready` or `Layout command loop ready`; every case exited and left `/tmp/winmgr-501.sock` absent; `dragZones` observed IPC ready before rollback | Passed: `scripts/smoke_startup_shutdown.sh` still completed reset, quit, process exit, and socket cleanup | None |
