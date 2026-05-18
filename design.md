@@ -311,6 +311,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 16 | Startup/shutdown smoke | `scripts/smoke_startup_shutdown.sh` proves service startup, temp restore-state path, IPC reset, IPC quit, `applicationWillTerminate`, process exit, and socket cleanup | Unit-level fake service orchestration |
 | 17 | Service lifecycle orchestration | `WinMgrAppSupportTests` prove ordered startup, reverse-order rollback on a later startup failure, and idempotent normal shutdown | Real AX shell startup failure injection |
 | 18 | Startup failure rollback smoke | `scripts/smoke_startup_failure_rollback.sh` injects a failure at `dragZones` after IPC startup; app terminates and the IPC socket is removed without reaching layout-loop ready | Broader failure injection matrix |
+| 19 | Startup failure matrix | `scripts/smoke_startup_failure_matrix.sh` injects failure at every service boundary and proves each rollback terminates without layout-loop readiness or leftover IPC socket | Adapter-specific failure simulations |
 
 ### Fast-path constraints
 

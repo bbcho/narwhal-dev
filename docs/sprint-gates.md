@@ -293,3 +293,30 @@ Observed Rung 18 results:
 | Date | Commit | Failure injection | Rollback proof | Normal startup/shutdown | Known failures |
 |---|---|---|---|---|---|
 | 2026-05-18 | `11902b2` | Passed: `--debug-fail-service-start dragZones` failed before `Drag zones ready` and before `Layout command loop ready` | Passed: IPC server logged ready, failure logged after `ipcServer`, process exited, and `/tmp/winmgr-501.sock` was removed | Passed: `scripts/smoke_startup_shutdown.sh` still completed reset, quit, process exit, and socket cleanup | None |
+
+## Rung 19: Startup Failure Matrix
+
+This post-MVP shell gate expands Rung 18 from one late failure to every runtime
+service boundary. It proves the injected failure runs before the target service
+effect and that rollback leaves no running process or IPC socket.
+
+Commands:
+
+```sh
+CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+scripts/smoke_startup_failure_matrix.sh
+scripts/smoke_startup_shutdown.sh
+```
+
+Pass criteria:
+
+- Matrix covers `menubar`, `hotkeys`, `axObserver`, `displayObserver`,
+  `configWatcher`, `ipcServer`, and `dragZones`.
+- Each case logs `service startup failed at <service> after starting <exact prior services>`.
+- Each case logs `Runtime service startup failed; terminating`.
+- No case logs `Drag zones ready` or `Layout command loop ready`.
+- Each case exits its `WinMgrApp` process.
+- `/tmp/winmgr-$(id -u).sock` is absent after every case.
+- The `dragZones` case proves IPC was live before rollback by observing
+  `IPC server ready at /tmp/winmgr-$(id -u).sock`.
+- Normal startup/shutdown smoke still passes.
