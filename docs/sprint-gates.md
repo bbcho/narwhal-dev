@@ -363,7 +363,10 @@ Observed Rung 20 results:
 
 This post-MVP shell-support gate keeps command handling from blocking on restore
 JSON writes. Successful outcomes schedule a debounced save of the latest
-`StoredWorld`; app-owned quit paths flush any pending save before exit.
+`StoredWorld`; app-owned quit paths and `applicationWillTerminate` flush any
+pending save before exit. Local install/uninstall requests graceful IPC quit
+before falling back to `launchctl bootout`, so replacement/removal can use the
+same flush path when the running app is responsive.
 
 Commands:
 
@@ -374,15 +377,19 @@ scripts/smoke_startup_shutdown.sh
 
 Pass criteria:
 
-- Unit tests prove multiple scheduled saves coalesce to the latest `StoredWorld`.
-- Unit tests prove `flushPending()` writes immediately and cancels the delayed
-  write.
-- Unit tests prove explicit cancellation drops the pending write.
-- Unit tests prove a failed save emits an exact failure event and a later
-  scheduled save can still succeed.
+- Unit tests prove pure scheduler state transitions for latest-wins scheduling,
+  stale generation rejection, flush-once, and explicit cancellation.
+- Shell tests prove `flushPending()` writes the latest pending save immediately
+  and cancels the delayed write.
+- Shell tests prove explicit cancellation drops the pending write.
+- Shell tests prove a failed save emits an exact failure event and a later
+  scheduled flush can still succeed.
 - `WinMgrApp` schedules restore persistence after successful command outcomes
   instead of writing synchronously on the main command path.
-- App-owned quit paths flush any pending restore save before `WinMgrApp stopped`.
+- App-owned quit paths and AppKit termination flush any pending restore save
+  before `WinMgrApp stopped`.
+- Local install/uninstall scripts attempt `winmgrctl quit` and wait briefly for
+  the IPC socket to disappear before `launchctl bootout`.
 - Startup/shutdown smoke still passes with `--restore-state`, proving IPC reset
   schedules restore persistence and IPC quit exits cleanly after the pending
   save is flushed.
@@ -391,4 +398,5 @@ Observed Rung 21 results:
 
 | Date | Commit | Scheduler tests | App runtime proof | Known failures |
 |---|---|---|---|---|
+| 2026-05-18 | `6e7102a` | Passed: 7 restore scheduler tests cover pure latest-wins state, stale timer rejection, flush-once, cancellation, synchronous shell flush of latest save, failed-save event, and later successful flush; full suite passed 130 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` logged IPC reset, IPC quit, `Restore state saved (ipc reset)` to `/private/tmp/winmgr-startup-shutdown-smoke/state.json`, `WinMgrApp stopped`, process exit, and socket removal; `bash -n` passed for install/uninstall; no-launchctl install/uninstall completed | None |
 | 2026-05-18 | `55d649a` | Passed: 4 scheduler tests cover latest-wins debounce, immediate flush canceling delayed write, explicit cancellation, failed-save event, and later successful save; full suite passed 127 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` logged IPC reset, IPC quit, `Restore state saved (ipc reset)` to `/private/tmp/winmgr-startup-shutdown-smoke/state.json`, `WinMgrApp stopped`, process exit, and socket removal | None |
