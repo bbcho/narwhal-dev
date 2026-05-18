@@ -15,7 +15,7 @@ public enum RestoreManagerError: Error, CustomStringConvertible, Equatable {
     }
 }
 
-public struct RestoreManager {
+public struct RestoreManager: Sendable {
     public static let defaultURL = FileManager.default
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("winmgr", isDirectory: true)
@@ -59,5 +59,137 @@ public struct RestoreManager {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(stored)
         try data.write(to: url, options: [.atomic])
+    }
+}
+
+public struct RestoreSaveSuccess: Equatable, Sendable {
+    public let generation: UInt64
+    public let reason: String
+    public let urlPath: String
+
+    public init(generation: UInt64, reason: String, urlPath: String) {
+        self.generation = generation
+        self.reason = reason
+        self.urlPath = urlPath
+    }
+}
+
+public struct RestoreSaveFailure: Equatable, Sendable {
+    public let generation: UInt64
+    public let reason: String
+    public let urlPath: String
+    public let message: String
+
+    public init(generation: UInt64, reason: String, urlPath: String, message: String) {
+        self.generation = generation
+        self.reason = reason
+        self.urlPath = urlPath
+        self.message = message
+    }
+}
+
+public enum RestoreSaveEvent: Equatable, Sendable {
+    case saved(RestoreSaveSuccess)
+    case failed(RestoreSaveFailure)
+}
+
+public actor RestoreSaveScheduler {
+    public typealias Save = @Sendable (StoredWorld) throws -> Void
+    public typealias Observe = @Sendable (RestoreSaveEvent) async -> Void
+
+    private struct PendingSave: Sendable {
+        let generation: UInt64
+        let stored: StoredWorld
+        let reason: String
+    }
+
+    private let urlPath: String
+    private let debounceNanoseconds: UInt64
+    private let save: Save
+    private let observe: Observe
+    private var nextGeneration: UInt64 = 0
+    private var pending: PendingSave?
+    private var scheduledTask: Task<Void, Never>?
+
+    public init(
+        manager: RestoreManager,
+        debounceNanoseconds: UInt64 = 250_000_000,
+        observe: @escaping Observe = { _ in }
+    ) {
+        self.init(
+            urlPath: manager.url.path,
+            debounceNanoseconds: debounceNanoseconds,
+            save: { stored in
+                try manager.save(stored)
+            },
+            observe: observe
+        )
+    }
+
+    public init(
+        urlPath: String,
+        debounceNanoseconds: UInt64,
+        save: @escaping Save,
+        observe: @escaping Observe = { _ in }
+    ) {
+        self.urlPath = urlPath
+        self.debounceNanoseconds = debounceNanoseconds
+        self.save = save
+        self.observe = observe
+    }
+
+    public func scheduleSave(_ stored: StoredWorld, reason: String) {
+        nextGeneration += 1
+        let scheduled = PendingSave(generation: nextGeneration, stored: stored, reason: reason)
+        pending = scheduled
+
+        scheduledTask?.cancel()
+        scheduledTask = Task { [debounceNanoseconds] in
+            do {
+                try await Task.sleep(nanoseconds: debounceNanoseconds)
+            } catch {
+                return
+            }
+            await self.flushIfCurrent(generation: scheduled.generation)
+        }
+    }
+
+    public func flushPending() async {
+        scheduledTask?.cancel()
+        scheduledTask = nil
+        guard let current = pending else { return }
+        pending = nil
+        await saveAndObserve(current)
+    }
+
+    public func cancelPending() {
+        scheduledTask?.cancel()
+        scheduledTask = nil
+        pending = nil
+    }
+
+    private func flushIfCurrent(generation: UInt64) async {
+        guard let current = pending, current.generation == generation else { return }
+        scheduledTask = nil
+        pending = nil
+        await saveAndObserve(current)
+    }
+
+    private func saveAndObserve(_ current: PendingSave) async {
+        do {
+            try save(current.stored)
+            await observe(.saved(RestoreSaveSuccess(
+                generation: current.generation,
+                reason: current.reason,
+                urlPath: urlPath
+            )))
+        } catch {
+            await observe(.failed(RestoreSaveFailure(
+                generation: current.generation,
+                reason: current.reason,
+                urlPath: urlPath,
+                message: String(describing: error)
+            )))
+        }
     }
 }

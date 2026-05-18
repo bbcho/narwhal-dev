@@ -92,10 +92,140 @@ struct RestoreManagerTests {
         #expect(savedJSON.contains(#""displayFingerprint" : "main-display""#))
     }
 
-    private func storedWorldFixture() -> StoredWorld {
+    @Test("Scheduled saves debounce to the latest stored world")
+    func scheduledSavesDebounceToLatestStoredWorld() async throws {
+        let saves = RecordedRestoreSaves()
+        let events = RecordedRestoreEvents()
+        let scheduler = RestoreSaveScheduler(
+            urlPath: "/tmp/winmgr-state.json",
+            debounceNanoseconds: 20_000_000,
+            save: { stored in
+                try saves.save(stored)
+            },
+            observe: { event in
+                events.record(event)
+            }
+        )
+        let first = storedWorldFixture(title: "first")
+        let second = storedWorldFixture(title: "second")
+
+        await scheduler.scheduleSave(first, reason: "first")
+        await scheduler.scheduleSave(second, reason: "second")
+
+        try await waitUntil("latest debounced save") {
+            saves.savedWorlds().count == 1
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(saves.savedWorlds() == [second])
+        #expect(events.events() == [
+            .saved(RestoreSaveSuccess(
+                generation: 2,
+                reason: "second",
+                urlPath: "/tmp/winmgr-state.json"
+            ))
+        ])
+    }
+
+    @Test("Flush writes pending save immediately and cancels delayed write")
+    func flushWritesPendingSaveImmediatelyAndCancelsDelayedWrite() async throws {
+        let saves = RecordedRestoreSaves()
+        let events = RecordedRestoreEvents()
+        let scheduler = RestoreSaveScheduler(
+            urlPath: "/tmp/winmgr-state.json",
+            debounceNanoseconds: 50_000_000,
+            save: { stored in
+                try saves.save(stored)
+            },
+            observe: { event in
+                events.record(event)
+            }
+        )
+        let stored = storedWorldFixture(title: "flush")
+
+        await scheduler.scheduleSave(stored, reason: "flush")
+        await scheduler.flushPending()
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        #expect(saves.savedWorlds() == [stored])
+        #expect(events.events() == [
+            .saved(RestoreSaveSuccess(
+                generation: 1,
+                reason: "flush",
+                urlPath: "/tmp/winmgr-state.json"
+            ))
+        ])
+    }
+
+    @Test("Failed save reports failure and next schedule can save")
+    func failedSaveReportsFailureAndNextScheduleCanSave() async throws {
+        let saves = RecordedRestoreSaves(failuresBeforeSuccess: 1)
+        let events = RecordedRestoreEvents()
+        let scheduler = RestoreSaveScheduler(
+            urlPath: "/tmp/winmgr-state.json",
+            debounceNanoseconds: 20_000_000,
+            save: { stored in
+                try saves.save(stored)
+            },
+            observe: { event in
+                events.record(event)
+            }
+        )
+        let failed = storedWorldFixture(title: "failed")
+        let saved = storedWorldFixture(title: "saved")
+
+        await scheduler.scheduleSave(failed, reason: "first")
+        try await waitUntil("failed save event") {
+            events.events().count == 1
+        }
+        await scheduler.scheduleSave(saved, reason: "second")
+        try await waitUntil("successful retry save") {
+            events.events().count == 2
+        }
+
+        #expect(saves.savedWorlds() == [saved])
+        #expect(events.events() == [
+            .failed(RestoreSaveFailure(
+                generation: 1,
+                reason: "first",
+                urlPath: "/tmp/winmgr-state.json",
+                message: "boom"
+            )),
+            .saved(RestoreSaveSuccess(
+                generation: 2,
+                reason: "second",
+                urlPath: "/tmp/winmgr-state.json"
+            ))
+        ])
+    }
+
+    @Test("Cancel drops pending save without writing")
+    func cancelDropsPendingSaveWithoutWriting() async throws {
+        let saves = RecordedRestoreSaves()
+        let events = RecordedRestoreEvents()
+        let scheduler = RestoreSaveScheduler(
+            urlPath: "/tmp/winmgr-state.json",
+            debounceNanoseconds: 20_000_000,
+            save: { stored in
+                try saves.save(stored)
+            },
+            observe: { event in
+                events.record(event)
+            }
+        )
+
+        await scheduler.scheduleSave(storedWorldFixture(title: "cancel"), reason: "cancel")
+        await scheduler.cancelPending()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(saves.savedWorlds() == [])
+        #expect(events.events() == [])
+    }
+
+    private func storedWorldFixture(title: String = "Window") -> StoredWorld {
         let ref = StoredWindowRef(
             bundleID: BundleID(raw: "com.example"),
-            title: "Window",
+            title: title,
             role: "AXWindow",
             occurrence: 0,
             lastKnownFrame: CGRect(x: 10, y: 20, width: 300, height: 200)
@@ -162,4 +292,65 @@ private func requireRestoreManagerError(
 private enum RestoreManagerTestError: Error {
     case unexpectedSuccess
     case unexpectedError
+    case timeout
+}
+
+private final class RecordedRestoreSaves: @unchecked Sendable {
+    private let lock = NSLock()
+    private var failuresBeforeSuccess: Int
+    private var saved: [StoredWorld] = []
+
+    init(failuresBeforeSuccess: Int = 0) {
+        self.failuresBeforeSuccess = failuresBeforeSuccess
+    }
+
+    func save(_ stored: StoredWorld) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if failuresBeforeSuccess > 0 {
+            failuresBeforeSuccess -= 1
+            throw FakeRestoreSaveError.boom
+        }
+        saved.append(stored)
+    }
+
+    func savedWorlds() -> [StoredWorld] {
+        lock.lock()
+        defer { lock.unlock() }
+        return saved
+    }
+}
+
+private final class RecordedRestoreEvents: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [RestoreSaveEvent] = []
+
+    func record(_ event: RestoreSaveEvent) {
+        lock.lock()
+        defer { lock.unlock() }
+        recorded.append(event)
+    }
+
+    func events() -> [RestoreSaveEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+}
+
+private enum FakeRestoreSaveError: Error, CustomStringConvertible {
+    case boom
+
+    var description: String {
+        "boom"
+    }
+}
+
+private func waitUntil(_ description: String, condition: () -> Bool) async throws {
+    for _ in 0..<100 {
+        if condition() { return }
+        try await Task.sleep(nanoseconds: 5_000_000)
+    }
+    Issue.record("Timed out waiting for \(description)")
+    throw RestoreManagerTestError.timeout
 }

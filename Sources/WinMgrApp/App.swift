@@ -38,11 +38,13 @@ private enum ServiceStartupRequestError: Error, CustomStringConvertible {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let instance = AppDelegate()
     private static let environmentRefreshCoalescingDelay: TimeInterval = 0.10
+    private static let restoreSaveDebounceNanoseconds: UInt64 = 250_000_000
 
     private let axClient = AXClient()
     private let displayClient = DisplayClient()
     private let spaceClient = SpaceClient()
     private var restoreManager = RestoreManager()
+    private var restoreSaveScheduler = RestoreSaveScheduler(manager: RestoreManager())
     private let echoSuppressor = AXEchoSuppressor()
     private let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
     private let menubar = Menubar()
@@ -258,7 +260,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func configureRestoreManagerOrTerminate() -> Bool {
         switch restoreStateURLFromArguments() {
         case .success(let url):
-            restoreManager = RestoreManager(url: url)
+            let manager = RestoreManager(url: url)
+            restoreManager = manager
+            restoreSaveScheduler = restoreSaveScheduler(for: manager)
             if url != RestoreManager.defaultURL {
                 reporter.info("Using restore state path \(url.path)")
             }
@@ -280,6 +284,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .failure(.missingRestoreStatePath)
         }
         return .success(URL(fileURLWithPath: arguments[pathIndex]).standardizedFileURL)
+    }
+
+    private func restoreSaveScheduler(for manager: RestoreManager) -> RestoreSaveScheduler {
+        RestoreSaveScheduler(
+            manager: manager,
+            debounceNanoseconds: Self.restoreSaveDebounceNanoseconds
+        ) { [reporter] event in
+            await MainActor.run {
+                logRestoreSaveEvent(event, reporter: reporter)
+            }
+        }
     }
 
     private func debugServiceStartFailureFromArguments() -> Result<String?, StartupArgumentError> {
@@ -368,7 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             await performPush(direction)
-            NSApplication.shared.terminate(nil)
+            await terminateAfterFlushingRestore()
         }
     }
 
@@ -459,8 +474,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     await self?.performHotkey(.command(.resetLayout))
                 }
             },
-            quit: {
-                NSApplication.shared.terminate(nil)
+            quit: { [weak self] in
+                Task { @MainActor in
+                    await self?.terminateAfterFlushingRestore()
+                }
             }
         )
         menubar.updateConfigStatus(.loaded)
@@ -1156,9 +1173,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .ok(commandID: commandID)
         case .quit:
             reporter.info("IPC quit requested")
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 100_000_000)
-                NSApplication.shared.terminate(nil)
+                await self?.terminateAfterFlushingRestore()
             }
             return .ok(commandID: commandID)
         case .pushFocused(let direction):
@@ -1329,18 +1346,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func persistRestore(reason: String) async {
         let stored = await worldActor.restoreSnapshot()
-        do {
-            try restoreManager.save(stored)
-            reporter.info("Restore state saved (\(reason)) to \(restoreManager.url.path)")
-        } catch {
-            reporter.error("Restore state save failed (\(reason)): \(String(describing: error))")
-        }
+        await restoreSaveScheduler.scheduleSave(stored, reason: reason)
+    }
+
+    @MainActor
+    private func terminateAfterFlushingRestore() async {
+        await restoreSaveScheduler.flushPending()
+        NSApplication.shared.terminate(nil)
     }
 
     private func logDisplays(_ displays: [DisplayID: DisplayInfo]) {
         for (id, display) in displays.sorted(by: { $0.key.raw < $1.key.raw }) {
             reporter.info("Display \(id.raw) frame=\(display.frame.debugDescription) visible=\(display.visibleFrame.debugDescription)")
         }
+    }
+}
+
+private func logRestoreSaveEvent(_ event: RestoreSaveEvent, reporter: StartupReporter) {
+    switch event {
+    case .saved(let result):
+        reporter.info("Restore state saved (\(result.reason)) to \(result.urlPath)")
+    case .failed(let failure):
+        reporter.error("Restore state save failed (\(failure.reason)): \(failure.message)")
     }
 }
 

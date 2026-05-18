@@ -358,3 +358,36 @@ Observed Rung 20 results:
 | Date | Commit | Restore tests | App runtime proof | Known failures |
 |---|---|---|---|---|
 | 2026-05-18 | `3a5ad57` | Passed: 5 `Restore persistence boundary` tests cover missing file, unsupported schema, corrupt JSON, invalid stored world, and save/load round-trip; full suite passed 123 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` used `/private/tmp/winmgr-startup-shutdown-smoke/state.json`, logged restore miss, saved state on IPC reset, handled IPC quit, exited, and removed the socket | None |
+
+## Rung 21: Debounced Restore Persistence Scheduling
+
+This post-MVP shell-support gate keeps command handling from blocking on restore
+JSON writes. Successful outcomes schedule a debounced save of the latest
+`StoredWorld`; app-owned quit paths flush any pending save before exit.
+
+Commands:
+
+```sh
+CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+scripts/smoke_startup_shutdown.sh
+```
+
+Pass criteria:
+
+- Unit tests prove multiple scheduled saves coalesce to the latest `StoredWorld`.
+- Unit tests prove `flushPending()` writes immediately and cancels the delayed
+  write.
+- Unit tests prove explicit cancellation drops the pending write.
+- Unit tests prove a failed save emits an exact failure event and a later
+  scheduled save can still succeed.
+- `WinMgrApp` schedules restore persistence after successful command outcomes
+  instead of writing synchronously on the main command path.
+- App-owned quit paths flush any pending restore save before `WinMgrApp stopped`.
+- Startup/shutdown smoke still passes with `--restore-state`, proving IPC reset
+  schedules restore persistence and IPC quit exits cleanly after the pending
+  save is flushed.
+
+Observed Rung 21 results:
+
+| Date | Commit | Scheduler tests | App runtime proof | Known failures |
+|---|---|---|---|---|
