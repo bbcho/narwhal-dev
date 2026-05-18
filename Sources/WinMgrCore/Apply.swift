@@ -16,8 +16,8 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
         return applyFocus(windowID, to: world)
     case .swapInTree(let windowID, let direction):
         return applySwap(windowID, direction: direction, to: world)
-    case .resizeSplit:
-        return commandNotImplemented(command)
+    case .resizeSplit(let windowID, let direction, let delta):
+        return applyResizeSplit(windowID, direction: direction, delta: delta, to: world)
     case .balance(let spaceID):
         return applyBalance(spaceID, to: world)
     case .toggleFloat(let windowID):
@@ -236,6 +236,71 @@ private func applySwap(_ windowID: WindowID, direction: Direction, to world: Wor
         pendingRules: world.pendingRules,
         config: world.config
     ))
+}
+
+private func applyResizeSplit(
+    _ windowID: WindowID,
+    direction: Direction,
+    delta: Double,
+    to world: World
+) -> Result<World, CommandError> {
+    guard let metadata = world.windows[windowID] else {
+        return .failure(.windowNotFound(windowID))
+    }
+    guard metadata.isResizable else {
+        return .failure(.windowNotResizable(windowID))
+    }
+    guard let activeSpace = world.activeSpace, let space = world.spaces[activeSpace] else {
+        return .failure(.activeSpaceUnavailable)
+    }
+    guard let displayID = tiledDisplay(containing: windowID, in: space) else {
+        return .failure(.windowIsFloating(windowID))
+    }
+    guard let displayState = space.displays[displayID] else {
+        return .failure(.displayNotFound(displayID))
+    }
+
+    let resizedTree: Node
+    switch resizeSplitInTree(windowID, direction, delta: delta, displayState.tree) {
+    case .success(let tree):
+        resizedTree = tree
+    case .failure(let error):
+        return .failure(commandError(from: error, windowID: windowID, direction: direction))
+    }
+
+    var displayStates = space.displays
+    displayStates[displayID] = DisplaySpaceState(
+        displayID: displayID,
+        tree: resizedTree,
+        floating: displayState.floating
+    )
+
+    var spaces = world.spaces
+    spaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: windowID)
+
+    return .success(World(
+        displays: world.displays,
+        activeSpace: activeSpace,
+        spaces: spaces,
+        windows: world.windows,
+        windowDisplay: world.windowDisplay,
+        windowConstraints: world.windowConstraints,
+        pendingRules: world.pendingRules,
+        config: world.config
+    ))
+}
+
+private func commandError(from error: TreeResizeError, windowID: WindowID, direction: Direction) -> CommandError {
+    switch error {
+    case .windowNotFound:
+        return .windowIsFloating(windowID)
+    case .noNeighbor(let direction):
+        return .noNeighbor(direction)
+    case .nonFiniteDelta:
+        return .invalidResizeDelta
+    case .nonPositiveWeight:
+        return .resizeWouldCollapseSplit(windowID, direction)
+    }
 }
 
 private func applyBalance(_ spaceID: SpaceID, to world: World) -> Result<World, CommandError> {

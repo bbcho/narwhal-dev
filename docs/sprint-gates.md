@@ -604,3 +604,76 @@ Observed Rung 27 results:
 | Date | Commit | Core/DTO/config tests | App smoke | Known failures |
 |---|---|---|---|---|
 | 2026-05-18 | `b3d5623` | Passed: exact tests cover stable IPC `balance` JSON, `.shellCommandOnly` active-Space resolution, Lua parser support for `action = { type = "balance" }`, exact Lua renderer output for balance actions, and unchanged default keymap; full suite passed 148 tests / 18 suites | Passed: updated `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config with 15 default hotkeys, completed environment refresh, registered hotkeys, brought IPC online, `winmgrctl balance` returned `ok`, logged active-Space resolution and `IPC balance completed`, then accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
+
+## Rung 28: Resize-Split Command Core
+
+This post-MVP core gate makes existing
+`Command.resizeSplit(windowID, direction, delta)` executable as a pure tree
+weight edit. It does not expose any new user-facing key binding by itself.
+
+Commands:
+
+```sh
+CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+scripts/smoke_startup_shutdown.sh
+```
+
+Pass criteria:
+
+- `resizeSplitInTree(_:_:delta:_:)` targets the innermost ancestor split with
+  a matching axis and adjacent sibling in the requested direction.
+- A successful resize transfers weight between the target cell and adjacent
+  sibling while preserving total split weight, tree shape, occupied paths,
+  `.void` paths, and every unrelated weight.
+- Missing windows fail with `.windowNotFound`; missing adjacent siblings fail
+  with `.noNeighbor(direction)`; non-finite deltas fail with
+  `.nonFiniteDelta`; collapsing weights fail with `.nonPositiveWeight`.
+- `apply(.resizeSplit(...), to:)` updates only the selected display tree in the
+  active Space and preserves floating order, live metadata, display ownership,
+  observed constraints, pending rules, and config.
+- Core command failures map to stable `CommandError` values:
+  `.windowNotFound`, `.windowNotResizable`, `.windowIsFloating`,
+  `.activeSpaceUnavailable`, `.noNeighbor`, `.invalidResizeDelta`, and
+  `.resizeWouldCollapseSplit`.
+
+Observed Rung 28 results:
+
+| Date | Commit | Core tests | App smoke | Known failures |
+|---|---|---|---|---|
+
+## Rung 29: Resize-Split Shell Route
+
+This post-MVP shell gate exposes resize-split through IPC, `winmgrctl`, and
+Lua-configurable hotkeys without choosing a default global hotkey. The shell
+keeps active focus/window lookup and AX writes outside the pure resize core.
+
+Commands:
+
+```sh
+CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+scripts/smoke_startup_shutdown.sh
+scripts/smoke_config_hot_reload.sh
+```
+
+Pass criteria:
+
+- IPC JSON encodes and decodes focused resize as
+  `{"command":"resizeSplit","direction":"right","delta":0.25}` and explicit
+  resize as the same shape plus `windowID`.
+- `IPCCommandDTO.resizeFocused(...).toCommand()` requires a focused
+  `WindowID`; explicit resize resolves directly to `.resizeSplit`.
+- `winmgrctl resize <direction> --delta <weight>` requires a finite explicit
+  delta and optionally accepts `--window WINDOW_ID`.
+- Lua config accepts `action = { type = "resize_split", direction = "...",
+  delta = ... }`, rejects non-finite deltas at the exact key, and the renderer
+  emits the same action shape.
+- App hotkey/IPC routing refreshes the environment, plans through
+  `WorldActor.planResize`, applies layout through the existing min-size-aware
+  `LayoutApplier`, persists restore state after success, and reports
+  structured IPC failures.
+- No default resize hotkey is added in this rung.
+
+Observed Rung 29 results:
+
+| Date | Commit | Core/DTO/config tests | App smoke | Known failures |
+|---|---|---|---|---|

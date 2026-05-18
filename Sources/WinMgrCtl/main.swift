@@ -42,6 +42,8 @@ private enum WinMgrCtlError: Error, CustomStringConvertible {
     case invalidDirection(String)
     case missingWindowID
     case invalidWindowID(String)
+    case missingDelta
+    case invalidDelta(String)
     case missingSocketPath
     case unexpectedArgument(String)
 
@@ -59,6 +61,10 @@ private enum WinMgrCtlError: Error, CustomStringConvertible {
             return usage("missing window ID after --window")
         case .invalidWindowID(let value):
             return usage("invalid window ID: \(value)")
+        case .missingDelta:
+            return usage("missing resize delta after --delta")
+        case .invalidDelta(let value):
+            return usage("invalid resize delta: \(value)")
         case .missingSocketPath:
             return usage("missing socket path after --socket")
         case .unexpectedArgument(let value):
@@ -75,6 +81,7 @@ private enum WinMgrCtlError: Error, CustomStringConvertible {
           winmgrctl quit [--socket PATH]
           winmgrctl push <left|right|up|down> [--window WINDOW_ID] [--socket PATH]
           winmgrctl swap <left|right|up|down> [--window WINDOW_ID] [--socket PATH]
+          winmgrctl resize <left|right|up|down> --delta WEIGHT_DELTA [--window WINDOW_ID] [--socket PATH]
           winmgrctl center --window WINDOW_ID [--socket PATH]
         """
     }
@@ -84,6 +91,7 @@ private func parseInvocation(_ arguments: [String]) throws -> Invocation {
     var socketPath = IPCDefaults.socketPath
     var positional: [String] = []
     var explicitWindowID: WindowID?
+    var resizeDelta: Double?
     var index = 0
 
     while index < arguments.count {
@@ -99,6 +107,11 @@ private func parseInvocation(_ arguments: [String]) throws -> Invocation {
             guard arguments.indices.contains(valueIndex) else { throw WinMgrCtlError.missingWindowID }
             explicitWindowID = try parseWindowID(arguments[valueIndex])
             index += 2
+        case "--delta":
+            let valueIndex = index + 1
+            guard arguments.indices.contains(valueIndex) else { throw WinMgrCtlError.missingDelta }
+            resizeDelta = try parseResizeDelta(arguments[valueIndex])
+            index += 2
         default:
             if argument.hasPrefix("--") {
                 throw WinMgrCtlError.unexpectedArgument(argument)
@@ -112,17 +125,21 @@ private func parseInvocation(_ arguments: [String]) throws -> Invocation {
     switch command {
     case "reset", "reset-layout", "resetLayout":
         guard positional.count == 1 else { throw WinMgrCtlError.unexpectedArgument(positional[1]) }
+        guard resizeDelta == nil else { throw WinMgrCtlError.unexpectedArgument("--delta") }
         return Invocation(socketPath: socketPath, command: .resetLayout)
     case "balance":
         guard positional.count == 1 else { throw WinMgrCtlError.unexpectedArgument(positional[1]) }
         guard explicitWindowID == nil else { throw WinMgrCtlError.unexpectedArgument("--window") }
+        guard resizeDelta == nil else { throw WinMgrCtlError.unexpectedArgument("--delta") }
         return Invocation(socketPath: socketPath, command: .balance)
     case "quit":
         guard positional.count == 1 else { throw WinMgrCtlError.unexpectedArgument(positional[1]) }
+        guard resizeDelta == nil else { throw WinMgrCtlError.unexpectedArgument("--delta") }
         return Invocation(socketPath: socketPath, command: .quit)
     case "push":
         guard positional.indices.contains(1) else { throw WinMgrCtlError.missingDirection }
         guard positional.count == 2 else { throw WinMgrCtlError.unexpectedArgument(positional[2]) }
+        guard resizeDelta == nil else { throw WinMgrCtlError.unexpectedArgument("--delta") }
         let direction = try parseDirection(positional[1])
         let dto: IPCCommandDTO
         if let explicitWindowID {
@@ -134,6 +151,7 @@ private func parseInvocation(_ arguments: [String]) throws -> Invocation {
     case "swap":
         guard positional.indices.contains(1) else { throw WinMgrCtlError.missingDirection }
         guard positional.count == 2 else { throw WinMgrCtlError.unexpectedArgument(positional[2]) }
+        guard resizeDelta == nil else { throw WinMgrCtlError.unexpectedArgument("--delta") }
         let direction = try parseDirection(positional[1])
         let dto: IPCCommandDTO
         if let explicitWindowID {
@@ -142,9 +160,22 @@ private func parseInvocation(_ arguments: [String]) throws -> Invocation {
             dto = .swapFocused(direction)
         }
         return Invocation(socketPath: socketPath, command: dto)
+    case "resize", "resize-split", "resizeSplit":
+        guard positional.indices.contains(1) else { throw WinMgrCtlError.missingDirection }
+        guard positional.count == 2 else { throw WinMgrCtlError.unexpectedArgument(positional[2]) }
+        guard let resizeDelta else { throw WinMgrCtlError.missingDelta }
+        let direction = try parseDirection(positional[1])
+        let dto: IPCCommandDTO
+        if let explicitWindowID {
+            dto = .resize(windowID: explicitWindowID, direction: direction, delta: resizeDelta)
+        } else {
+            dto = .resizeFocused(direction, delta: resizeDelta)
+        }
+        return Invocation(socketPath: socketPath, command: dto)
     case "center":
         guard positional.count == 1 else { throw WinMgrCtlError.unexpectedArgument(positional[1]) }
         guard let explicitWindowID else { throw WinMgrCtlError.missingWindowID }
+        guard resizeDelta == nil else { throw WinMgrCtlError.unexpectedArgument("--delta") }
         return Invocation(socketPath: socketPath, command: .center(windowID: explicitWindowID))
     default:
         throw WinMgrCtlError.unknownCommand(command)
@@ -164,4 +195,11 @@ private func parseWindowID(_ raw: String) throws -> WindowID {
         throw WinMgrCtlError.invalidWindowID(raw)
     }
     return WindowID(raw: value)
+}
+
+private func parseResizeDelta(_ raw: String) throws -> Double {
+    guard let value = Double(raw), value.isFinite else {
+        throw WinMgrCtlError.invalidDelta(raw)
+    }
+    return value
 }

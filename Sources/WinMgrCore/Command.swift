@@ -35,6 +35,8 @@ public enum CommandError: Error, Equatable, Sendable {
     case spaceNotFound(SpaceID)
     case displayNotFound(DisplayID)
     case noNeighbor(Direction)
+    case invalidResizeDelta
+    case resizeWouldCollapseSplit(WindowID, Direction)
     case layoutUnsatisfiable(UnsatisfiableLayout)
     case zoneNotFound(ZoneID)
     case ruleInvalid(String)
@@ -58,6 +60,10 @@ public enum CommandError: Error, Equatable, Sendable {
             return "display_not_found"
         case .noNeighbor:
             return "no_neighbor"
+        case .invalidResizeDelta:
+            return "invalid_resize_delta"
+        case .resizeWouldCollapseSplit:
+            return "resize_would_collapse_split"
         case .layoutUnsatisfiable:
             return "layout_unsatisfiable"
         case .zoneNotFound:
@@ -73,6 +79,10 @@ public enum CommandError: Error, Equatable, Sendable {
         switch self {
         case .activeSpaceUnavailable:
             return "active Space unavailable"
+        case .invalidResizeDelta:
+            return "resize delta must be finite"
+        case .resizeWouldCollapseSplit(let windowID, let direction):
+            return "resize would make a split weight non-positive for \(windowID.description) toward \(direction.rawValue)"
         case .layoutUnsatisfiable(let layout):
             return "layout unsatisfiable on display \(layout.displayID.raw) axis=\(layout.axis.rawValue) required=\(layout.required) available=\(layout.available) windows=\(layout.windows.map(\.description).joined(separator: ","))"
         default:
@@ -177,6 +187,8 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
     case eject(windowID: WindowID)
     case swapFocused(Direction)
     case swap(windowID: WindowID, direction: Direction)
+    case resizeFocused(Direction, delta: Double)
+    case resize(windowID: WindowID, direction: Direction, delta: Double)
     case focusDirection(Direction)
     case focusCycle(FocusCycleDirection)
     case focus(windowID: WindowID)
@@ -189,6 +201,7 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
         case command
         case windowID
         case direction
+        case delta
     }
 
     private enum CommandName: String, Codable {
@@ -196,6 +209,7 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
         case center
         case eject
         case swap
+        case resizeSplit
         case focusDirection
         case focusCycle
         case focus
@@ -221,6 +235,11 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             return .success(.swapInTree(focusedWindowID, direction))
         case .swap(let windowID, let direction):
             return .success(.swapInTree(windowID, direction))
+        case .resizeFocused(let direction, let delta):
+            guard let focusedWindowID else { return .failure(.focusedWindowRequired) }
+            return .success(.resizeSplit(focusedWindowID, direction, delta: delta))
+        case .resize(let windowID, let direction, let delta):
+            return .success(.resizeSplit(windowID, direction, delta: delta))
         case .focusDirection(let direction):
             return .success(.focusDirection(direction))
         case .focusCycle(let direction):
@@ -258,6 +277,14 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
                 self = .swap(windowID: WindowID(raw: rawWindowID), direction: direction)
             } else {
                 self = .swapFocused(direction)
+            }
+        case .resizeSplit:
+            let direction = try container.decode(Direction.self, forKey: .direction)
+            let delta = try container.decode(Double.self, forKey: .delta)
+            if let rawWindowID = try container.decodeIfPresent(UInt32.self, forKey: .windowID) {
+                self = .resize(windowID: WindowID(raw: rawWindowID), direction: direction, delta: delta)
+            } else {
+                self = .resizeFocused(direction, delta: delta)
             }
         case .focusDirection:
             self = .focusDirection(try container.decode(Direction.self, forKey: .direction))
@@ -299,6 +326,15 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             try container.encode(CommandName.swap, forKey: .command)
             try container.encode(windowID.raw, forKey: .windowID)
             try container.encode(direction, forKey: .direction)
+        case .resizeFocused(let direction, let delta):
+            try container.encode(CommandName.resizeSplit, forKey: .command)
+            try container.encode(direction, forKey: .direction)
+            try container.encode(delta, forKey: .delta)
+        case .resize(let windowID, let direction, let delta):
+            try container.encode(CommandName.resizeSplit, forKey: .command)
+            try container.encode(windowID.raw, forKey: .windowID)
+            try container.encode(direction, forKey: .direction)
+            try container.encode(delta, forKey: .delta)
         case .focusDirection(let direction):
             try container.encode(CommandName.focusDirection, forKey: .command)
             try container.encode(direction, forKey: .direction)

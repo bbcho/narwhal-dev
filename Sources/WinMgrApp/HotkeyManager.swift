@@ -245,6 +245,8 @@ private func describe(_ template: CommandTemplate) -> String {
         return "eject"
     case .swap(let direction):
         return "swap \(direction.rawValue)"
+    case .resizeSplit(let direction, let delta):
+        return "resize \(direction.rawValue) \(delta)"
     case .focusDirection(let direction):
         return "focus \(direction.rawValue)"
     case .focusCycle(let direction):

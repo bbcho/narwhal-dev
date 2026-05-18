@@ -57,6 +57,7 @@ struct ConfigTests {
         let customKeymap = [
             HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .shift]), action: .command(.push(.left))),
             HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .shift]), action: .command(.push(.right))),
+            HotkeyBinding(key: KeySpec(key: "u", modifiers: [.control, .shift]), action: .command(.resizeSplit(.right, delta: 0.25))),
             HotkeyBinding(key: KeySpec(key: "r", modifiers: [.control, .shift]), action: .command(.balance)),
             HotkeyBinding(key: KeySpec(key: "delete", modifiers: [.control, .shift]), action: .command(.resetLayout))
         ]
@@ -66,6 +67,7 @@ struct ConfigTests {
         root["keymap"] = .array([
             binding(key: "h", modifiers: ["control", "shift"], action: ["type": .string("push"), "direction": .string("left")]),
             binding(key: "l", modifiers: ["control", "shift"], action: ["type": .string("push"), "direction": .string("right")]),
+            binding(key: "u", modifiers: ["control", "shift"], action: ["type": .string("resize_split"), "direction": .string("right"), "delta": .number(0.25)]),
             binding(key: "r", modifiers: ["control", "shift"], action: ["type": .string("balance")]),
             binding(key: "delete", modifiers: ["control", "shift"], action: ["type": .string("reset_layout")])
         ])
@@ -113,6 +115,47 @@ struct ConfigTests {
             .first { $0.contains("type = \"balance\"") }
 
         #expect(line.map(String.init) == #"    { key = "r", modifiers = { "control", "option", "command" }, action = { type = "balance" } },"#)
+    }
+
+    @Test("Lua config renderer emits resize split actions exactly")
+    func luaConfigRendererEmitsResizeSplitAction() throws {
+        let config = Config(
+            keymap: [
+                HotkeyBinding(
+                    key: KeySpec(key: "u", modifiers: [.control, .option, .command]),
+                    action: .command(.resizeSplit(.right, delta: 0.25))
+                )
+            ],
+            rules: [],
+            zones: [],
+            gaps: .init(inner: 0, outer: .init(top: 0, left: 0, bottom: 0, right: 0)),
+            border: .default,
+            hud: .default,
+            dragModifier: [.shift]
+        )
+
+        let rendered = DefaultConfigLua.render(config)
+        let line = rendered
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .first { $0.contains("type = \"resize_split\"") }
+
+        #expect(line.map(String.init) == #"    { key = "u", modifiers = { "control", "option", "command" }, action = { type = "resize_split", direction = "right", delta = 0.25 } },"#)
+    }
+
+    @Test("Lua config parser rejects non-finite resize split deltas")
+    func luaConfigParserRejectsNonFiniteResizeSplitDeltas() {
+        var root = defaultLuaRoot()
+        root["keymap"] = .array([
+            binding(key: "u", modifiers: ["control", "shift"], action: [
+                "type": .string("resize_split"),
+                "direction": .string("right"),
+                "delta": .number(.infinity)
+            ])
+        ])
+
+        #expect(parseConfig(LuaConfigData(root: root)) == .failure(
+            .invalidValue(key: "keymap[1].action.delta", reason: "number must be finite")
+        ))
     }
 
     @Test("Lua config parser rejects duplicate hotkeys")

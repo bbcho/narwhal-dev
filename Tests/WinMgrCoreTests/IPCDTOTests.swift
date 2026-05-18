@@ -13,6 +13,11 @@ struct IPCDTOTests {
         #expect(try encode(.toggleFloat(windowID: WindowID(raw: 236))) == #"{"command":"toggleFloat","windowID":236}"#)
         #expect(try encode(.swapFocused(.left)) == #"{"command":"swap","direction":"left"}"#)
         #expect(try encode(.swap(windowID: WindowID(raw: 345), direction: .right)) == #"{"command":"swap","direction":"right","windowID":345}"#)
+        #expect(try encode(.resizeFocused(.right, delta: 0.25)) == #"{"command":"resizeSplit","delta":0.25,"direction":"right"}"#)
+        #expect(
+            try encode(.resize(windowID: WindowID(raw: 346), direction: .left, delta: -0.5))
+                == #"{"command":"resizeSplit","delta":-0.5,"direction":"left","windowID":346}"#
+        )
         #expect(try encode(.focusDirection(.up)) == #"{"command":"focusDirection","direction":"up"}"#)
         #expect(try encode(.focusCycle(.next)) == #"{"command":"focusCycle","direction":"next"}"#)
         #expect(try encode(.focus(windowID: WindowID(raw: 237))) == #"{"command":"focus","windowID":237}"#)
@@ -39,6 +44,16 @@ struct IPCDTOTests {
         #expect(try decodeCommand(#"{"command":"swap","direction":"left"}"#).toCommand() == .failure(.focusedWindowRequired))
         #expect(try decodeCommand(#"{"command":"swap","direction":"left"}"#).toCommand(focusedWindowID: WindowID(raw: 567)) == .success(.swapInTree(WindowID(raw: 567), .left)))
         #expect(try decodeCommand(#"{"command":"swap","direction":"right","windowID":678}"#).toCommand() == .success(.swapInTree(WindowID(raw: 678), .right)))
+        #expect(try decodeCommand(#"{"command":"resizeSplit","direction":"right","delta":0.25}"#).toCommand() == .failure(.focusedWindowRequired))
+        #expect(
+            try decodeCommand(#"{"command":"resizeSplit","direction":"right","delta":0.25}"#)
+                .toCommand(focusedWindowID: WindowID(raw: 679))
+                == .success(.resizeSplit(WindowID(raw: 679), .right, delta: 0.25))
+        )
+        #expect(
+            try decodeCommand(#"{"command":"resizeSplit","direction":"left","delta":-0.5,"windowID":680}"#).toCommand()
+                == .success(.resizeSplit(WindowID(raw: 680), .left, delta: -0.5))
+        )
         #expect(try decodeCommand(#"{"command":"focusCycle","direction":"previous"}"#).toCommand() == .success(.focusCycle(.previous)))
         #expect(try decodeCommand(#"{"command":"quit"}"#).toCommand() == .failure(.shellCommandOnly))
     }

@@ -759,6 +759,234 @@ struct MVPLayoutTests {
         #expect(apply(.balance(missing), to: World.empty) == .failure(.spaceNotFound(missing)))
     }
 
+    @Test("Resize split grows the focused cell toward the requested neighbor")
+    func resizeSplitGrowsFocusedCellTowardNeighbor() throws {
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let tree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .leaf(first)),
+            try cell(weight: 1, node: .leaf(second))
+        ]))
+
+        guard case .success(let resized) = resizeSplitInTree(first, .right, delta: 0.5, tree) else {
+            Issue.record("Expected resize to succeed")
+            return
+        }
+
+        #expect(resized == Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1.5, node: .leaf(first)),
+            try cell(weight: 0.5, node: .leaf(second))
+        ])))
+        #expect(slots(in: resized) == [
+            TreeSlot(path: [0], occupancy: .occupied(first)),
+            TreeSlot(path: [1], occupancy: .occupied(second))
+        ])
+
+        let result = frames(for: resized)
+        #expect(result[first] == CGRect(x: 0, y: 0, width: 900, height: 800))
+        #expect(result[second] == CGRect(x: 900, y: 0, width: 300, height: 800))
+    }
+
+    @Test("Resize split chooses the innermost matching ancestor split")
+    func resizeSplitChoosesInnermostMatchingAncestor() throws {
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let third = WindowID(raw: 3)
+        let tree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1, node: .leaf(first)),
+                try cell(weight: 1, node: .leaf(third))
+            ]))),
+            try cell(weight: 1, node: .leaf(second))
+        ]))
+
+        guard case .success(let resizedDown) = resizeSplitInTree(first, .down, delta: 0.25, tree) else {
+            Issue.record("Expected vertical resize to succeed")
+            return
+        }
+        guard case .success(let resizedRight) = resizeSplitInTree(first, .right, delta: 0.5, tree) else {
+            Issue.record("Expected ancestor horizontal resize to succeed")
+            return
+        }
+
+        #expect(resizedDown == Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1.25, node: .leaf(first)),
+                try cell(weight: 0.75, node: .leaf(third))
+            ]))),
+            try cell(weight: 1, node: .leaf(second))
+        ])))
+        #expect(resizedRight == Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1.5, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1, node: .leaf(first)),
+                try cell(weight: 1, node: .leaf(third))
+            ]))),
+            try cell(weight: 0.5, node: .leaf(second))
+        ])))
+
+        let downFrames = frames(for: resizedDown)
+        #expect(downFrames[first] == CGRect(x: 0, y: 0, width: 600, height: 500))
+        #expect(downFrames[third] == CGRect(x: 0, y: 500, width: 600, height: 300))
+        #expect(downFrames[second] == CGRect(x: 600, y: 0, width: 600, height: 800))
+
+        let rightFrames = frames(for: resizedRight)
+        #expect(rightFrames[first] == CGRect(x: 0, y: 0, width: 900, height: 400))
+        #expect(rightFrames[third] == CGRect(x: 0, y: 400, width: 900, height: 400))
+        #expect(rightFrames[second] == CGRect(x: 900, y: 0, width: 300, height: 800))
+    }
+
+    @Test("Resize split rejects missing neighbor, invalid delta, and collapsing weights")
+    func resizeSplitRejectsInvalidPureInputs() throws {
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let missing = WindowID(raw: 99)
+        let tree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .leaf(first)),
+            try cell(weight: 1, node: .leaf(second))
+        ]))
+
+        #expect(resizeSplitInTree(first, .left, delta: 0.5, tree) == .failure(.noNeighbor(.left)))
+        #expect(resizeSplitInTree(first, .right, delta: .infinity, tree) == .failure(.nonFiniteDelta))
+        #expect(resizeSplitInTree(first, .right, delta: 1, tree) == .failure(.nonPositiveWeight))
+        #expect(resizeSplitInTree(missing, .right, delta: 0.5, tree) == .failure(.windowNotFound(missing)))
+    }
+
+    @Test("Apply resizeSplit updates active tree weights and preserves world metadata")
+    func applyResizeSplitUpdatesWeightsOnly() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let floating = WindowID(raw: 3)
+        let tree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .leaf(first)),
+            try cell(weight: 1, node: .leaf(second))
+        ]))
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: tree, floating: [floating])],
+                    focused: second
+                )
+            ],
+            windows: [
+                first: metadata(for: first),
+                second: metadata(for: second),
+                floating: metadata(for: floating)
+            ],
+            windowDisplay: [
+                first: display,
+                second: display,
+                floating: display
+            ],
+            windowConstraints: [second: WindowConstraints(minWidth: 500)],
+            pendingRules: [floating: .forceFloat],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.resizeSplit(first, .right, delta: 0.5), to: world) else {
+            Issue.record("Expected resizeSplit to succeed")
+            return
+        }
+        let flattened: Layout
+        switch flattenedLayout(of: next) {
+        case .success(let layout):
+            flattened = layout
+        case .failure(let error):
+            Issue.record("Expected resized layout to remain satisfiable, got \(error)")
+            return
+        }
+
+        #expect(next.spaces[space]?.displays[display]?.tree == Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1.5, node: .leaf(first)),
+            try cell(weight: 0.5, node: .leaf(second))
+        ])))
+        #expect(next.spaces[space]?.displays[display]?.floating == [floating])
+        #expect(next.spaces[space]?.focused == first)
+        #expect(next.displays == world.displays)
+        #expect(next.windows == world.windows)
+        #expect(next.windowDisplay == world.windowDisplay)
+        #expect(next.windowConstraints == world.windowConstraints)
+        #expect(next.pendingRules == world.pendingRules)
+        #expect(next.config == world.config)
+        #expect(flattened.tiled[first] == CGRect(x: 0, y: 0, width: 700, height: 800))
+        #expect(flattened.tiled[second] == CGRect(x: 700, y: 0, width: 500, height: 800))
+    }
+
+    @Test("Apply resizeSplit rejects invalid command state")
+    func applyResizeSplitRejectsInvalidState() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let floating = WindowID(raw: 3)
+        let fixed = WindowID(raw: 4)
+        let missing = WindowID(raw: 99)
+        let tree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .leaf(first)),
+            try cell(weight: 1, node: .leaf(second))
+        ]))
+        let fixedTree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .leaf(fixed)),
+            try cell(weight: 1, node: .leaf(second))
+        ]))
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: tree, floating: [floating])],
+                    focused: first
+                )
+            ],
+            windows: [
+                first: metadata(for: first),
+                second: metadata(for: second),
+                floating: metadata(for: floating),
+                fixed: metadata(for: fixed, isResizable: false)
+            ],
+            windowDisplay: [
+                first: display,
+                second: display,
+                floating: display,
+                fixed: display
+            ],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+        let nonResizableWorld = World(
+            displays: world.displays,
+            activeSpace: world.activeSpace,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: fixedTree, floating: [])],
+                    focused: fixed
+                )
+            ],
+            windows: world.windows,
+            windowDisplay: world.windowDisplay,
+            windowConstraints: world.windowConstraints,
+            pendingRules: world.pendingRules,
+            config: world.config
+        )
+
+        #expect(apply(.resizeSplit(missing, .right, delta: 0.5), to: world) == .failure(.windowNotFound(missing)))
+        #expect(apply(.resizeSplit(fixed, .right, delta: 0.5), to: nonResizableWorld) == .failure(.windowNotResizable(fixed)))
+        #expect(apply(.resizeSplit(floating, .right, delta: 0.5), to: world) == .failure(.windowIsFloating(floating)))
+        #expect(apply(.resizeSplit(first, .left, delta: 0.5), to: world) == .failure(.noNeighbor(.left)))
+        #expect(apply(.resizeSplit(first, .right, delta: .nan), to: world) == .failure(.invalidResizeDelta))
+        #expect(
+            apply(.resizeSplit(first, .right, delta: 1), to: world)
+                == .failure(.resizeWouldCollapseSplit(first, .right))
+        )
+    }
+
     @Test("Third left push splits the bottom-left leaf toward center")
     func thirdLeftPushSplitsCenterFacingLeaf() throws {
         let first = WindowID(raw: 1)

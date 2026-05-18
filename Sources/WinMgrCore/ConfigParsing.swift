@@ -60,6 +60,11 @@ private struct ConfigParser {
             return .command(.eject)
         case "swap":
             return .command(.swap(try parseDirection(required("direction", in: table, path: key), key: "\(key).direction")))
+        case "resize_split":
+            return .command(.resizeSplit(
+                try parseDirection(required("direction", in: table, path: key), key: "\(key).direction"),
+                delta: try finiteNumber(required("delta", in: table, path: key), key: "\(key).delta")
+            ))
         case "focus_direction":
             return .command(.focusDirection(try parseDirection(required("direction", in: table, path: key), key: "\(key).direction")))
         case "focus_cycle":
@@ -352,13 +357,18 @@ private struct ConfigParser {
         try boundedNumber(value, key: key, min: 0, max: nil)
     }
 
-    private func boundedNumber(_ value: LuaValue, key: String, min: Double, max: Double?) throws -> Double {
+    private func finiteNumber(_ value: LuaValue, key: String) throws -> Double {
         guard case .number(let number) = value else {
             throw ConfigError.wrongType(key: key, expected: "number")
         }
         guard number.isFinite else {
             throw ConfigError.invalidValue(key: key, reason: "number must be finite")
         }
+        return number
+    }
+
+    private func boundedNumber(_ value: LuaValue, key: String, min: Double, max: Double?) throws -> Double {
+        let number = try finiteNumber(value, key: key)
         guard number >= min else {
             throw ConfigError.invalidValue(key: key, reason: "number must be >= \(min)")
         }

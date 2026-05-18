@@ -58,6 +58,7 @@ public enum CommandTemplate: Equatable, Sendable {
     case center
     case eject
     case swap(Direction)
+    case resizeSplit(Direction, delta: Double)
     case focusDirection(Direction)
     case focusCycle(FocusCycleDirection)
     case toggleFloat
@@ -225,6 +226,8 @@ public enum DefaultConfigLua {
             return "{ type = \"eject\" }"
         case .swap(let direction):
             return "{ type = \"swap\", direction = \(quoted(direction.rawValue)) }"
+        case .resizeSplit(let direction, let delta):
+            return "{ type = \"resize_split\", direction = \(quoted(direction.rawValue)), delta = \(number(delta)) }"
         case .focusDirection(let direction):
             return "{ type = \"focus_direction\", direction = \(quoted(direction.rawValue)) }"
         case .focusCycle(let direction):

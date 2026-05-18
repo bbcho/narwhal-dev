@@ -135,6 +135,14 @@ actor WorldActor {
         planLayoutCommand(.swapInTree(windowID, direction), focusedWindowID: windowID)
     }
 
+    func planResize(
+        _ windowID: WindowID,
+        direction: Direction,
+        delta: Double
+    ) -> Result<CommandPlanResult, CommandError> {
+        planLayoutCommand(.resizeSplit(windowID, direction, delta: delta), focusedWindowID: windowID)
+    }
+
     func planBalanceActiveSpace() -> Result<CommandPlanResult, CommandError> {
         guard let activeSpace = world.activeSpace else {
             return .failure(.activeSpaceUnavailable)

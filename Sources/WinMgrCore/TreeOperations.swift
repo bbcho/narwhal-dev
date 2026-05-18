@@ -89,6 +89,35 @@ public func balanceTree(_ node: Node) -> Node {
     }
 }
 
+public enum TreeResizeError: Error, Equatable, Sendable {
+    case windowNotFound(WindowID)
+    case noNeighbor(Direction)
+    case nonFiniteDelta
+    case nonPositiveWeight
+}
+
+public func resizeSplitInTree(
+    _ window: WindowID,
+    _ direction: Direction,
+    delta: Double,
+    _ node: Node
+) -> Result<Node, TreeResizeError> {
+    guard delta.isFinite else { return .failure(.nonFiniteDelta) }
+    guard let path = pathToWindow(window, in: node, parentPath: []) else {
+        return .failure(.windowNotFound(window))
+    }
+    guard let target = resizeTarget(in: path, direction: direction) else {
+        return .failure(.noNeighbor(direction))
+    }
+    return resizeSplit(
+        at: target.parentPath,
+        childIndex: target.childIndex,
+        neighborIndex: target.neighborIndex,
+        delta: delta,
+        in: node
+    )
+}
+
 private func clearWindowPreservingZones(_ window: WindowID, from node: Node) -> Node {
     switch node {
     case .void:
@@ -101,6 +130,104 @@ private func clearWindowPreservingZones(_ window: WindowID, from node: Node) -> 
         }
         return .split(makeSplit(axis: split.axis, cells: cells))
     }
+}
+
+private struct WindowPathStep {
+    let parentPath: NodePath
+    let split: Split
+    let childIndex: Int
+}
+
+private struct ResizeTarget {
+    let parentPath: NodePath
+    let childIndex: Int
+    let neighborIndex: Int
+}
+
+private func pathToWindow(_ window: WindowID, in node: Node, parentPath: NodePath) -> [WindowPathStep]? {
+    switch node {
+    case .void:
+        return nil
+    case .leaf(let id):
+        return id == window ? [] : nil
+    case .split(let split):
+        for (index, cell) in split.cells.enumerated() {
+            guard let childPath = pathToWindow(window, in: cell.node, parentPath: parentPath + [index]) else {
+                continue
+            }
+            return [WindowPathStep(parentPath: parentPath, split: split, childIndex: index)] + childPath
+        }
+        return nil
+    }
+}
+
+private func resizeTarget(in path: [WindowPathStep], direction: Direction) -> ResizeTarget? {
+    for step in path.reversed() where step.split.axis == direction.layoutAxisForPush {
+        guard let neighborIndex = direction.adjacentResizeIndex(from: step.childIndex, count: step.split.cells.count) else {
+            continue
+        }
+        return ResizeTarget(
+            parentPath: step.parentPath,
+            childIndex: step.childIndex,
+            neighborIndex: neighborIndex
+        )
+    }
+    return nil
+}
+
+private func resizeSplit(
+    at path: NodePath,
+    childIndex: Int,
+    neighborIndex: Int,
+    delta: Double,
+    in node: Node
+) -> Result<Node, TreeResizeError> {
+    guard let nextIndex = path.first else {
+        guard case .split(let split) = node else {
+            preconditionFailure("Resize target path did not end at a split")
+        }
+        return resizedSplitNode(split, childIndex: childIndex, neighborIndex: neighborIndex, delta: delta)
+    }
+
+    guard case .split(let split) = node, split.cells.indices.contains(nextIndex) else {
+        preconditionFailure("Resize target path is invalid")
+    }
+    switch resizeSplit(
+        at: Array(path.dropFirst()),
+        childIndex: childIndex,
+        neighborIndex: neighborIndex,
+        delta: delta,
+        in: split.cells[nextIndex].node
+    ) {
+    case .success(let child):
+        var cells = split.cells
+        let old = cells[nextIndex]
+        cells[nextIndex] = makeCell(weight: old.weight, node: child)
+        return .success(.split(makeSplit(axis: split.axis, cells: cells)))
+    case .failure(let error):
+        return .failure(error)
+    }
+}
+
+private func resizedSplitNode(
+    _ split: Split,
+    childIndex: Int,
+    neighborIndex: Int,
+    delta: Double
+) -> Result<Node, TreeResizeError> {
+    let child = split.cells[childIndex]
+    let neighbor = split.cells[neighborIndex]
+    let childWeight = child.weight + delta
+    let neighborWeight = neighbor.weight - delta
+
+    guard childWeight > 0, neighborWeight > 0 else {
+        return .failure(.nonPositiveWeight)
+    }
+
+    var cells = split.cells
+    cells[childIndex] = makeCell(weight: childWeight, node: child.node)
+    cells[neighborIndex] = makeCell(weight: neighborWeight, node: neighbor.node)
+    return .success(.split(makeSplit(axis: split.axis, cells: cells)))
 }
 
 private func insertAtCenter(_ window: WindowID, _ node: Node) -> Node {
@@ -372,6 +499,17 @@ private extension Direction {
             return 0
         case (.left, .vertical), (.right, .vertical), (.up, .horizontal), (.down, .horizontal):
             return count - 1
+        }
+    }
+
+    func adjacentResizeIndex(from index: Int, count: Int) -> Int? {
+        switch self {
+        case .left, .up:
+            let neighbor = index - 1
+            return neighbor >= 0 ? neighbor : nil
+        case .right, .down:
+            let neighbor = index + 1
+            return neighbor < count ? neighbor : nil
         }
     }
 }

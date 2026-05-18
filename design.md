@@ -19,7 +19,7 @@ This is the pre-implementation gate for the fp-architect skill, adapted to Swift
 | Restore | Fuzzy match on stable window descriptors `(bundleID, title, role)`. Restore JSON stores descriptors, not raw OS window/display IDs. Native Space pinning is deferred until a stable Space-slot mapping exists. |
 | Config | Lua 5.4 embedded via C interop. `~/.config/winmgr/init.lua`. FSEvent hot reload, last-good fallback. |
 | Input | Carbon hotkeys + `CGEventTap` shift-drag + Unix-socket IPC + `winmgrctl` CLI. |
-| Default key families | `ctrl-option-H/J/K/L` focus, `ctrl-option-shift-H/J/K/L` swap, `ctrl-option-command-H/J/K/L` push, `ctrl-option-U/I` cycle, `ctrl-option-delete` reset. Balance is exposed through IPC/CLI and configurable Lua hotkeys but has no default binding yet. |
+| Default key families | `ctrl-option-H/J/K/L` focus, `ctrl-option-shift-H/J/K/L` swap, `ctrl-option-command-H/J/K/L` push, `ctrl-option-U/I` cycle, `ctrl-option-delete` reset. Balance and resize-split are exposed through IPC/CLI and configurable Lua hotkeys but have no default binding yet. |
 | Visuals | Focus border overlay, Space HUD on switch, gaps, NSStatusItem menubar. No animations. |
 | Distribution | Notarized `.app` bundle + LaunchAgent + brew cask (later). Private repo. |
 
@@ -163,6 +163,44 @@ Rules:
    binding is more important than guessing a key.
 
 This makes balance a layout-shape cleanup, not a tree rewrite.
+
+---
+
+## Resize Split Semantics
+
+Resize is a split-weight edit. It does not move leaves, collapse zones, or
+write frames directly.
+
+Rules:
+
+1. `resizeSplit(windowID, direction, delta)` targets the innermost ancestor
+   split that both contains `windowID` and has an adjacent sibling cell in
+   `direction`.
+2. The target split axis must match the direction family: `.horizontal` for
+   left/right, `.vertical` for up/down.
+3. `delta` is measured in `Cell.weight` units, not pixels. Positive `delta`
+   grows the containing cell toward `direction` by adding `delta` to that cell
+   and subtracting `delta` from the adjacent sibling. Negative `delta` reverses
+   that transfer.
+4. The split's total weight is preserved exactly. All other cell weights, axes,
+   leaf paths, `.void` paths, floating order, and metadata are preserved.
+5. If there is no adjacent sibling in the requested direction, the command
+   fails with `.noNeighbor(direction)`.
+6. Non-finite deltas fail with `.invalidResizeDelta`.
+7. A delta that would make either adjusted cell weight non-positive fails with
+   `.resizeWouldCollapseSplit(windowID, direction)`.
+8. Min-size constraints are still enforced after planning by the existing
+   min-size-aware layout solver; an otherwise valid weight edit can still be
+   rejected as `.layoutUnsatisfiable`.
+9. Shell resize commands expose the same model directly: `winmgrctl resize
+   <direction> --delta <weight>` and Lua `action = { type = "resize_split",
+   direction = "...", delta = ... }`. The CLI requires `--delta`; no hidden
+   default step size is chosen.
+10. No default resize hotkey is shipped yet; avoiding another surprise global
+    Carbon binding is more important than guessing a key.
+
+This makes resize a local ratio edit on the existing tree, not a geometric
+mutation that bypasses the model.
 
 ---
 
@@ -393,6 +431,8 @@ Anything not required for that loop is deferred until after the loop works.
 | 25 | Explicit focus command | `WinMgrCoreTests` prove `.focus` records focused window state without layout mutation; IPC DTO tests prove stable JSON; startup/shutdown smoke proves explicit IPC focus routing does not break app startup | Resize-split, balance |
 | 26 | Balance command core | `WinMgrCoreTests` prove `.balance(spaceID)` recursively normalizes all split weights in the selected Space while preserving tree shape, void leaves, floating order, focus, and world metadata | User-facing balance IPC/key binding, resize-split |
 | 27 | Balance shell route | IPC DTO, `winmgrctl balance`, and Lua `action = { type = "balance" }` resolve active Space at execution time; startup/shutdown smoke proves IPC balance succeeds before reset/quit | Resize-split, user-selected default balance key binding |
+| 28 | Resize-split command core | `WinMgrCoreTests` prove `.resizeSplit(windowID, direction, delta)` adjusts only the nearest matching split weights, preserves tree shape/metadata, and fails explicitly on no-neighbor, non-finite delta, or collapsing weights | User-facing resize IPC/key binding |
+| 29 | Resize-split shell route | IPC DTO, `winmgrctl resize <direction> --delta <weight>`, and Lua `action = { type = "resize_split", direction = "...", delta = ... }` route through `WorldActor.planResize`; startup/shutdown smoke proves the app shell still boots with the route | User-selected default resize key binding |
 
 ### Fast-path constraints
 
@@ -496,6 +536,7 @@ Apply the 5-question test to every planned function. Tag `[CORE]` or `[SHELL]`.
 | `quarterIntoTree(_:WindowID, _:Corner, _:Node) -> Node` | Tree.swift | Creates or targets the left/right side lane, then splits its top/bottom half for exact corner drag-zone placement while preserving void lanes. |
 | `swapWindowsInTree(_:WindowID, _:WindowID, _:Node) -> Node` | Tree.swift | Exchanges two occupied leaves without changing split shape, weights, or void leaves. |
 | `balanceTree(_:Node) -> Node` | Tree.swift | Recursively resets every split cell weight to `1` while preserving axes, cell counts, leaf paths, and void paths. |
+| `resizeSplitInTree(_:WindowID, _:Direction, delta:Double, _:Node) -> Result<Node, TreeResizeError>` | Tree.swift | Adjusts the nearest matching split boundary around a window by transferring weight between adjacent sibling cells. |
 | `ejectFromTree(_:WindowID, _:Node) -> Node` | Tree.swift | Replaces the leaf with `.void` and preserves the zone shape. |
 | `nodesInTree(_:Node) -> [(NodePath, Node)]` | Tree.swift | Pure traversal materialized as values; callers cannot hide effects in a visitor closure. |
 | `nodeAt(_:NodePath, in:Node) -> Node?` | Tree.swift | Path-indexed lookup. |
@@ -543,6 +584,7 @@ All "no" on the 5 questions:
 | `HotkeyManager.bind(_:HotkeyBinding, _:@MainActor @escaping (HotkeyAction) -> Void)` | HotkeyManager | Carbon registration; emits a shell action. |
 | `HotkeyManager.start() @MainActor throws -> ServiceHandle` | HotkeyManager | Registers configured Carbon hotkeys; startup fails if registration fails; handle unregisters them. |
 | `WorldActor.planBalanceActiveSpace() -> Result<CommandPlanResult, CommandError>` | WorldActor | Actor-isolated active-Space read followed by the pure `.balance(activeSpace)` transition and layout diff planning. |
+| `WorldActor.planResize(_:direction:delta:) -> Result<CommandPlanResult, CommandError>` | WorldActor | Actor-isolated focused or explicit window resize planning through pure `.resizeSplit(windowID, direction, delta)` and layout diff planning. |
 | `EventTapClient.events: AsyncStream<DragEvent>` | EventTapClient | CGEventTap stream. |
 | `EventTapClient.start() async throws -> ServiceHandle` | EventTapClient | Installs the CGEventTap, starts its runloop thread, and returns an owned stop handle. |
 | `IPCServer.start() async throws -> ServiceHandle` | IPCServer | Binds Unix socket, launches accept loop task, and returns an owned stop handle; per-message handler awaits `CommandOutcome` and returns `IPCReplyDTO`. |
@@ -568,7 +610,7 @@ All "no" on the 5 questions:
 | `RestorePersistence.scheduleSave(_:reason:) @MainActor` | RestoreManager | Debounced atomic save shell for `~/Library/Application Support/winmgr/state.json`; AppKit termination and app-owned quit paths call `flushPending()` synchronously. |
 | `RestoreManager.load() throws -> StoredWorld?` | RestoreManager | Reads restore JSON; returns nil for no file or unsupported schema version. |
 
-**Core:shell ratio**: 25 core / 38 shell function families = ~0.7:1. Target was 4:1, but a window manager is by nature I/O-heavy. The *line-count* ratio matters more here — the core implementations are substantial (tree ops + layout + apply + restore remap/projection + coalescing policies) while shell wrappers are thin. Acceptable.
+**Core:shell ratio**: 26 core / 39 shell function families = ~0.7:1. Target was 4:1, but a window manager is by nature I/O-heavy. The *line-count* ratio matters more here — the core implementations are substantial (tree ops + layout + apply + restore remap/projection + coalescing policies) while shell wrappers are thin. Acceptable.
 
 ---
 
@@ -850,9 +892,13 @@ enum CommandError: Error, Equatable {
     case windowIsFloating(WindowID)
     case windowIsTiled(WindowID)
     case windowNotResizable(WindowID)
+    case activeSpaceUnavailable
     case spaceNotFound(SpaceID)
     case displayNotFound(DisplayID)
     case noNeighbor(Direction)
+    case invalidResizeDelta
+    case resizeWouldCollapseSplit(WindowID, Direction)
+    case layoutUnsatisfiable(UnsatisfiableLayout)
     case zoneNotFound(ZoneID)
     case ruleInvalid(String)
     case configInvalid(String)
@@ -863,9 +909,13 @@ enum CommandError: Error, Equatable {
         case .windowIsFloating: return "window_is_floating"
         case .windowIsTiled: return "window_is_tiled"
         case .windowNotResizable: return "window_not_resizable"
+        case .activeSpaceUnavailable: return "active_space_unavailable"
         case .spaceNotFound: return "space_not_found"
         case .displayNotFound: return "display_not_found"
         case .noNeighbor: return "no_neighbor"
+        case .invalidResizeDelta: return "invalid_resize_delta"
+        case .resizeWouldCollapseSplit: return "resize_would_collapse_split"
+        case .layoutUnsatisfiable: return "layout_unsatisfiable"
         case .zoneNotFound: return "zone_not_found"
         case .ruleInvalid: return "rule_invalid"
         case .configInvalid: return "config_invalid"
@@ -990,6 +1040,7 @@ enum CommandTemplate: Equatable {
     case center
     case eject
     case swap(Direction)
+    case resizeSplit(Direction, delta: Double)
     case focusDirection(Direction)
     case focusCycle(FocusCycleDirection)
     case toggleFloat
@@ -1201,12 +1252,17 @@ enum IPCCommandDTO: Codable {
     case push(windowID: WindowID, direction: Direction)
     case center(windowID: WindowID)
     case eject(windowID: WindowID)
+    case swapFocused(Direction)
+    case swap(windowID: WindowID, direction: Direction)
+    case resizeFocused(Direction, delta: Double)
+    case resize(windowID: WindowID, direction: Direction, delta: Double)
     case focusDirection(Direction)
     case focusCycle(FocusCycleDirection)
     case focus(windowID: WindowID)
     case toggleFloat(windowID: WindowID)
     case balance
     case resetLayout
+    case quit
 
     func toCommand(focusedWindowID: WindowID? = nil) -> Result<Command, IPCCommandResolutionError> {
         switch self {
@@ -1216,12 +1272,21 @@ enum IPCCommandDTO: Codable {
         case .push(let windowID, let direction): return .success(.push(windowID, direction))
         case .center(let windowID): return .success(.center(windowID))
         case .eject(let windowID): return .success(.eject(windowID))
+        case .swapFocused(let direction):
+            guard let focusedWindowID else { return .failure(.focusedWindowRequired) }
+            return .success(.swapInTree(focusedWindowID, direction))
+        case .swap(let windowID, let direction): return .success(.swapInTree(windowID, direction))
+        case .resizeFocused(let direction, let delta):
+            guard let focusedWindowID else { return .failure(.focusedWindowRequired) }
+            return .success(.resizeSplit(focusedWindowID, direction, delta: delta))
+        case .resize(let windowID, let direction, let delta): return .success(.resizeSplit(windowID, direction, delta: delta))
         case .focusDirection(let direction): return .success(.focusDirection(direction))
         case .focusCycle(let direction): return .success(.focusCycle(direction))
         case .focus(let windowID): return .success(.focus(windowID))
         case .toggleFloat(let windowID): return .success(.toggleFloat(windowID))
         case .balance: return .failure(.shellCommandOnly)
         case .resetLayout: return .success(.resetLayout)
+        case .quit: return .failure(.shellCommandOnly)
         }
     }
 }

@@ -635,6 +635,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await performBalance()
         case .command(.swap(let direction)):
             await performSwap(direction)
+        case .command(.resizeSplit(let direction, let delta)):
+            await performResize(direction, delta: delta)
         case .command(.focusDirection(let direction)):
             await performFocusDirection(direction)
         case .command(.focusCycle(let direction)):
@@ -820,6 +822,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await applyPlannedSwap(result, windowID: context.snapshot.id, direction: direction, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Swap \(direction.rawValue) rejected by core: \(error.message)")
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performResize(_ direction: Direction, delta: Double) async -> Bool {
+        let operation = "Resize \(direction.rawValue) \(delta)"
+        guard let context = focusedLayoutContext(operation: operation),
+              let displayID = displayForFocusedWindow(context, operation: operation),
+              await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-resize \(direction.rawValue)")
+        else { return false }
+
+        switch await worldActor.planResize(context.snapshot.id, direction: direction, delta: delta) {
+        case .success(let result):
+            return await applyPlannedResize(
+                result,
+                windowID: context.snapshot.id,
+                direction: direction,
+                delta: delta,
+                retryOnClamp: true
+            )
+        case .failure(let error):
+            reporter.error("Resize \(direction.rawValue) rejected by core: \(error.message)")
             return false
         }
     }
@@ -1021,6 +1047,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             retryOnClamp: retryOnClamp
         ) {
             await self.worldActor.planSwap(windowID, direction: direction)
+        }
+    }
+
+    @MainActor
+    private func applyPlannedResize(
+        _ result: CommandPlanResult,
+        windowID: WindowID,
+        direction: Direction,
+        delta: Double,
+        retryOnClamp: Bool
+    ) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: "Resize \(direction.rawValue) \(delta)",
+            persistReason: "resize \(direction.rawValue) \(delta)",
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.worldActor.planResize(windowID, direction: direction, delta: delta)
         }
     }
 
@@ -1307,6 +1351,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         case .swap(let windowID, let direction):
             if let failure = await performExplicitSwap(windowID: windowID, direction: direction) {
+                return .error(commandID: commandID, code: failure.code, message: failure.message)
+            }
+            return .ok(commandID: commandID)
+        case .resizeFocused(let direction, let delta):
+            if await performResize(direction, delta: delta) {
+                return .ok(commandID: commandID)
+            }
+            return .error(
+                commandID: commandID,
+                code: "resize_failed",
+                message: "Focused resize \(direction.rawValue) failed; see WinMgrApp log"
+            )
+        case .resize(let windowID, let direction, let delta):
+            if let failure = await performExplicitResize(windowID: windowID, direction: direction, delta: delta) {
                 return .error(commandID: commandID, code: failure.code, message: failure.message)
             }
             return .ok(commandID: commandID)
@@ -1611,6 +1669,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    private func performExplicitResize(
+        windowID: WindowID,
+        direction: Direction,
+        delta: Double
+    ) async -> CommandExecutionFailure? {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            return CommandExecutionFailure(
+                code: "accessibility_not_trusted",
+                message: "Accessibility permission is not trusted"
+            )
+        }
+
+        let displays = displayClient.currentDisplays()
+        let environment = await refreshEnvironment(reason: "ipc resize \(direction.rawValue)", displays: displays)
+        guard environment.activeSpace != nil else {
+            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
+        }
+        guard case .complete = environment.quality else {
+            return CommandExecutionFailure(
+                code: "environment_incomplete",
+                message: "IPC resize requires a complete AX snapshot; got \(describe(environment.quality))"
+            )
+        }
+
+        switch await worldActor.planResize(windowID, direction: direction, delta: delta) {
+        case .success(let result):
+            if await applyPlannedResize(
+                result,
+                windowID: windowID,
+                direction: direction,
+                delta: delta,
+                retryOnClamp: true
+            ) {
+                return nil
+            }
+            return CommandExecutionFailure(
+                code: "apply_failed",
+                message: "Resize \(direction.rawValue) layout write failed; see WinMgrApp log"
+            )
+        case .failure(let error):
+            return CommandExecutionFailure(code: error.code, message: error.message)
+        }
+    }
+
+    @MainActor
     private func persistRestore(reason: String) async {
         let stored = await worldActor.restoreSnapshot()
         restorePersistence.scheduleSave(stored, reason: reason)
@@ -1664,6 +1767,8 @@ private func describe(_ template: CommandTemplate) -> String {
         return "eject"
     case .swap(let direction):
         return "swap \(direction.rawValue)"
+    case .resizeSplit(let direction, let delta):
+        return "resize \(direction.rawValue) \(delta)"
     case .focusDirection(let direction):
         return "focus \(direction.rawValue)"
     case .focusCycle(let direction):
