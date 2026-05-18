@@ -432,3 +432,37 @@ Observed Rung 22 results:
 | Date | Commit | Quarter insertion tests | Drop-zone integration | Known failures |
 |---|---|---|---|---|
 | 2026-05-18 | `0a4fc40` | Passed: pure tests cover all four empty-tree corners, durable opposite void lanes, and repeated top-left insertion splitting toward center without duplicate occupied windows; full suite passed 134 tests / 18 suites | Passed: configured `.insertAsQuarter` zones for top-left, top-right, bottom-left, and bottom-right each produce exact display-corner frames through `.dropAtZone`; unsupported `.insertAtSubtree([0, 1])` still fails explicitly | None |
+
+## Rung 23: Eject Command
+
+This post-MVP core gate makes the existing `Command.eject` executable instead
+of a placeholder. Eject is a tiling-state operation: it removes a tiled window
+from the BSP tree, leaves that zone as `.void`, and moves the window into the
+display's floating order. It does not close, hide, resize, or delete the live
+window metadata.
+
+Commands:
+
+```sh
+CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+scripts/smoke_startup_shutdown.sh
+```
+
+Pass criteria:
+
+- `apply(.eject(windowID), to:)` succeeds only for live windows currently tiled
+  in the active Space.
+- Eject preserves the surrounding zone tree by replacing the ejected leaf with
+  `.void`.
+- Eject preserves `windows`, `windowDisplay`, `windowConstraints`, and
+  `pendingRules` while appending the window once to the display floating order.
+- IPC JSON encodes and decodes the stable `{"command":"eject","windowID":...}`
+  shape.
+- App shell hotkey/config routing and explicit IPC routing plan the same core
+  command and hide the focus border when the focused tiled window leaves the
+  tiled layout.
+
+Observed Rung 23 results:
+
+| Date | Commit | Core/DTO tests | App smoke | Known failures |
+|---|---|---|---|---|

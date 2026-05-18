@@ -123,6 +123,10 @@ actor WorldActor {
         planLayoutCommand(.center(windowID), focusedWindowID: windowID)
     }
 
+    func planEject(_ windowID: WindowID) -> Result<CommandPlanResult, CommandError> {
+        planLayoutCommand(.eject(windowID), focusedWindowID: windowID)
+    }
+
     func planSwap(_ windowID: WindowID, direction: Direction) -> Result<CommandPlanResult, CommandError> {
         planLayoutCommand(.swapInTree(windowID, direction), focusedWindowID: windowID)
     }

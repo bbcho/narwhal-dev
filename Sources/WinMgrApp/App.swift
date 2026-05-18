@@ -627,6 +627,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await performPush(direction)
         case .command(.center):
             await performCenter()
+        case .command(.eject):
+            await performEject()
         case .command(.swap(let direction)):
             await performSwap(direction)
         case .command(.focusDirection(let direction)):
@@ -760,6 +762,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await applyPlannedCenter(result, windowID: context.snapshot.id, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Center rejected by core: \(error.message)")
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performEject() async -> Bool {
+        let operation = "Eject"
+        guard let context = focusedLayoutContext(operation: operation),
+              let displayID = displayForFocusedWindow(context, operation: operation),
+              await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-eject")
+        else { return false }
+
+        switch await worldActor.planEject(context.snapshot.id) {
+        case .success(let result):
+            return await applyPlannedEject(result, windowID: context.snapshot.id, retryOnClamp: true)
+        case .failure(let error):
+            reporter.error("Eject rejected by core: \(error.message)")
             return false
         }
     }
@@ -920,6 +940,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    private func applyPlannedEject(
+        _ result: CommandPlanResult,
+        windowID: WindowID,
+        retryOnClamp: Bool
+    ) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: "Eject",
+            persistReason: "eject",
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.worldActor.planEject(windowID)
+        }
+    }
+
+    @MainActor
     private func applyPlannedSwap(
         _ result: CommandPlanResult,
         windowID: WindowID,
@@ -951,6 +987,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let focusedWindowID = result.focusedWindowID,
                let frame = applyResult.applied[focusedWindowID] ?? result.desiredLayout.layout.tiled[focusedWindowID] {
                 overlay.updateFocusBorder(.show(focusedWindowID, frame))
+            } else if result.focusedWindowID != nil {
+                overlay.updateFocusBorder(.hide)
             }
             await persistRestore(reason: persistReason)
             return true
@@ -1208,6 +1246,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return .error(commandID: commandID, code: failure.code, message: failure.message)
             }
             return .ok(commandID: commandID)
+        case .eject(let windowID):
+            if let failure = await performExplicitEject(windowID: windowID) {
+                return .error(commandID: commandID, code: failure.code, message: failure.message)
+            }
+            return .ok(commandID: commandID)
         case .focusDirection(let direction):
             if await performFocusDirection(direction) {
                 return .ok(commandID: commandID)
@@ -1226,7 +1269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 code: "focus_failed",
                 message: "Focus cycle \(direction.rawValue) failed; see WinMgrApp log"
             )
-        case .eject, .focus, .toggleFloat:
+        case .focus, .toggleFloat:
             return .error(
                 commandID: commandID,
                 code: "not_implemented",
@@ -1299,6 +1342,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return CommandExecutionFailure(
                 code: "apply_failed",
                 message: "Center layout write failed; see WinMgrApp log"
+            )
+        case .failure(let error):
+            return CommandExecutionFailure(code: error.code, message: error.message)
+        }
+    }
+
+    @MainActor
+    private func performExplicitEject(windowID: WindowID) async -> CommandExecutionFailure? {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            return CommandExecutionFailure(
+                code: "accessibility_not_trusted",
+                message: "Accessibility permission is not trusted"
+            )
+        }
+
+        let displays = displayClient.currentDisplays()
+        let environment = await refreshEnvironment(reason: "ipc eject", displays: displays)
+        guard environment.activeSpace != nil else {
+            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
+        }
+        guard case .complete = environment.quality else {
+            return CommandExecutionFailure(
+                code: "environment_incomplete",
+                message: "IPC eject requires a complete AX snapshot; got \(describe(environment.quality))"
+            )
+        }
+
+        switch await worldActor.planEject(windowID) {
+        case .success(let result):
+            if await applyPlannedEject(result, windowID: windowID, retryOnClamp: true) {
+                return nil
+            }
+            return CommandExecutionFailure(
+                code: "apply_failed",
+                message: "Eject layout write failed; see WinMgrApp log"
             )
         case .failure(let error):
             return CommandExecutionFailure(code: error.code, message: error.message)

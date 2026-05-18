@@ -315,6 +315,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 20 | Restore persistence boundary | `WinMgrAppSupportTests` prove missing file, unsupported schema, corrupt JSON, invalid persisted `StoredWorld`, and save/load round-trip from a temp restore path | Debounced async persistence scheduling |
 | 21 | Debounced restore persistence scheduling | `WinMgrAppSupportTests` prove pure latest-wins coalescing, stale generation rejection, immediate flush, cancellation, failed-save reporting, and successful later save; startup/shutdown smoke proves AppKit termination and app-owned quit flush pending restore state before exit; install/uninstall request graceful IPC quit before `launchctl bootout` | Cross-process crash recovery while a save is still pending |
 | 22 | Quarter drag-zone actions | `WinMgrCoreTests` prove configured `.insertAsQuarter` zones place a dragged window into each exact display corner and preserve persistent void lanes; unsupported subtree actions still fail explicitly | Custom subtree-targeted zones |
+| 23 | Eject command | `WinMgrCoreTests` prove `.eject` moves a tiled window to the floating layer while preserving the zone shape; IPC DTO tests prove stable JSON; startup/shutdown smoke proves the app shell still boots with the new command route | Toggle-float, resize-split, balance |
 
 ### Fast-path constraints
 
@@ -409,7 +410,7 @@ Apply the 5-question test to every planned function. Tag `[CORE]` or `[SHELL]`.
 
 | Function | Module | Notes |
 |---|---|---|
-| `apply(_ cmd: Command, to: World) -> Result<World, CommandError>` | Apply.swift | Central transition. Deterministic. |
+| `apply(_ cmd: Command, to: World) -> Result<World, CommandError>` | Apply.swift | Central transition for implemented commands, including push, center, eject, swap, drop-zone actions, reset, restore/reconcile, and config reload. Deterministic. |
 | `reconcileEnvironment(_:EnvironmentSnapshot, world:World) -> World` | Apply.swift | Updates active Space/display/window maps from a complete AX snapshot; preserves prior window state on partial snapshots. |
 | `resetTilingState(in:World) -> World` | Apply.swift | Clears BSP trees, floating lists, focus, pending rules, and observed min-size constraints while preserving live window/display inventory and config. |
 | `recordObservedConstraints(_:WindowConstraints, for:WindowID, in:World) -> World` | Apply.swift | Pure merge of AX clamp feedback into `world.windowConstraints`; maxes minimums, never lowers them during a session. |

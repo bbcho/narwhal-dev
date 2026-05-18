@@ -6,8 +6,8 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
         return applyPush(windowID, direction: direction, to: world)
     case .center(let windowID):
         return applyCenter(windowID, to: world)
-    case .eject:
-        return commandNotImplemented(command)
+    case .eject(let windowID):
+        return applyEject(windowID, to: world)
     case .focusDirection:
         return commandNotImplemented(command)
     case .focusCycle:
@@ -95,6 +95,49 @@ private func applyCenter(_ windowID: WindowID, to world: World) -> Result<World,
     case .failure(let error):
         return .failure(error)
     }
+}
+
+private func applyEject(_ windowID: WindowID, to world: World) -> Result<World, CommandError> {
+    guard world.windows[windowID] != nil else {
+        return .failure(.windowNotFound(windowID))
+    }
+    guard let activeSpace = world.activeSpace, let space = world.spaces[activeSpace] else {
+        return .failure(.activeSpaceUnavailable)
+    }
+    guard let displayID = tiledDisplay(containing: windowID, in: space) else {
+        return .failure(.windowIsFloating(windowID))
+    }
+
+    var displayStates = space.displays.mapValues { displayState in
+        DisplaySpaceState(
+            displayID: displayState.displayID,
+            tree: ejectFromTree(windowID, displayState.tree),
+            floating: displayState.floating.filter { $0 != windowID }
+        )
+    }
+    let target = displayStates[displayID] ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
+    displayStates[displayID] = DisplaySpaceState(
+        displayID: displayID,
+        tree: target.tree,
+        floating: target.floating + [windowID]
+    )
+
+    var spaces = world.spaces
+    spaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: windowID)
+
+    var windowDisplay = world.windowDisplay
+    windowDisplay[windowID] = displayID
+
+    return .success(World(
+        displays: world.displays,
+        activeSpace: activeSpace,
+        spaces: spaces,
+        windows: world.windows,
+        windowDisplay: windowDisplay,
+        windowConstraints: world.windowConstraints,
+        pendingRules: world.pendingRules,
+        config: world.config
+    ))
 }
 
 private func applySwap(_ windowID: WindowID, direction: Direction, to world: World) -> Result<World, CommandError> {
