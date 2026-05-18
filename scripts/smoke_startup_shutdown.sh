@@ -103,6 +103,9 @@ wait_for_log "IPC server ready at $socket_path" 20
 wait_for_log "Drag zones ready with modifier shift" 20
 wait_for_log "Layout command loop ready" 20
 
+"$bin_path/WinMgrCtl" balance | grep -Eq '^ok ipc-' || fail "winmgrctl balance did not return ok"
+wait_for_log "IPC balance completed" 10
+
 "$bin_path/WinMgrCtl" reset | grep -Eq '^ok ipc-' || fail "winmgrctl reset did not return ok"
 wait_for_log "IPC reset layout memory" 10
 

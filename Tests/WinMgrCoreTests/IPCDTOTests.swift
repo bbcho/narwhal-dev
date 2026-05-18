@@ -16,6 +16,7 @@ struct IPCDTOTests {
         #expect(try encode(.focusDirection(.up)) == #"{"command":"focusDirection","direction":"up"}"#)
         #expect(try encode(.focusCycle(.next)) == #"{"command":"focusCycle","direction":"next"}"#)
         #expect(try encode(.focus(windowID: WindowID(raw: 237))) == #"{"command":"focus","windowID":237}"#)
+        #expect(try encode(.balance) == #"{"command":"balance"}"#)
         #expect(try encode(.resetLayout) == #"{"command":"resetLayout"}"#)
         #expect(try encode(.quit) == #"{"command":"quit"}"#)
     }
@@ -34,6 +35,7 @@ struct IPCDTOTests {
         #expect(try decodeCommand(#"{"command":"eject","windowID":235}"#).toCommand() == .success(.eject(WindowID(raw: 235))))
         #expect(try decodeCommand(#"{"command":"toggleFloat","windowID":236}"#).toCommand() == .success(.toggleFloat(WindowID(raw: 236))))
         #expect(try decodeCommand(#"{"command":"focus","windowID":237}"#).toCommand() == .success(.focus(WindowID(raw: 237))))
+        #expect(try decodeCommand(#"{"command":"balance"}"#).toCommand() == .failure(.shellCommandOnly))
         #expect(try decodeCommand(#"{"command":"swap","direction":"left"}"#).toCommand() == .failure(.focusedWindowRequired))
         #expect(try decodeCommand(#"{"command":"swap","direction":"left"}"#).toCommand(focusedWindowID: WindowID(raw: 567)) == .success(.swapInTree(WindowID(raw: 567), .left)))
         #expect(try decodeCommand(#"{"command":"swap","direction":"right","windowID":678}"#).toCommand() == .success(.swapInTree(WindowID(raw: 678), .right)))

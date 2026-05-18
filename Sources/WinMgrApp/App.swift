@@ -631,6 +631,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await performEject()
         case .command(.toggleFloat):
             await performToggleFloat()
+        case .command(.balance):
+            await performBalance()
         case .command(.swap(let direction)):
             await performSwap(direction)
         case .command(.focusDirection(let direction)):
@@ -823,6 +825,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    @discardableResult
+    private func performBalance() async -> Bool {
+        if let failure = await performActiveSpaceBalance(
+            operation: "Balance",
+            refreshReason: "pre-balance",
+            persistReason: "balance"
+        ) {
+            reporter.error("Balance rejected: \(failure.message)")
+            return false
+        }
+        return true
+    }
+
+    @MainActor
     private func performDragDrop(at location: CGPoint) async {
         let operation = "Drag drop"
         guard let context = focusedLayoutContext(operation: operation) else { return }
@@ -1005,6 +1021,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             retryOnClamp: retryOnClamp
         ) {
             await self.worldActor.planSwap(windowID, direction: direction)
+        }
+    }
+
+    @MainActor
+    private func applyPlannedBalance(
+        _ result: CommandPlanResult,
+        operation: String,
+        persistReason: String,
+        retryOnClamp: Bool
+    ) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: operation,
+            persistReason: persistReason,
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.worldActor.planBalanceActiveSpace()
         }
     }
 
@@ -1292,6 +1325,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return .error(commandID: commandID, code: failure.code, message: failure.message)
             }
             return .ok(commandID: commandID)
+        case .balance:
+            if let failure = await performActiveSpaceBalance(
+                operation: "IPC balance",
+                refreshReason: "ipc balance",
+                persistReason: "ipc balance"
+            ) {
+                return .error(commandID: commandID, code: failure.code, message: failure.message)
+            }
+            return .ok(commandID: commandID)
         case .focusDirection(let direction):
             if await performFocusDirection(direction) {
                 return .ok(commandID: commandID)
@@ -1315,6 +1357,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return .error(commandID: commandID, code: failure.code, message: failure.message)
             }
             return .ok(commandID: commandID)
+        }
+    }
+
+    @MainActor
+    private func performActiveSpaceBalance(
+        operation: String,
+        refreshReason: String,
+        persistReason: String
+    ) async -> CommandExecutionFailure? {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            return CommandExecutionFailure(
+                code: "accessibility_not_trusted",
+                message: "Accessibility permission is not trusted"
+            )
+        }
+
+        let displays = displayClient.currentDisplays()
+        let environment = await refreshEnvironment(reason: refreshReason, displays: displays)
+        guard let activeSpace = environment.activeSpace else {
+            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
+        }
+        guard case .complete = environment.quality else {
+            return CommandExecutionFailure(
+                code: "environment_incomplete",
+                message: "\(operation) requires a complete AX snapshot; got \(describe(environment.quality))"
+            )
+        }
+
+        reporter.info("\(operation) selected active Space \(activeSpace.raw)")
+        switch await worldActor.planBalanceActiveSpace() {
+        case .success(let result):
+            if await applyPlannedBalance(result, operation: operation, persistReason: persistReason, retryOnClamp: true) {
+                return nil
+            }
+            return CommandExecutionFailure(
+                code: "apply_failed",
+                message: "\(operation) layout write failed; see WinMgrApp log"
+            )
+        case .failure(let error):
+            return CommandExecutionFailure(code: error.code, message: error.message)
         }
     }
 
@@ -1588,6 +1670,8 @@ private func describe(_ template: CommandTemplate) -> String {
         return "focus cycle \(direction.rawValue)"
     case .toggleFloat:
         return "toggleFloat"
+    case .balance:
+        return "balance"
     case .resetLayout:
         return "resetLayout"
     }

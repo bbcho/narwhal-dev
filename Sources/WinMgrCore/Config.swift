@@ -61,6 +61,7 @@ public enum CommandTemplate: Equatable, Sendable {
     case focusDirection(Direction)
     case focusCycle(FocusCycleDirection)
     case toggleFloat
+    case balance
     case resetLayout
 }
 
@@ -230,6 +231,8 @@ public enum DefaultConfigLua {
             return "{ type = \"focus_cycle\", direction = \(quoted(direction.rawValue)) }"
         case .toggleFloat:
             return "{ type = \"toggle_float\" }"
+        case .balance:
+            return "{ type = \"balance\" }"
         case .resetLayout:
             return "{ type = \"reset_layout\" }"
         }

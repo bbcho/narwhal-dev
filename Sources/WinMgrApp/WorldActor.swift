@@ -135,6 +135,13 @@ actor WorldActor {
         planLayoutCommand(.swapInTree(windowID, direction), focusedWindowID: windowID)
     }
 
+    func planBalanceActiveSpace() -> Result<CommandPlanResult, CommandError> {
+        guard let activeSpace = world.activeSpace else {
+            return .failure(.activeSpaceUnavailable)
+        }
+        return planLayoutCommand(.balance(activeSpace), focusedWindowID: world.spaces[activeSpace]?.focused)
+    }
+
     func planDrop(windowID: WindowID, displayID: DisplayID, zoneID: ZoneID) -> Result<CommandPlanResult, CommandError> {
         planLayoutCommand(.dropAtZone(windowID, displayID, zoneID), focusedWindowID: windowID)
     }

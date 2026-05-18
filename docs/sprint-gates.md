@@ -571,3 +571,35 @@ Observed Rung 26 results:
 | Date | Commit | Core tests | App smoke | Known failures |
 |---|---|---|---|---|
 | 2026-05-18 | `de05512` | Passed: exact core tests cover recursive split-weight normalization, preserved occupied and void paths, selected-Space-only application, preserved floating/focus/metadata/display/constraint/pending/config state, and `.spaceNotFound`; full suite passed 147 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
+
+## Rung 27: Balance Shell Route
+
+This post-MVP shell gate exposes balance without accepting raw Space IDs from
+users. The shell resolves the active Space at execution time after a fresh
+environment read.
+
+Commands:
+
+```sh
+CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+scripts/smoke_startup_shutdown.sh
+```
+
+Pass criteria:
+
+- IPC JSON encodes and decodes the stable `{"command":"balance"}` shape.
+- `IPCCommandDTO.balance.toCommand()` remains `.shellCommandOnly`, because only
+  the shell can resolve the current active Space.
+- `winmgrctl balance` sends the balance IPC command without requiring a window
+  ID or exposing a Space ID.
+- Lua config accepts `action = { type = "balance" }` for user-defined hotkeys,
+  and the renderer emits the same exact action shape.
+- App hotkey/IPC routing refreshes the environment, requires a complete AX
+  snapshot, plans `.balance(activeSpace)` through `WorldActor`, applies layout,
+  and persists restore state.
+- No default balance hotkey is added in this rung.
+
+Observed Rung 27 results:
+
+| Date | Commit | Core/DTO/config tests | App smoke | Known failures |
+|---|---|---|---|---|

@@ -181,6 +181,7 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
     case focusCycle(FocusCycleDirection)
     case focus(windowID: WindowID)
     case toggleFloat(windowID: WindowID)
+    case balance
     case resetLayout
     case quit
 
@@ -199,6 +200,7 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
         case focusCycle
         case focus
         case toggleFloat
+        case balance
         case resetLayout
         case quit
     }
@@ -227,6 +229,8 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             return .success(.focus(windowID))
         case .toggleFloat(let windowID):
             return .success(.toggleFloat(windowID))
+        case .balance:
+            return .failure(.shellCommandOnly)
         case .resetLayout:
             return .success(.resetLayout)
         case .quit:
@@ -263,6 +267,8 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             self = .focus(windowID: try Self.decodeWindowID(from: container))
         case .toggleFloat:
             self = .toggleFloat(windowID: try Self.decodeWindowID(from: container))
+        case .balance:
+            self = .balance
         case .resetLayout:
             self = .resetLayout
         case .quit:
@@ -305,6 +311,8 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
         case .toggleFloat(let windowID):
             try container.encode(CommandName.toggleFloat, forKey: .command)
             try container.encode(windowID.raw, forKey: .windowID)
+        case .balance:
+            try container.encode(CommandName.balance, forKey: .command)
         case .resetLayout:
             try container.encode(CommandName.resetLayout, forKey: .command)
         case .quit:

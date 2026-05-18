@@ -19,7 +19,7 @@ This is the pre-implementation gate for the fp-architect skill, adapted to Swift
 | Restore | Fuzzy match on stable window descriptors `(bundleID, title, role)`. Restore JSON stores descriptors, not raw OS window/display IDs. Native Space pinning is deferred until a stable Space-slot mapping exists. |
 | Config | Lua 5.4 embedded via C interop. `~/.config/winmgr/init.lua`. FSEvent hot reload, last-good fallback. |
 | Input | Carbon hotkeys + `CGEventTap` shift-drag + Unix-socket IPC + `winmgrctl` CLI. |
-| Default key families | `ctrl-option-H/J/K/L` focus, `ctrl-option-shift-H/J/K/L` swap, `ctrl-option-command-H/J/K/L` push, `ctrl-option-U/I` cycle, `ctrl-option-delete` reset. |
+| Default key families | `ctrl-option-H/J/K/L` focus, `ctrl-option-shift-H/J/K/L` swap, `ctrl-option-command-H/J/K/L` push, `ctrl-option-U/I` cycle, `ctrl-option-delete` reset. Balance is exposed through IPC/CLI and configurable Lua hotkeys but has no default binding yet. |
 | Visuals | Focus border overlay, Space HUD on switch, gaps, NSStatusItem menubar. No animations. |
 | Distribution | Notarized `.app` bundle + LaunchAgent + brew cask (later). Private repo. |
 
@@ -153,8 +153,14 @@ Rules:
 5. Floating order, focused window, display inventory, live window metadata,
    display ownership, observed constraints, pending rules, and config are
    preserved exactly.
-6. Balance is currently a core transition. A user-facing IPC/config binding
-   must choose an explicit active-Space resolution rule before exposing it.
+6. Shell balance commands never accept raw Space IDs from users. `winmgrctl
+   balance` and configurable Lua hotkeys resolve `World.activeSpace` at
+   execution time after refreshing the environment.
+7. Shell balance requires Accessibility trust and a complete AX snapshot before
+   applying frames, because it has no focused-window snapshot to anchor stale
+   reconciliation.
+8. No default balance hotkey is shipped yet; avoiding a surprise global Carbon
+   binding is more important than guessing a key.
 
 This makes balance a layout-shape cleanup, not a tree rewrite.
 
@@ -386,6 +392,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 24 | Toggle-float command | `WinMgrCoreTests` prove `.toggleFloat` ejects tiled windows, center-tiles floating windows, preserves state metadata, and rejects non-resizable floating windows; IPC DTO tests prove stable JSON; startup/shutdown smoke proves the app shell still boots with the new command route | User-selected default key binding, resize-split, balance |
 | 25 | Explicit focus command | `WinMgrCoreTests` prove `.focus` records focused window state without layout mutation; IPC DTO tests prove stable JSON; startup/shutdown smoke proves explicit IPC focus routing does not break app startup | Resize-split, balance |
 | 26 | Balance command core | `WinMgrCoreTests` prove `.balance(spaceID)` recursively normalizes all split weights in the selected Space while preserving tree shape, void leaves, floating order, focus, and world metadata | User-facing balance IPC/key binding, resize-split |
+| 27 | Balance shell route | IPC DTO, `winmgrctl balance`, and Lua `action = { type = "balance" }` resolve active Space at execution time; startup/shutdown smoke proves IPC balance succeeds before reset/quit | Resize-split, user-selected default balance key binding |
 
 ### Fast-path constraints
 
@@ -535,6 +542,7 @@ All "no" on the 5 questions:
 | `DisplayClient.start() @MainActor async throws -> ServiceHandle` | DisplayClient | Registers screen/display change notifications and returns an owned stop handle. |
 | `HotkeyManager.bind(_:HotkeyBinding, _:@MainActor @escaping (HotkeyAction) -> Void)` | HotkeyManager | Carbon registration; emits a shell action. |
 | `HotkeyManager.start() @MainActor throws -> ServiceHandle` | HotkeyManager | Registers configured Carbon hotkeys; startup fails if registration fails; handle unregisters them. |
+| `WorldActor.planBalanceActiveSpace() -> Result<CommandPlanResult, CommandError>` | WorldActor | Actor-isolated active-Space read followed by the pure `.balance(activeSpace)` transition and layout diff planning. |
 | `EventTapClient.events: AsyncStream<DragEvent>` | EventTapClient | CGEventTap stream. |
 | `EventTapClient.start() async throws -> ServiceHandle` | EventTapClient | Installs the CGEventTap, starts its runloop thread, and returns an owned stop handle. |
 | `IPCServer.start() async throws -> ServiceHandle` | IPCServer | Binds Unix socket, launches accept loop task, and returns an owned stop handle; per-message handler awaits `CommandOutcome` and returns `IPCReplyDTO`. |
@@ -985,6 +993,7 @@ enum CommandTemplate: Equatable {
     case focusDirection(Direction)
     case focusCycle(FocusCycleDirection)
     case toggleFloat
+    case balance
     case resetLayout
     // template is resolved at hotkey-fire time using "focused window"
 }
@@ -1196,6 +1205,7 @@ enum IPCCommandDTO: Codable {
     case focusCycle(FocusCycleDirection)
     case focus(windowID: WindowID)
     case toggleFloat(windowID: WindowID)
+    case balance
     case resetLayout
 
     func toCommand(focusedWindowID: WindowID? = nil) -> Result<Command, IPCCommandResolutionError> {
@@ -1210,6 +1220,7 @@ enum IPCCommandDTO: Codable {
         case .focusCycle(let direction): return .success(.focusCycle(direction))
         case .focus(let windowID): return .success(.focus(windowID))
         case .toggleFloat(let windowID): return .success(.toggleFloat(windowID))
+        case .balance: return .failure(.shellCommandOnly)
         case .resetLayout: return .success(.resetLayout)
         }
     }

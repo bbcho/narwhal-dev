@@ -251,6 +251,8 @@ private func describe(_ template: CommandTemplate) -> String {
         return "focus cycle \(direction.rawValue)"
     case .toggleFloat:
         return "toggleFloat"
+    case .balance:
+        return "balance"
     case .resetLayout:
         return "resetLayout"
     }

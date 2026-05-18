@@ -57,6 +57,7 @@ struct ConfigTests {
         let customKeymap = [
             HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .shift]), action: .command(.push(.left))),
             HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .shift]), action: .command(.push(.right))),
+            HotkeyBinding(key: KeySpec(key: "r", modifiers: [.control, .shift]), action: .command(.balance)),
             HotkeyBinding(key: KeySpec(key: "delete", modifiers: [.control, .shift]), action: .command(.resetLayout))
         ]
         let customGaps = Gaps(inner: 8, outer: Insets(top: 4, left: 6, bottom: 8, right: 10))
@@ -65,6 +66,7 @@ struct ConfigTests {
         root["keymap"] = .array([
             binding(key: "h", modifiers: ["control", "shift"], action: ["type": .string("push"), "direction": .string("left")]),
             binding(key: "l", modifiers: ["control", "shift"], action: ["type": .string("push"), "direction": .string("right")]),
+            binding(key: "r", modifiers: ["control", "shift"], action: ["type": .string("balance")]),
             binding(key: "delete", modifiers: ["control", "shift"], action: ["type": .string("reset_layout")])
         ])
         root["gaps"] = .table([
@@ -86,6 +88,31 @@ struct ConfigTests {
             hud: .default,
             dragModifier: [.shift]
         ))
+    }
+
+    @Test("Lua config renderer emits balance actions exactly")
+    func luaConfigRendererEmitsBalanceAction() throws {
+        let config = Config(
+            keymap: [
+                HotkeyBinding(
+                    key: KeySpec(key: "r", modifiers: [.control, .option, .command]),
+                    action: .command(.balance)
+                )
+            ],
+            rules: [],
+            zones: [],
+            gaps: .init(inner: 0, outer: .init(top: 0, left: 0, bottom: 0, right: 0)),
+            border: .default,
+            hud: .default,
+            dragModifier: [.shift]
+        )
+
+        let rendered = DefaultConfigLua.render(config)
+        let line = rendered
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .first { $0.contains("type = \"balance\"") }
+
+        #expect(line.map(String.init) == #"    { key = "r", modifiers = { "control", "option", "command" }, action = { type = "balance" } },"#)
     }
 
     @Test("Lua config parser rejects duplicate hotkeys")

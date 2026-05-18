@@ -66,6 +66,8 @@ private struct ConfigParser {
             return .command(.focusCycle(try parseFocusCycleDirection(required("direction", in: table, path: key), key: "\(key).direction")))
         case "toggle_float":
             return .command(.toggleFloat)
+        case "balance":
+            return .command(.balance)
         case "reset_layout":
             return .command(.resetLayout)
         case "reload_config":
