@@ -391,3 +391,4 @@ Observed Rung 21 results:
 
 | Date | Commit | Scheduler tests | App runtime proof | Known failures |
 |---|---|---|---|---|
+| 2026-05-18 | `55d649a` | Passed: 4 scheduler tests cover latest-wins debounce, immediate flush canceling delayed write, explicit cancellation, failed-save event, and later successful save; full suite passed 127 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` logged IPC reset, IPC quit, `Restore state saved (ipc reset)` to `/private/tmp/winmgr-startup-shutdown-smoke/state.json`, `WinMgrApp stopped`, process exit, and socket removal | None |
