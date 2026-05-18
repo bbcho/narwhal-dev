@@ -32,7 +32,8 @@ let package = Package(
             dependencies: ["WinMgrCore"]
         ),
         .target(
-            name: "WinMgrAppSupport"
+            name: "WinMgrAppSupport",
+            dependencies: ["WinMgrCore"]
         ),
         .executableTarget(
             name: "WinMgrApp",
@@ -60,6 +61,7 @@ let package = Package(
         .testTarget(
             name: "WinMgrAppSupportTests",
             dependencies: [
+                "WinMgrCore",
                 "WinMgrAppSupport",
                 .product(name: "Testing", package: "swift-testing")
             ]

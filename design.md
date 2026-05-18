@@ -312,6 +312,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 17 | Service lifecycle orchestration | `WinMgrAppSupportTests` prove ordered startup, reverse-order rollback on a later startup failure, and idempotent normal shutdown | Real AX shell startup failure injection |
 | 18 | Startup failure rollback smoke | `scripts/smoke_startup_failure_rollback.sh` injects a failure at `dragZones` after IPC startup; app terminates and the IPC socket is removed without reaching layout-loop ready | Broader failure injection matrix |
 | 19 | Startup failure matrix | `scripts/smoke_startup_failure_matrix.sh` injects failure at every service boundary and proves each rollback terminates without layout-loop readiness or leftover IPC socket | Adapter-specific failure simulations |
+| 20 | Restore persistence boundary | `WinMgrAppSupportTests` prove missing file, unsupported schema, corrupt JSON, invalid persisted `StoredWorld`, and save/load round-trip from a temp restore path | Debounced async persistence scheduling |
 
 ### Fast-path constraints
 
@@ -2068,7 +2069,7 @@ No external lens library needed. Sum types (enums) need custom matchers — done
 | HotkeyManager | Unit test with mock Carbon-bind closure; reload rebinds exact new keymap | `Tests/WinMgrShellTests/HotkeyTests.swift` |
 | LuaEngine | Unit test: eval simple expressions, exposed function calls return | `Tests/WinMgrShellTests/LuaTests.swift` |
 | ConfigLoader | Integration: write a temp init.lua, start watcher with recording callback, mutate file, observe exact callback emission and adapter rebind/update | `Tests/WinMgrShellTests/ConfigLoaderTests.swift` |
-| RestoreManager | Unit/integration: successful outcomes schedule debounced `StoredWorld` save; corrupt JSON fails startup path | `Tests/WinMgrShellTests/RestoreManagerTests.swift` |
+| RestoreManager | Unit/integration: load/save boundary returns nil for no file and unsupported schema, throws typed failures for corrupt JSON and invalid persisted `StoredWorld`, and round-trips saved state from a temp path. Successful-outcome debounce scheduling remains a later shell check. | `Tests/WinMgrAppSupportTests/RestoreManagerTests.swift` |
 | IPC | Integration: in-proc client + server, send valid and invalid commands, assert exact `IPCReplyDTO` success/error JSON and open connection reuse | `Tests/WinMgrShellTests/IPCTests.swift` |
 | Menubar | Unit/integration: starts NSStatusItem, reload action invokes loader, quit action terminates app delegate path, stop handle removes item | `Tests/WinMgrShellTests/MenubarTests.swift` |
 | Startup/shutdown orchestration | Unit/integration with fake services: each `start()` returns a `ServiceHandle`; a failing later start cancels retained stream tasks and stops registered handles in reverse order, including Space/Display observer-token removal; normal app termination does the same cleanup and unlinks the IPC socket | `Tests/WinMgrShellTests/StartupTests.swift` |

@@ -1,11 +1,11 @@
 import Foundation
 import WinMgrCore
 
-enum RestoreManagerError: Error, CustomStringConvertible {
+public enum RestoreManagerError: Error, CustomStringConvertible, Equatable {
     case decodeFailed(String)
     case invalidStoredWorld(String)
 
-    var description: String {
+    public var description: String {
         switch self {
         case .decodeFailed(let message):
             return "restore JSON decode failed: \(message)"
@@ -15,19 +15,19 @@ enum RestoreManagerError: Error, CustomStringConvertible {
     }
 }
 
-struct RestoreManager {
-    static let defaultURL = FileManager.default
+public struct RestoreManager {
+    public static let defaultURL = FileManager.default
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("winmgr", isDirectory: true)
         .appendingPathComponent("state.json", isDirectory: false)
 
-    let url: URL
+    public let url: URL
 
-    init(url: URL = RestoreManager.defaultURL) {
+    public init(url: URL = RestoreManager.defaultURL) {
         self.url = url
     }
 
-    func load() throws -> StoredWorld? {
+    public func load() throws -> StoredWorld? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
 
         let data = try Data(contentsOf: url)
@@ -49,7 +49,7 @@ struct RestoreManager {
         }
     }
 
-    func save(_ stored: StoredWorld) throws {
+    public func save(_ stored: StoredWorld) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true

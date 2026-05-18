@@ -326,3 +326,34 @@ Observed Rung 19 results:
 | Date | Commit | Matrix cases | Rollback proof | Normal startup/shutdown | Known failures |
 |---|---|---|---|---|---|
 | 2026-05-18 | `8a667c0` | Passed: `menubar`, `hotkeys`, `axObserver`, `displayObserver`, `configWatcher`, `ipcServer`, and `dragZones` each logged the exact prior-service list | Passed: no case reached `Drag zones ready` or `Layout command loop ready`; every case exited and left `/tmp/winmgr-501.sock` absent; `dragZones` observed IPC ready before rollback | Passed: `scripts/smoke_startup_shutdown.sh` still completed reset, quit, process exit, and socket cleanup | None |
+
+## Rung 20: Restore Persistence Boundary
+
+This post-MVP shell-support gate makes restore JSON persistence a directly
+tested boundary. The pure restore model and validation stay in `WinMgrCore`;
+filesystem decode/encode lives in `WinMgrAppSupport`.
+
+Commands:
+
+```sh
+CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+scripts/smoke_startup_shutdown.sh
+```
+
+Pass criteria:
+
+- `RestoreManager` is owned by `WinMgrAppSupport`, not the executable target.
+- Unit tests prove a missing restore file returns `nil`.
+- Unit tests prove an unsupported `schemaVersion` returns `nil`.
+- Unit tests prove corrupt JSON throws `RestoreManagerError.decodeFailed`.
+- Unit tests prove invalid persisted `StoredWorld` throws the exact validation
+  failure from `WinMgrCore`.
+- Unit tests prove `save(_:)` creates the parent directory and `load()` returns
+  the exact saved `StoredWorld`.
+- Startup/shutdown smoke still passes with `--restore-state`, proving the app
+  still uses the moved restore boundary at runtime.
+
+Observed Rung 20 results:
+
+| Date | Commit | Restore tests | App runtime proof | Known failures |
+|---|---|---|---|---|

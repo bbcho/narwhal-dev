@@ -127,8 +127,5 @@ private struct ServiceHandle {
 }
 
 private func describe(_ error: Error) -> String {
-    if let custom = error as? CustomStringConvertible {
-        return custom.description
-    }
     return String(describing: error)
 }
