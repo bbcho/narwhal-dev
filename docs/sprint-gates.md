@@ -603,3 +603,4 @@ Observed Rung 27 results:
 
 | Date | Commit | Core/DTO/config tests | App smoke | Known failures |
 |---|---|---|---|---|
+| 2026-05-18 | `b3d5623` | Passed: exact tests cover stable IPC `balance` JSON, `.shellCommandOnly` active-Space resolution, Lua parser support for `action = { type = "balance" }`, exact Lua renderer output for balance actions, and unchanged default keymap; full suite passed 148 tests / 18 suites | Passed: updated `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config with 15 default hotkeys, completed environment refresh, registered hotkeys, brought IPC online, `winmgrctl balance` returned `ok`, logged active-Space resolution and `IPC balance completed`, then accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
