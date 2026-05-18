@@ -570,3 +570,4 @@ Observed Rung 26 results:
 
 | Date | Commit | Core tests | App smoke | Known failures |
 |---|---|---|---|---|
+| 2026-05-18 | `de05512` | Passed: exact core tests cover recursive split-weight normalization, preserved occupied and void paths, selected-Space-only application, preserved floating/focus/metadata/display/constraint/pending/config state, and `.spaceNotFound`; full suite passed 147 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
