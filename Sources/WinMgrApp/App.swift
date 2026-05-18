@@ -629,6 +629,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await performCenter()
         case .command(.eject):
             await performEject()
+        case .command(.toggleFloat):
+            await performToggleFloat()
         case .command(.swap(let direction)):
             await performSwap(direction)
         case .command(.focusDirection(let direction)):
@@ -780,6 +782,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await applyPlannedEject(result, windowID: context.snapshot.id, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Eject rejected by core: \(error.message)")
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performToggleFloat() async -> Bool {
+        let operation = "Toggle float"
+        guard let context = focusedLayoutContext(operation: operation),
+              let displayID = displayForFocusedWindow(context, operation: operation),
+              await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-toggle-float")
+        else { return false }
+
+        switch await worldActor.planToggleFloat(context.snapshot.id) {
+        case .success(let result):
+            return await applyPlannedToggleFloat(result, windowID: context.snapshot.id, retryOnClamp: true)
+        case .failure(let error):
+            reporter.error("Toggle float rejected by core: \(error.message)")
             return false
         }
     }
@@ -952,6 +972,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             retryOnClamp: retryOnClamp
         ) {
             await self.worldActor.planEject(windowID)
+        }
+    }
+
+    @MainActor
+    private func applyPlannedToggleFloat(
+        _ result: CommandPlanResult,
+        windowID: WindowID,
+        retryOnClamp: Bool
+    ) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: "Toggle float",
+            persistReason: "toggle float",
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.worldActor.planToggleFloat(windowID)
         }
     }
 
@@ -1251,6 +1287,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return .error(commandID: commandID, code: failure.code, message: failure.message)
             }
             return .ok(commandID: commandID)
+        case .toggleFloat(let windowID):
+            if let failure = await performExplicitToggleFloat(windowID: windowID) {
+                return .error(commandID: commandID, code: failure.code, message: failure.message)
+            }
+            return .ok(commandID: commandID)
         case .focusDirection(let direction):
             if await performFocusDirection(direction) {
                 return .ok(commandID: commandID)
@@ -1269,7 +1310,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 code: "focus_failed",
                 message: "Focus cycle \(direction.rawValue) failed; see WinMgrApp log"
             )
-        case .focus, .toggleFloat:
+        case .focus:
             return .error(
                 commandID: commandID,
                 code: "not_implemented",
@@ -1377,6 +1418,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return CommandExecutionFailure(
                 code: "apply_failed",
                 message: "Eject layout write failed; see WinMgrApp log"
+            )
+        case .failure(let error):
+            return CommandExecutionFailure(code: error.code, message: error.message)
+        }
+    }
+
+    @MainActor
+    private func performExplicitToggleFloat(windowID: WindowID) async -> CommandExecutionFailure? {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            return CommandExecutionFailure(
+                code: "accessibility_not_trusted",
+                message: "Accessibility permission is not trusted"
+            )
+        }
+
+        let displays = displayClient.currentDisplays()
+        let environment = await refreshEnvironment(reason: "ipc toggle float", displays: displays)
+        guard environment.activeSpace != nil else {
+            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
+        }
+        guard case .complete = environment.quality else {
+            return CommandExecutionFailure(
+                code: "environment_incomplete",
+                message: "IPC toggleFloat requires a complete AX snapshot; got \(describe(environment.quality))"
+            )
+        }
+
+        switch await worldActor.planToggleFloat(windowID) {
+        case .success(let result):
+            if await applyPlannedToggleFloat(result, windowID: windowID, retryOnClamp: true) {
+                return nil
+            }
+            return CommandExecutionFailure(
+                code: "apply_failed",
+                message: "Toggle float layout write failed; see WinMgrApp log"
             )
         case .failure(let error):
             return CommandExecutionFailure(code: error.code, message: error.message)

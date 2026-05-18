@@ -136,6 +136,30 @@ This makes swap a rearrangement operation, not a new insertion. It must not coll
 
 ---
 
+## Float Semantics
+
+Floating is tracked per display as back-to-front `WindowID` order. The shell
+does not move floating windows during layout writes; it only stops managing
+their tiled frame.
+
+Rules:
+
+1. `eject(window)` is one-way: a tiled window leaves the BSP tree, its leaf
+   becomes `.void`, and the window is appended once to the display floating
+   order.
+2. `toggleFloat(window)` is symmetric at the command boundary but still uses
+   explicit tree operations:
+   - If the window is tiled, it behaves exactly like `eject(window)`.
+   - If the window is floating, it is inserted with `centerIntoTree` on its
+     current display and removed from the floating order.
+3. Floating-to-tiled toggle requires `WindowMetadata.isResizable == true`
+   because the next layout write will resize the window. Tiled-to-floating
+   toggle does not require resizability because it does not resize the window.
+4. Toggle-float does not infer or remember a prior slot. Directional placement
+   belongs to push hotkeys and drag zones.
+
+---
+
 ## Min-size-aware layout solver
 
 macOS apps own their window minimum sizes. Accessibility can request a frame, but it cannot override an app's `NSWindow` or Auto Layout constraints. Finder, for example, may clamp a requested `490.67 px` width to `500 px`.
@@ -316,6 +340,7 @@ Anything not required for that loop is deferred until after the loop works.
 | 21 | Debounced restore persistence scheduling | `WinMgrAppSupportTests` prove pure latest-wins coalescing, stale generation rejection, immediate flush, cancellation, failed-save reporting, and successful later save; startup/shutdown smoke proves AppKit termination and app-owned quit flush pending restore state before exit; install/uninstall request graceful IPC quit before `launchctl bootout` | Cross-process crash recovery while a save is still pending |
 | 22 | Quarter drag-zone actions | `WinMgrCoreTests` prove configured `.insertAsQuarter` zones place a dragged window into each exact display corner and preserve persistent void lanes; unsupported subtree actions still fail explicitly | Custom subtree-targeted zones |
 | 23 | Eject command | `WinMgrCoreTests` prove `.eject` moves a tiled window to the floating layer while preserving the zone shape; IPC DTO tests prove stable JSON; startup/shutdown smoke proves the app shell still boots with the new command route | Toggle-float, resize-split, balance |
+| 24 | Toggle-float command | `WinMgrCoreTests` prove `.toggleFloat` ejects tiled windows, center-tiles floating windows, preserves state metadata, and rejects non-resizable floating windows; IPC DTO tests prove stable JSON; startup/shutdown smoke proves the app shell still boots with the new command route | User-selected default key binding, resize-split, balance |
 
 ### Fast-path constraints
 
@@ -410,7 +435,7 @@ Apply the 5-question test to every planned function. Tag `[CORE]` or `[SHELL]`.
 
 | Function | Module | Notes |
 |---|---|---|
-| `apply(_ cmd: Command, to: World) -> Result<World, CommandError>` | Apply.swift | Central transition for implemented commands, including push, center, eject, swap, drop-zone actions, reset, restore/reconcile, and config reload. Deterministic. |
+| `apply(_ cmd: Command, to: World) -> Result<World, CommandError>` | Apply.swift | Central transition for implemented commands, including push, center, eject, toggle-float, swap, drop-zone actions, reset, restore/reconcile, and config reload. Deterministic. |
 | `reconcileEnvironment(_:EnvironmentSnapshot, world:World) -> World` | Apply.swift | Updates active Space/display/window maps from a complete AX snapshot; preserves prior window state on partial snapshots. |
 | `resetTilingState(in:World) -> World` | Apply.swift | Clears BSP trees, floating lists, focus, pending rules, and observed min-size constraints while preserving live window/display inventory and config. |
 | `recordObservedConstraints(_:WindowConstraints, for:WindowID, in:World) -> World` | Apply.swift | Pure merge of AX clamp feedback into `world.windowConstraints`; maxes minimums, never lowers them during a session. |

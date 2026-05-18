@@ -395,6 +395,164 @@ struct MVPLayoutTests {
         #expect(apply(.eject(missing), to: world) == .failure(.windowNotFound(missing)))
     }
 
+    @Test("Apply toggleFloat moves tiled windows to floating")
+    func applyToggleFloatMovesTiledWindowToFloating() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let tree = pushIntoTree(second, .right, pushIntoTree(first, .left, .void))
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: tree, floating: [])],
+                    focused: second
+                )
+            ],
+            windows: [
+                first: metadata(for: first),
+                second: metadata(for: second, isResizable: false)
+            ],
+            windowDisplay: [
+                first: display,
+                second: display
+            ],
+            windowConstraints: [second: WindowConstraints(minWidth: 500)],
+            pendingRules: [second: .forceFloat],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.toggleFloat(second), to: world) else {
+            Issue.record("Expected toggleFloat to float the tiled window")
+            return
+        }
+
+        let nextTree = try #require(next.spaces[space]?.displays[display]?.tree)
+
+        #expect(slots(in: nextTree) == [
+            TreeSlot(path: [0], occupancy: .occupied(first)),
+            TreeSlot(path: [1], occupancy: .empty)
+        ])
+        #expect(next.spaces[space]?.displays[display]?.floating == [second])
+        #expect(next.spaces[space]?.focused == second)
+        #expect(next.windows == world.windows)
+        #expect(next.windowDisplay == world.windowDisplay)
+        #expect(next.windowConstraints == world.windowConstraints)
+        #expect(next.pendingRules == world.pendingRules)
+    }
+
+    @Test("Apply toggleFloat tiles floating windows into the center anchor")
+    func applyToggleFloatTilesFloatingWindowIntoCenterAnchor() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 1)
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: .void, floating: [window])],
+                    focused: window
+                )
+            ],
+            windows: [window: metadata(for: window)],
+            windowDisplay: [window: display],
+            windowConstraints: [window: WindowConstraints(minWidth: 500)],
+            pendingRules: [window: .forceFloat],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.toggleFloat(window), to: world) else {
+            Issue.record("Expected toggleFloat to tile the floating window")
+            return
+        }
+
+        let nextTree = try #require(next.spaces[space]?.displays[display]?.tree)
+        let flattened: Layout
+        switch flattenedLayout(of: next) {
+        case .success(let layout):
+            flattened = layout
+        case .failure(let error):
+            Issue.record("Expected toggleFloat layout to remain satisfiable, got \(error)")
+            return
+        }
+
+        #expect(slots(in: nextTree) == [
+            TreeSlot(path: [0], occupancy: .empty),
+            TreeSlot(path: [1], occupancy: .occupied(window)),
+            TreeSlot(path: [2], occupancy: .empty)
+        ])
+        #expect(next.spaces[space]?.displays[display]?.floating == [])
+        #expect(next.spaces[space]?.focused == window)
+        #expect(next.windows == world.windows)
+        #expect(next.windowDisplay == world.windowDisplay)
+        #expect(next.windowConstraints == world.windowConstraints)
+        #expect(next.pendingRules == world.pendingRules)
+        #expect(flattened.tiled == [window: CGRect(x: 300, y: 0, width: 600, height: 800)])
+        #expect(flattened.floatingZOrder == [])
+    }
+
+    @Test("Apply toggleFloat can create the active Space for floating windows")
+    func applyToggleFloatCreatesActiveSpaceForFloatingWindow() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 1)
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [:],
+            windows: [window: metadata(for: window)],
+            windowDisplay: [window: display],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.toggleFloat(window), to: world) else {
+            Issue.record("Expected toggleFloat to create the active Space")
+            return
+        }
+
+        let nextTree = try #require(next.spaces[space]?.displays[display]?.tree)
+
+        #expect(slots(in: nextTree) == [
+            TreeSlot(path: [0], occupancy: .empty),
+            TreeSlot(path: [1], occupancy: .occupied(window)),
+            TreeSlot(path: [2], occupancy: .empty)
+        ])
+        #expect(next.spaces[space]?.displays[display]?.floating == [])
+        #expect(next.spaces[space]?.focused == window)
+    }
+
+    @Test("Apply toggleFloat rejects non-resizable floating windows")
+    func applyToggleFloatRejectsNonResizableFloatingWindow() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 1)
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: .void, floating: [window])],
+                    focused: window
+                )
+            ],
+            windows: [window: metadata(for: window, isResizable: false)],
+            windowDisplay: [window: display],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        #expect(apply(.toggleFloat(window), to: world) == .failure(.windowNotResizable(window)))
+    }
+
     @Test("Third left push splits the bottom-left leaf toward center")
     func thirdLeftPushSplitsCenterFacingLeaf() throws {
         let first = WindowID(raw: 1)
@@ -1277,7 +1435,8 @@ struct MVPLayoutTests {
 
     private func metadata(
         for window: WindowID,
-        frame: CGRect = CGRect(x: 0, y: 0, width: 100, height: 100)
+        frame: CGRect = CGRect(x: 0, y: 0, width: 100, height: 100),
+        isResizable: Bool = true
     ) -> WindowMetadata {
         WindowMetadata(
             id: window,
@@ -1286,7 +1445,7 @@ struct MVPLayoutTests {
             role: "AXWindow",
             pid: 42,
             frame: frame,
-            isResizable: true,
+            isResizable: isResizable,
             isMinimized: false
         )
     }

@@ -20,8 +20,8 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
         return commandNotImplemented(command)
     case .balance:
         return commandNotImplemented(command)
-    case .toggleFloat:
-        return commandNotImplemented(command)
+    case .toggleFloat(let windowID):
+        return applyToggleFloat(windowID, to: world)
     case .dropAtZone(let windowID, let displayID, let zoneID):
         return applyDropAtZone(windowID, displayID: displayID, zoneID: zoneID, to: world)
     case .resetLayout:
@@ -138,6 +138,24 @@ private func applyEject(_ windowID: WindowID, to world: World) -> Result<World, 
         pendingRules: world.pendingRules,
         config: world.config
     ))
+}
+
+private func applyToggleFloat(_ windowID: WindowID, to world: World) -> Result<World, CommandError> {
+    guard world.windows[windowID] != nil else {
+        return .failure(.windowNotFound(windowID))
+    }
+    if let activeSpace = world.activeSpace,
+       let space = world.spaces[activeSpace],
+       tiledDisplay(containing: windowID, in: space) != nil {
+        return applyEject(windowID, to: world)
+    }
+
+    switch retileTarget(windowID, displayID: nil, in: world) {
+    case .success(let target):
+        return .success(worldByRetiling(target, insertion: .center, in: world))
+    case .failure(let error):
+        return .failure(error)
+    }
 }
 
 private func applySwap(_ windowID: WindowID, direction: Direction, to world: World) -> Result<World, CommandError> {

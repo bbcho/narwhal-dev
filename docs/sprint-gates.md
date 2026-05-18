@@ -467,3 +467,40 @@ Observed Rung 23 results:
 | Date | Commit | Core/DTO tests | App smoke | Known failures |
 |---|---|---|---|---|
 | 2026-05-18 | `006f000` | Passed: exact core tests cover tiled-window eject to floating, preserved `.void` zone slots, preserved metadata/display/constraints/pending rules, already-floating rejection, missing-window rejection, and stable IPC `eject` JSON; full suite passed 137 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
+
+## Rung 24: Toggle-Float Command
+
+This post-MVP core gate makes the existing `Command.toggleFloat` executable.
+The behavior is deliberately deterministic because the command has no
+direction argument: tiled windows use the same transition as eject, while
+floating windows re-enter tiling through the center anchor on their current
+display.
+
+Commands:
+
+```sh
+CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+scripts/smoke_startup_shutdown.sh
+```
+
+Pass criteria:
+
+- Tiled-to-floating toggle preserves the BSP shape by replacing the tiled leaf
+  with `.void`, preserves live metadata/display/constraints/pending rules, and
+  appends the window once to the display floating order.
+- Floating-to-tiled toggle removes the window from the display floating order,
+  inserts it with `centerIntoTree`, and produces the exact center-anchor frame.
+- Floating-to-tiled toggle can create the active `SpaceState` when the active
+  Space is known but has no prior layout memory.
+- Floating-to-tiled toggle rejects non-resizable windows with
+  `.windowNotResizable`.
+- IPC JSON encodes and decodes the stable
+  `{"command":"toggleFloat","windowID":...}` shape.
+- Hotkey/config and explicit IPC shell routing plan the same core command and
+  reuse the existing layout apply, clamp-retry, focus-border, and restore-save
+  path.
+
+Observed Rung 24 results:
+
+| Date | Commit | Core/DTO tests | App smoke | Known failures |
+|---|---|---|---|---|
