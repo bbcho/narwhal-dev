@@ -7,11 +7,28 @@ import WinMgrIPC
 
 private enum StartupArgumentError: Error, CustomStringConvertible {
     case missingRestoreStatePath
+    case missingDebugFailServiceStartName
 
     var description: String {
         switch self {
         case .missingRestoreStatePath:
             return "--restore-state requires a file path"
+        case .missingDebugFailServiceStartName:
+            return "--debug-fail-service-start requires a service name"
+        }
+    }
+}
+
+private enum ServiceStartupRequestError: Error, CustomStringConvertible {
+    case startupArgument(StartupArgumentError)
+    case failureInjection(ServiceStartFailureInjectionError)
+
+    var description: String {
+        switch self {
+        case .startupArgument(let error):
+            return error.description
+        case .failureInjection(let error):
+            return error.description
         }
     }
 }
@@ -265,6 +282,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .success(URL(fileURLWithPath: arguments[pathIndex]).standardizedFileURL)
     }
 
+    private func debugServiceStartFailureFromArguments() -> Result<String?, StartupArgumentError> {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--debug-fail-service-start") else {
+            return .success(nil)
+        }
+        let nameIndex = arguments.index(after: index)
+        guard arguments.indices.contains(nameIndex) else {
+            return .failure(.missingDebugFailServiceStartName)
+        }
+        return .success(arguments[nameIndex])
+    }
+
     @discardableResult
     private func loadStartupConfig() -> Bool {
         switch startupConfigLoad() {
@@ -346,7 +375,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startServices() {
         guard !servicesStarted else { return }
 
-        switch startServiceSequence(serviceStartSteps()) {
+        let steps: [ServiceStartStep]
+        switch serviceStartStepsFromArguments() {
+        case .success(let value):
+            steps = value
+        case .failure(let error):
+            reporter.error(error.description)
+            reporter.info("Runtime service startup failed; terminating")
+            NSApplication.shared.terminate(nil)
+            return
+        }
+
+        switch startServiceSequence(steps) {
         case .success(let services):
             runningServices = services
             servicesStarted = true
@@ -355,6 +395,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runningServices = nil
             servicesStarted = false
             reporter.error(error.description)
+            reporter.info("Runtime service startup failed; terminating")
+            NSApplication.shared.terminate(nil)
+        }
+    }
+
+    private func serviceStartStepsFromArguments() -> Result<[ServiceStartStep], ServiceStartupRequestError> {
+        let failureTarget: String?
+        switch debugServiceStartFailureFromArguments() {
+        case .success(let value):
+            failureTarget = value
+        case .failure(let error):
+            return .failure(.startupArgument(error))
+        }
+
+        switch WinMgrAppSupport.serviceStartSteps(serviceStartSteps(), injectingFailureAt: failureTarget) {
+        case .success(let steps):
+            return .success(steps)
+        case .failure(let error):
+            return .failure(.failureInjection(error))
         }
     }
 

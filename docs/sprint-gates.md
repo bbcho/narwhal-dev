@@ -261,3 +261,29 @@ Observed Rung 17 results:
 | Date | Commit | Unit lifecycle tests | App startup wiring | Startup/shutdown smoke | Known failures |
 |---|---|---|---|---|---|
 | 2026-05-17 | `64b421f` | Passed: 3 tests prove exact startup order, reverse-order idempotent shutdown, and reverse-order rollback after `ipc` startup failure | Passed: `WinMgrApp` starts menubar, hotkeys, AX observer, display observer, config watcher, IPC server, and drag zones through `startServiceSequence` | Passed: startup services logged, `winmgrctl reset` and `winmgrctl quit` returned `ok`, process exited, and `/tmp/winmgr-501.sock` was removed | None |
+
+## Rung 18: Startup Failure Rollback Smoke
+
+This post-MVP shell gate proves the actual AppDelegate service chain rolls back
+real started services when a later service fails. The smoke injects failure at
+`dragZones`, after the IPC socket is live, so socket removal is observable.
+
+Commands:
+
+```sh
+CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+scripts/smoke_startup_failure_rollback.sh
+scripts/smoke_startup_shutdown.sh
+```
+
+Pass criteria:
+
+- `--debug-fail-service-start dragZones` fails before drag-zone event tap startup.
+- Logs show IPC server became ready before the injected failure.
+- Logs show `service startup failed at dragZones after starting menubar,
+  hotkeys, axObserver, displayObserver, configWatcher, ipcServer`.
+- Logs show `Runtime service startup failed; terminating`.
+- Logs do not show `Drag zones ready` or `Layout command loop ready`.
+- The app process exits.
+- `/tmp/winmgr-$(id -u).sock` is removed after rollback.
+- Normal startup/shutdown smoke still passes.

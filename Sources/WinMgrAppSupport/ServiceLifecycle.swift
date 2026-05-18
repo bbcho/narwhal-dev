@@ -33,6 +33,21 @@ public struct ServiceStartupError: Error, CustomStringConvertible {
     }
 }
 
+public enum ServiceStartFailureInjectionError: Error, Equatable, CustomStringConvertible {
+    case injected(service: String)
+    case unknownService(requested: String, available: [String])
+
+    public var description: String {
+        switch self {
+        case .injected(let service):
+            return "injected startup failure at service \(service)"
+        case .unknownService(let requested, let available):
+            let services = available.isEmpty ? "none" : available.joined(separator: ", ")
+            return "unknown service startup failure target \(requested); available services: \(services)"
+        }
+    }
+}
+
 @MainActor
 public final class RunningServices {
     private var handles: [ServiceHandle]
@@ -73,6 +88,27 @@ public func startServiceSequence(_ steps: [ServiceStartStep]) -> Result<RunningS
     }
 
     return .success(RunningServices(handles: handles))
+}
+
+public func serviceStartSteps(
+    _ steps: [ServiceStartStep],
+    injectingFailureAt requestedService: String?
+) -> Result<[ServiceStartStep], ServiceStartFailureInjectionError> {
+    guard let requestedService else {
+        return .success(steps)
+    }
+
+    let available = steps.map(\.name)
+    guard available.contains(requestedService) else {
+        return .failure(.unknownService(requested: requestedService, available: available))
+    }
+
+    return .success(steps.map { step in
+        guard step.name == requestedService else { return step }
+        return ServiceStartStep(name: step.name) {
+            throw ServiceStartFailureInjectionError.injected(service: step.name)
+        }
+    })
 }
 
 private struct ServiceHandle {
