@@ -1,15 +1,15 @@
-# WinMgr
+# Narwhal
 
-WinMgr is a macOS BSP tiling window manager for people who want manual,
+Narwhal is a macOS BSP tiling window manager for people who want manual,
 persistent window zones instead of automatic rearrangement. Windows float by
 default; a push, drag zone, or IPC command explicitly tiles a window.
 
 The program is built as:
 
-- `WinMgrApp`: menu-bar app, hotkey handler, AX window writer, display/Space
+- `NarwhalApp`: menu-bar app, hotkey handler, AX window writer, display/Space
   observer, Lua config loader, restore persistence, and IPC server.
-- `winmgrctl`: command-line client for the local Unix socket.
-- `WinMgrCore`: pure layout, command, restore, config, rule, focus, and solver
+- `narwhalctl`: command-line client for the local Unix socket.
+- `NarwhalCore`: pure layout, command, restore, config, rule, focus, and solver
   logic.
 
 ## Documentation
@@ -41,8 +41,8 @@ Prerequisites:
 Build and test:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
-scripts/build_app_bundle.sh --configuration debug --output .build/winmgr-package-next --replace
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
+scripts/build_app_bundle.sh --configuration debug --output .build/narwhal-package-next --replace
 ```
 
 Install for the current user:
@@ -54,9 +54,9 @@ scripts/install_local.sh --replace --configuration debug
 Control the running app:
 
 ```sh
-$HOME/Applications/WinMgr.app/Contents/MacOS/winmgrctl reset
-$HOME/Applications/WinMgr.app/Contents/MacOS/winmgrctl push left
-$HOME/Applications/WinMgr.app/Contents/MacOS/winmgrctl balance
+$HOME/Applications/Narwhal.app/Contents/MacOS/narwhalctl reset
+$HOME/Applications/Narwhal.app/Contents/MacOS/narwhalctl push left
+$HOME/Applications/Narwhal.app/Contents/MacOS/narwhalctl balance
 ```
 
 Default hotkeys:
@@ -79,5 +79,5 @@ Default hotkeys:
 - `control-option-/`: show two-column command overlay. While open, scroll it with `control-option-J/K`.
 - `control-option-delete`: reset layout memory.
 
-Logs are written to `/tmp/winmgr.log`. The IPC socket is
-`/tmp/winmgr-$(id -u).sock`.
+Logs are written to `/tmp/narwhal.log`. The IPC socket is
+`/tmp/narwhal-$(id -u).sock`.

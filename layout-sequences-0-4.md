@@ -1,6 +1,6 @@
-# WinMgr Layout Sequences 0-4
+# Narwhal Layout Sequences 0-4
 
-Generated from `WinMgrCore` with display `(0,0,1200,800)` and no gaps.
+Generated from `NarwhalCore` with display `(0,0,1200,800)` and no gaps.
 
 Legend: `.` is a void slot. Repeated letters mean one window spans multiple sketch cells.
 

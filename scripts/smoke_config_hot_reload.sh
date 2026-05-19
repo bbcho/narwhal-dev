@@ -3,9 +3,9 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
-tmp_root="/private/tmp/winmgr-hot-reload-smoke"
+tmp_root="/private/tmp/narwhal-hot-reload-smoke"
 config="$tmp_root/init.lua"
-log_path="/tmp/winmgr.log"
+log_path="/tmp/narwhal.log"
 app_pid=""
 
 cleanup() {
@@ -40,12 +40,12 @@ wait_for_log() {
 
 assert_app_running() {
   if [ -z "$app_pid" ] || ! kill -0 "$app_pid" 2>/dev/null; then
-    fail "WinMgrApp process exited unexpectedly"
+    fail "NarwhalApp process exited unexpectedly"
   fi
 }
 
-if pgrep -x WinMgrApp >/dev/null 2>&1; then
-  fail "WinMgrApp is already running; stop it before running this smoke"
+if pgrep -x NarwhalApp >/dev/null 2>&1; then
+  fail "NarwhalApp is already running; stop it before running this smoke"
 fi
 
 rm -rf "$tmp_root"
@@ -54,12 +54,12 @@ cp "$repo_root/DefaultConfig/init.lua" "$config"
 rm -f "$log_path"
 
 cd "$repo_root"
-export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/winmgr-clang-module-cache}"
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/narwhal-clang-module-cache}"
 
-swift build --disable-sandbox --product WinMgrApp --product WinMgrCtl
+swift build --disable-sandbox --product NarwhalApp --product NarwhalCtl
 bin_path="$(swift build --disable-sandbox --show-bin-path)"
 
-"$bin_path/WinMgrApp" --config "$config" &
+"$bin_path/NarwhalApp" --config "$config" &
 app_pid="$!"
 
 wait_for_log "Config watcher ready for " 20
@@ -74,7 +74,7 @@ perl -0pi -e 's/return \{/return false/' "$config"
 wait_for_log "Config reload failed (file watcher)" 10
 assert_app_running
 
-"$bin_path/WinMgrCtl" reset | grep -Eq '^ok ipc-' || fail "winmgrctl reset did not return ok"
+"$bin_path/NarwhalCtl" reset | grep -Eq '^ok ipc-' || fail "narwhalctl reset did not return ok"
 wait_for_log "IPC reset layout memory" 10
 assert_app_running
 

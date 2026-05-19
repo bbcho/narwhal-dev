@@ -1,11 +1,11 @@
 # Configuration Reference
 
-WinMgr configuration is a Lua 5.4 file that returns one table.
+Narwhal configuration is a Lua 5.4 file that returns one table.
 
 Default user path:
 
 ```text
-~/.config/winmgr/init.lua
+~/.config/narwhal/init.lua
 ```
 
 The bundled default lives at:
@@ -14,7 +14,7 @@ The bundled default lives at:
 DefaultConfig/init.lua
 ```
 
-If the user file is absent, WinMgr uses built-in defaults. If a hot reload fails,
+If the user file is absent, Narwhal uses built-in defaults. If a hot reload fails,
 the previous valid config remains active.
 
 ## Top-Level Shape
@@ -143,7 +143,7 @@ Directions: `previous`, `next`.
 
 ### `focus_previous`
 
-Focuses the previous window in WinMgr's recent focus history.
+Focuses the previous window in Narwhal's recent focus history.
 
 ```lua
 { type = "focus_previous" }
@@ -391,7 +391,7 @@ Tile to a configured zone:
 { type = "tile_to_zone", zone = "center" }
 ```
 
-`zone` must reference a configured zone ID. WinMgr tracks the opened window,
+`zone` must reference a configured zone ID. Narwhal tracks the opened window,
 waits for the coalesced environment refresh to complete, then applies the same
 placement action used by drag-to-tile for that zone.
 

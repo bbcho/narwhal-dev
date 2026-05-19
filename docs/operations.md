@@ -24,26 +24,26 @@ The packaging script expects:
 Run tests:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 ```
 
 Build app bundle:
 
 ```sh
-scripts/build_app_bundle.sh --configuration debug --output .build/winmgr-package-next --replace
+scripts/build_app_bundle.sh --configuration debug --output .build/narwhal-package-next --replace
 ```
 
 The package output contains:
 
 ```text
-.build/winmgr-package-next/WinMgr.app
-.build/winmgr-package-next/com.ben.winmgr.plist
+.build/narwhal-package-next/Narwhal.app
+.build/narwhal-package-next/com.ben.narwhal.plist
 ```
 
 The app bundle contains:
 
-- `Contents/MacOS/WinMgrApp`
-- `Contents/MacOS/winmgrctl`
+- `Contents/MacOS/NarwhalApp`
+- `Contents/MacOS/narwhalctl`
 - `Contents/Resources/DefaultConfig/init.lua`
 - `Contents/Frameworks/liblua.dylib`
 
@@ -66,8 +66,8 @@ scripts/install_local.sh --app-dir .build/install-test/Applications --launch-age
 Default install locations:
 
 ```text
-~/Applications/WinMgr.app
-~/Library/LaunchAgents/com.ben.winmgr.plist
+~/Applications/Narwhal.app
+~/Library/LaunchAgents/com.ben.narwhal.plist
 ```
 
 ## Update
@@ -105,19 +105,19 @@ scripts/uninstall_local.sh --no-launchctl --app-dir .build/install-test/Applicat
 Inspect:
 
 ```sh
-launchctl print "gui/$(id -u)/com.ben.winmgr"
+launchctl print "gui/$(id -u)/com.ben.narwhal"
 ```
 
 Boot out:
 
 ```sh
-launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.winmgr.plist"
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
 ```
 
 Bootstrap:
 
 ```sh
-launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.winmgr.plist"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
 ```
 
 ## Logs
@@ -125,18 +125,18 @@ launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.winmgr.pl
 Primary log:
 
 ```text
-/tmp/winmgr.log
+/tmp/narwhal.log
 ```
 
 Follow logs:
 
 ```sh
-tail -f /tmp/winmgr.log
+tail -f /tmp/narwhal.log
 ```
 
 Expected healthy startup sequence:
 
-- `WinMgrApp started`
+- `NarwhalApp started`
 - `Accessibility trusted`
 - `Environment refreshed (startup)`
 - `Restore state loaded` or `Restore state not found`
@@ -152,55 +152,55 @@ Expected healthy startup sequence:
 
 | Artifact | Path |
 |---|---|
-| Log | `/tmp/winmgr.log` |
-| IPC socket | `/tmp/winmgr-$(id -u).sock` |
-| User config | `~/.config/winmgr/init.lua` |
-| Restore state | `~/Library/Application Support/winmgr/state.json` |
-| Installed app | `~/Applications/WinMgr.app` |
-| LaunchAgent plist | `~/Library/LaunchAgents/com.ben.winmgr.plist` |
+| Log | `/tmp/narwhal.log` |
+| IPC socket | `/tmp/narwhal-$(id -u).sock` |
+| User config | `~/.config/narwhal/init.lua` |
+| Restore state | `~/Library/Application Support/narwhal/state.json` |
+| Installed app | `~/Applications/Narwhal.app` |
+| LaunchAgent plist | `~/Library/LaunchAgents/com.ben.narwhal.plist` |
 
 ## Health Checks
 
 Check config:
 
 ```sh
-WinMgrApp --check-config
+NarwhalApp --check-config
 ```
 
 Check Accessibility:
 
 ```sh
-WinMgrApp --check-accessibility
+NarwhalApp --check-accessibility
 ```
 
 Check full environment:
 
 ```sh
-WinMgrApp --check-environment
+NarwhalApp --check-environment
 ```
 
 Print focused window:
 
 ```sh
-WinMgrApp --focused-window
+NarwhalApp --focused-window
 ```
 
 One-shot push left:
 
 ```sh
-WinMgrApp --push-left
+NarwhalApp --push-left
 ```
 
 Use a test restore path:
 
 ```sh
-WinMgrApp --restore-state /private/tmp/winmgr-state.json
+NarwhalApp --restore-state /private/tmp/narwhal-state.json
 ```
 
 Use a test config:
 
 ```sh
-WinMgrApp --config /private/tmp/winmgr-init.lua
+NarwhalApp --config /private/tmp/narwhal-init.lua
 ```
 
 ## Smoke Tests
@@ -208,16 +208,16 @@ WinMgrApp --config /private/tmp/winmgr-init.lua
 Automated suite:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 ```
 
 Package gate:
 
 ```sh
-scripts/build_app_bundle.sh --configuration debug --output .build/winmgr-package-next --replace
-plutil -p .build/winmgr-package-next/WinMgr.app/Contents/Info.plist
-plutil -p .build/winmgr-package-next/com.ben.winmgr.plist
-otool -L .build/winmgr-package-next/WinMgr.app/Contents/MacOS/WinMgrApp | sed -n '1,4p'
+scripts/build_app_bundle.sh --configuration debug --output .build/narwhal-package-next --replace
+plutil -p .build/narwhal-package-next/Narwhal.app/Contents/Info.plist
+plutil -p .build/narwhal-package-next/com.ben.narwhal.plist
+otool -L .build/narwhal-package-next/Narwhal.app/Contents/MacOS/NarwhalApp | sed -n '1,4p'
 ```
 
 Install lifecycle:
@@ -256,7 +256,7 @@ Fix:
 1. Open System Settings.
 2. Go to Privacy & Security, Accessibility.
 3. Grant permission to the exact executable or app bundle being run.
-4. Restart WinMgr.
+4. Restart Narwhal.
 
 Different builds may need separate permissions.
 
@@ -265,39 +265,39 @@ Different builds may need separate permissions.
 Check whether the socket exists:
 
 ```sh
-ls -l "/tmp/winmgr-$(id -u).sock"
+ls -l "/tmp/narwhal-$(id -u).sock"
 ```
 
 Check whether the LaunchAgent is running:
 
 ```sh
-launchctl print "gui/$(id -u)/com.ben.winmgr"
+launchctl print "gui/$(id -u)/com.ben.narwhal"
 ```
 
 Read logs:
 
 ```sh
-tail -n 100 /tmp/winmgr.log
+tail -n 100 /tmp/narwhal.log
 ```
 
 If a stale socket remains after a crash:
 
 ```sh
-rm "/tmp/winmgr-$(id -u).sock"
+rm "/tmp/narwhal-$(id -u).sock"
 ```
 
 Then restart the app.
 
 ### Active Space Unavailable
 
-WinMgr reads the active macOS Space through private CoreGraphics symbols. If the
+Narwhal reads the active macOS Space through private CoreGraphics symbols. If the
 symbol is unavailable or returns `0`, layout services do not start.
 
 Check:
 
 ```sh
-WinMgrApp --check-environment
-tail -n 80 /tmp/winmgr.log
+NarwhalApp --check-environment
+tail -n 80 /tmp/narwhal.log
 ```
 
 ### Config Reload Failed
@@ -305,7 +305,7 @@ tail -n 80 /tmp/winmgr.log
 Logs show the exact parse or Lua error:
 
 ```sh
-tail -n 80 /tmp/winmgr.log
+tail -n 80 /tmp/narwhal.log
 ```
 
 The previous valid config remains active. Fix the Lua file and save it again.
@@ -316,7 +316,7 @@ Check:
 
 - Accessibility is trusted.
 - The app is running.
-- The hotkey is registered in `/tmp/winmgr.log`.
+- The hotkey is registered in `/tmp/narwhal.log`.
 - No other app has captured the same global hotkey.
 - The key is supported by `HotkeyManager`.
 
@@ -329,7 +329,7 @@ Common causes:
 - App imposes a minimum size larger than the solved tile.
 - AX did not converge after frame writes.
 
-WinMgr records observed minimum-size constraints when a frame is clamped and
+Narwhal records observed minimum-size constraints when a frame is clamped and
 retries once. If the layout remains unsatisfiable, the planned layout is not
 committed.
 
@@ -340,5 +340,5 @@ cannot be fingerprinted, slot order may decide the match. Reset layout memory if
 the physical monitor setup changed substantially:
 
 ```sh
-winmgrctl reset
+narwhalctl reset
 ```

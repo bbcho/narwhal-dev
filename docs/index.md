@@ -1,6 +1,6 @@
 # Documentation Index
 
-Use this page as the map for WinMgr documentation.
+Use this page as the map for Narwhal documentation.
 
 ## User Documentation
 

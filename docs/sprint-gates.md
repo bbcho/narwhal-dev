@@ -17,7 +17,7 @@ Sprint 1 is complete only when all five gates pass:
 - Local install lifecycle can install into test directories and uninstall the
   installed app and LaunchAgent.
 - User LaunchAgent lifecycle can install into the default user paths, start the
-  app through launchd, and accept an installed `winmgrctl reset`.
+  app through launchd, and accept an installed `narwhalctl reset`.
 - Manual smoke confirms the packaged app can tile, focus, swap, reset, refresh
   on display/Space changes, and keep the focus border aligned.
 
@@ -26,7 +26,7 @@ Sprint 1 is complete only when all five gates pass:
 Command:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 ```
 
 Pass criteria:
@@ -43,26 +43,26 @@ Current baseline when this checklist was added: 113 tests in 16 suites.
 Commands:
 
 ```sh
-scripts/build_app_bundle.sh --configuration debug --output .build/winmgr-package-next --replace
-find .build/winmgr-package-next -maxdepth 5 -type f | sort
-plutil -p .build/winmgr-package-next/WinMgr.app/Contents/Info.plist
-plutil -p .build/winmgr-package-next/com.ben.winmgr.plist
-otool -L .build/winmgr-package-next/WinMgr.app/Contents/MacOS/WinMgrApp | sed -n '1,4p'
+scripts/build_app_bundle.sh --configuration debug --output .build/narwhal-package-next --replace
+find .build/narwhal-package-next -maxdepth 5 -type f | sort
+plutil -p .build/narwhal-package-next/Narwhal.app/Contents/Info.plist
+plutil -p .build/narwhal-package-next/com.ben.narwhal.plist
+otool -L .build/narwhal-package-next/Narwhal.app/Contents/MacOS/NarwhalApp | sed -n '1,4p'
 ```
 
 Pass criteria:
 
-- `.build/winmgr-package-next/WinMgr.app/Contents/MacOS/WinMgrApp` exists and
+- `.build/narwhal-package-next/Narwhal.app/Contents/MacOS/NarwhalApp` exists and
   is executable.
-- `.build/winmgr-package-next/WinMgr.app/Contents/MacOS/winmgrctl` exists and
+- `.build/narwhal-package-next/Narwhal.app/Contents/MacOS/narwhalctl` exists and
   is executable.
-- `.build/winmgr-package-next/WinMgr.app/Contents/Frameworks/liblua.dylib`
+- `.build/narwhal-package-next/Narwhal.app/Contents/Frameworks/liblua.dylib`
   exists.
-- `.build/winmgr-package-next/WinMgr.app/Contents/Resources/DefaultConfig/init.lua`
+- `.build/narwhal-package-next/Narwhal.app/Contents/Resources/DefaultConfig/init.lua`
   exists.
-- `Info.plist` is valid and identifies the `WinMgrApp` executable.
-- `com.ben.winmgr.plist` is valid and `ProgramArguments[0]` points at the
-  packaged `WinMgrApp` executable.
+- `Info.plist` is valid and identifies the `NarwhalApp` executable.
+- `com.ben.narwhal.plist` is valid and `ProgramArguments[0]` points at the
+  packaged `NarwhalApp` executable.
 - `otool -L` shows Lua linked as
   `@executable_path/../Frameworks/liblua.dylib`.
 
@@ -72,15 +72,15 @@ Commands:
 
 ```sh
 scripts/install_local.sh --no-launchctl --app-dir .build/install-test/Applications --launch-agents-dir .build/install-test/LaunchAgents --replace --configuration debug
-plutil -p .build/install-test/LaunchAgents/com.ben.winmgr.plist
-test -x .build/install-test/Applications/WinMgr.app/Contents/MacOS/WinMgrApp
-test -x .build/install-test/Applications/WinMgr.app/Contents/MacOS/winmgrctl
-test -f .build/install-test/Applications/WinMgr.app/Contents/Resources/DefaultConfig/init.lua
-test -f .build/install-test/Applications/WinMgr.app/Contents/Frameworks/liblua.dylib
-otool -L .build/install-test/Applications/WinMgr.app/Contents/MacOS/WinMgrApp | sed -n '1,4p'
+plutil -p .build/install-test/LaunchAgents/com.ben.narwhal.plist
+test -x .build/install-test/Applications/Narwhal.app/Contents/MacOS/NarwhalApp
+test -x .build/install-test/Applications/Narwhal.app/Contents/MacOS/narwhalctl
+test -f .build/install-test/Applications/Narwhal.app/Contents/Resources/DefaultConfig/init.lua
+test -f .build/install-test/Applications/Narwhal.app/Contents/Frameworks/liblua.dylib
+otool -L .build/install-test/Applications/Narwhal.app/Contents/MacOS/NarwhalApp | sed -n '1,4p'
 scripts/uninstall_local.sh --no-launchctl --app-dir .build/install-test/Applications --launch-agents-dir .build/install-test/LaunchAgents
-test ! -e .build/install-test/Applications/WinMgr.app
-test ! -e .build/install-test/LaunchAgents/com.ben.winmgr.plist
+test ! -e .build/install-test/Applications/Narwhal.app
+test ! -e .build/install-test/LaunchAgents/com.ben.narwhal.plist
 ```
 
 Pass criteria:
@@ -88,8 +88,8 @@ Pass criteria:
 - Install command exits with status 0.
 - Installed LaunchAgent plist is valid.
 - Installed LaunchAgent `ProgramArguments[0]` points at
-  `.build/install-test/Applications/WinMgr.app/Contents/MacOS/WinMgrApp`.
-- Installed app contains executable `WinMgrApp`, executable `winmgrctl`,
+  `.build/install-test/Applications/Narwhal.app/Contents/MacOS/NarwhalApp`.
+- Installed app contains executable `NarwhalApp`, executable `narwhalctl`,
   `Resources/DefaultConfig/init.lua`, and `Frameworks/liblua.dylib`.
 - Installed executable links Lua as
   `@executable_path/../Frameworks/liblua.dylib`.
@@ -101,16 +101,16 @@ Pass criteria:
 ## Rung 14: User LaunchAgent Smoke
 
 This gate writes to the real user install paths. It should only be run when the
-candidate build is intended to become the active local WinMgr instance.
+candidate build is intended to become the active local Narwhal instance.
 
 Commands:
 
 ```sh
 scripts/install_local.sh --replace --configuration debug
-plutil -p "$HOME/Library/LaunchAgents/com.ben.winmgr.plist"
-launchctl print "gui/$(id -u)/com.ben.winmgr"
-"$HOME/Applications/WinMgr.app/Contents/MacOS/winmgrctl" reset
-tail -n 40 /tmp/winmgr.log
+plutil -p "$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
+launchctl print "gui/$(id -u)/com.ben.narwhal"
+"$HOME/Applications/Narwhal.app/Contents/MacOS/narwhalctl" reset
+tail -n 40 /tmp/narwhal.log
 ```
 
 Pass criteria:
@@ -118,13 +118,13 @@ Pass criteria:
 - Install command exits with status 0.
 - Installed LaunchAgent plist is valid.
 - Installed LaunchAgent `ProgramArguments[0]` points at
-  `$HOME/Applications/WinMgr.app/Contents/MacOS/WinMgrApp`.
+  `$HOME/Applications/Narwhal.app/Contents/MacOS/NarwhalApp`.
 - `launchctl print` reports `state = running`.
 - `launchctl print` reports `program =
-  $HOME/Applications/WinMgr.app/Contents/MacOS/WinMgrApp`.
-- Installed `winmgrctl reset` exits with status 0 and prints `ok` followed by an
+  $HOME/Applications/Narwhal.app/Contents/MacOS/NarwhalApp`.
+- Installed `narwhalctl reset` exits with status 0 and prints `ok` followed by an
   IPC request ID.
-- `/tmp/winmgr.log` records `IPC reset layout memory`.
+- `/tmp/narwhal.log` records `IPC reset layout memory`.
 - Startup logs show Accessibility trusted, hotkey registration, IPC server,
   display observer, and drag zones ready.
 
@@ -133,21 +133,21 @@ Pass criteria:
 Prerequisites:
 
 - Accessibility permission is granted for the executable being tested.
-- Any old `WinMgrApp` process is stopped before starting the candidate build.
-- `/tmp/winmgr.log` is readable while the candidate build runs.
+- Any old `NarwhalApp` process is stopped before starting the candidate build.
+- `/tmp/narwhal.log` is readable while the candidate build runs.
 
 Start one of:
 
 ```sh
-swift run WinMgrApp
-.build/winmgr-package-next/WinMgr.app/Contents/MacOS/WinMgrApp
+swift run NarwhalApp
+.build/narwhal-package-next/Narwhal.app/Contents/MacOS/NarwhalApp
 scripts/install_local.sh --replace --configuration debug
 ```
 
 Reset state:
 
 ```sh
-.build/winmgr-package-next/WinMgr.app/Contents/MacOS/winmgrctl reset
+.build/narwhal-package-next/Narwhal.app/Contents/MacOS/narwhalctl reset
 ```
 
 Equivalent hotkey: `control-option-delete`.
@@ -179,7 +179,7 @@ Observed gate results:
 
 | Date | Commit | Automated suite | Package gate | Test install gate | User LaunchAgent gate | Manual tiling/focus/swap/reset | Known failures |
 |---|---|---|---|---|---|---|---|
-| 2026-05-17 | `a80f016` | 113 tests / 16 suites passed | Passed | Passed | Passed: launchctl running PID 23158; installed `winmgrctl reset` returned `ok ipc-AD0BA665-E8B0-48D9-BA9D-D0782146B030` | Not rerun in this gate | None from launch/install gate |
+| 2026-05-17 | `a80f016` | 113 tests / 16 suites passed | Passed | Passed | Passed: launchctl running PID 23158; installed `narwhalctl reset` returned `ok ipc-AD0BA665-E8B0-48D9-BA9D-D0782146B030` | Not rerun in this gate | None from launch/install gate |
 
 ## Rung 15: Config Hot Reload
 
@@ -209,7 +209,7 @@ Observed Rung 15 results:
 
 | Date | Commit | Config path | Watcher ready | Valid edit | Invalid edit | Last-good proof | Known failures |
 |---|---|---|---|---|---|---|---|
-| 2026-05-17 | `2aed5dc` | `/private/tmp/winmgr-hot-reload-smoke/init.lua` | Passed: `Config watcher ready` logged | Passed: `duration_millis` edit logged `Config reload completed (file watcher)`, `Rebound hotkeys`, and `Updated drag-zone modifier to shift` | Passed: invalid Lua logged `Config reload failed (file watcher)` | Passed: process stayed alive and `.build/debug/WinMgrCtl reset` returned `ok ipc-D9598BD7-5D08-4C18-B1EA-120C807241F3` afterward | Hotkey keypress behavior not manually retested in this smoke |
+| 2026-05-17 | `2aed5dc` | `/private/tmp/narwhal-hot-reload-smoke/init.lua` | Passed: `Config watcher ready` logged | Passed: `duration_millis` edit logged `Config reload completed (file watcher)`, `Rebound hotkeys`, and `Updated drag-zone modifier to shift` | Passed: invalid Lua logged `Config reload failed (file watcher)` | Passed: process stayed alive and `.build/debug/NarwhalCtl reset` returned `ok ipc-D9598BD7-5D08-4C18-B1EA-120C807241F3` afterward | Hotkey keypress behavior not manually retested in this smoke |
 
 ## Rung 16: Startup/Shutdown Smoke
 
@@ -228,17 +228,17 @@ Pass criteria:
 - Startup logs show Accessibility trusted, hotkeys registered, AX focus observer,
   display observer, config watcher, IPC server, drag zones, and layout loop.
 - Startup logs show the temp restore-state path.
-- `winmgrctl reset` returns `ok` and logs `IPC reset layout memory`.
-- `winmgrctl quit` returns `ok` and logs `IPC quit requested`.
-- `WinMgrApp stopped` is logged.
-- The WinMgrApp process exits.
-- `/tmp/winmgr-$(id -u).sock` is removed after shutdown.
+- `narwhalctl reset` returns `ok` and logs `IPC reset layout memory`.
+- `narwhalctl quit` returns `ok` and logs `IPC quit requested`.
+- `NarwhalApp stopped` is logged.
+- The NarwhalApp process exits.
+- `/tmp/narwhal-$(id -u).sock` is removed after shutdown.
 
 Observed Rung 16 results:
 
 | Date | Commit | Restore path | Startup services | IPC reset | IPC quit | Shutdown cleanup | Known failures |
 |---|---|---|---|---|---|---|---|
-| 2026-05-17 | `a33f825` | `/private/tmp/winmgr-startup-shutdown-smoke/state.json` | Passed: Accessibility, hotkeys, AX focus observer, display observer, config watcher, IPC server, drag zones, and layout loop logged | Passed: `WinMgrCtl reset` returned `ok` and logged `IPC reset layout memory` | Passed: `WinMgrCtl quit` returned `ok` and logged `IPC quit requested` | Passed: process exited, `WinMgrApp stopped` logged, and `/tmp/winmgr-501.sock` was removed | None |
+| 2026-05-17 | `a33f825` | `/private/tmp/narwhal-startup-shutdown-smoke/state.json` | Passed: Accessibility, hotkeys, AX focus observer, display observer, config watcher, IPC server, drag zones, and layout loop logged | Passed: `NarwhalCtl reset` returned `ok` and logged `IPC reset layout memory` | Passed: `NarwhalCtl quit` returned `ok` and logged `IPC quit requested` | Passed: process exited, `NarwhalApp stopped` logged, and `/tmp/narwhal-501.sock` was removed | None |
 
 ## Rung 17: Service Lifecycle Orchestration
 
@@ -248,7 +248,7 @@ early service could remain live after a later service failed to start.
 Commands:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 scripts/smoke_startup_shutdown.sh
 ```
 
@@ -259,14 +259,14 @@ Pass criteria:
   idempotent.
 - Unit tests prove a later startup failure stops already-started services in
   reverse order and does not start later services.
-- `WinMgrApp` startup uses the same service sequence primitive.
+- `NarwhalApp` startup uses the same service sequence primitive.
 - Startup/shutdown smoke still passes, including IPC socket cleanup.
 
 Observed Rung 17 results:
 
 | Date | Commit | Unit lifecycle tests | App startup wiring | Startup/shutdown smoke | Known failures |
 |---|---|---|---|---|---|
-| 2026-05-17 | `64b421f` | Passed: 3 tests prove exact startup order, reverse-order idempotent shutdown, and reverse-order rollback after `ipc` startup failure | Passed: `WinMgrApp` starts menubar, hotkeys, AX observer, display observer, config watcher, IPC server, and drag zones through `startServiceSequence` | Passed: startup services logged, `winmgrctl reset` and `winmgrctl quit` returned `ok`, process exited, and `/tmp/winmgr-501.sock` was removed | None |
+| 2026-05-17 | `64b421f` | Passed: 3 tests prove exact startup order, reverse-order idempotent shutdown, and reverse-order rollback after `ipc` startup failure | Passed: `NarwhalApp` starts menubar, hotkeys, AX observer, display observer, config watcher, IPC server, and drag zones through `startServiceSequence` | Passed: startup services logged, `narwhalctl reset` and `narwhalctl quit` returned `ok`, process exited, and `/tmp/narwhal-501.sock` was removed | None |
 
 ## Rung 18: Startup Failure Rollback Smoke
 
@@ -277,7 +277,7 @@ real started services when a later service fails. The smoke injects failure at
 Commands:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 scripts/smoke_startup_failure_rollback.sh
 scripts/smoke_startup_shutdown.sh
 ```
@@ -291,14 +291,14 @@ Pass criteria:
 - Logs show `Runtime service startup failed; terminating`.
 - Logs do not show `Drag zones ready` or `Layout command loop ready`.
 - The app process exits.
-- `/tmp/winmgr-$(id -u).sock` is removed after rollback.
+- `/tmp/narwhal-$(id -u).sock` is removed after rollback.
 - Normal startup/shutdown smoke still passes.
 
 Observed Rung 18 results:
 
 | Date | Commit | Failure injection | Rollback proof | Normal startup/shutdown | Known failures |
 |---|---|---|---|---|---|
-| 2026-05-18 | `11902b2` | Passed: `--debug-fail-service-start dragZones` failed before `Drag zones ready` and before `Layout command loop ready` | Passed: IPC server logged ready, failure logged after `ipcServer`, process exited, and `/tmp/winmgr-501.sock` was removed | Passed: `scripts/smoke_startup_shutdown.sh` still completed reset, quit, process exit, and socket cleanup | None |
+| 2026-05-18 | `11902b2` | Passed: `--debug-fail-service-start dragZones` failed before `Drag zones ready` and before `Layout command loop ready` | Passed: IPC server logged ready, failure logged after `ipcServer`, process exited, and `/tmp/narwhal-501.sock` was removed | Passed: `scripts/smoke_startup_shutdown.sh` still completed reset, quit, process exit, and socket cleanup | None |
 
 ## Rung 19: Startup Failure Matrix
 
@@ -309,7 +309,7 @@ effect and that rollback leaves no running process or IPC socket.
 Commands:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 scripts/smoke_startup_failure_matrix.sh
 scripts/smoke_startup_shutdown.sh
 ```
@@ -321,39 +321,39 @@ Pass criteria:
 - Each case logs `service startup failed at <service> after starting <exact prior services>`.
 - Each case logs `Runtime service startup failed; terminating`.
 - No case logs `Drag zones ready` or `Layout command loop ready`.
-- Each case exits its `WinMgrApp` process.
-- `/tmp/winmgr-$(id -u).sock` is absent after every case.
+- Each case exits its `NarwhalApp` process.
+- `/tmp/narwhal-$(id -u).sock` is absent after every case.
 - The `dragZones` case proves IPC was live before rollback by observing
-  `IPC server ready at /tmp/winmgr-$(id -u).sock`.
+  `IPC server ready at /tmp/narwhal-$(id -u).sock`.
 - Normal startup/shutdown smoke still passes.
 
 Observed Rung 19 results:
 
 | Date | Commit | Matrix cases | Rollback proof | Normal startup/shutdown | Known failures |
 |---|---|---|---|---|---|
-| 2026-05-18 | `8a667c0` | Passed: `menubar`, `hotkeys`, `axObserver`, `displayObserver`, `configWatcher`, `ipcServer`, and `dragZones` each logged the exact prior-service list | Passed: no case reached `Drag zones ready` or `Layout command loop ready`; every case exited and left `/tmp/winmgr-501.sock` absent; `dragZones` observed IPC ready before rollback | Passed: `scripts/smoke_startup_shutdown.sh` still completed reset, quit, process exit, and socket cleanup | None |
+| 2026-05-18 | `8a667c0` | Passed: `menubar`, `hotkeys`, `axObserver`, `displayObserver`, `configWatcher`, `ipcServer`, and `dragZones` each logged the exact prior-service list | Passed: no case reached `Drag zones ready` or `Layout command loop ready`; every case exited and left `/tmp/narwhal-501.sock` absent; `dragZones` observed IPC ready before rollback | Passed: `scripts/smoke_startup_shutdown.sh` still completed reset, quit, process exit, and socket cleanup | None |
 
 ## Rung 20: Restore Persistence Boundary
 
 This post-MVP shell-support gate makes restore JSON persistence a directly
-tested boundary. The pure restore model and validation stay in `WinMgrCore`;
-filesystem decode/encode lives in `WinMgrAppSupport`.
+tested boundary. The pure restore model and validation stay in `NarwhalCore`;
+filesystem decode/encode lives in `NarwhalAppSupport`.
 
 Commands:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 scripts/smoke_startup_shutdown.sh
 ```
 
 Pass criteria:
 
-- `RestoreManager` is owned by `WinMgrAppSupport`, not the executable target.
+- `RestoreManager` is owned by `NarwhalAppSupport`, not the executable target.
 - Unit tests prove a missing restore file returns `nil`.
 - Unit tests prove an unsupported `schemaVersion` returns `nil`.
 - Unit tests prove corrupt JSON throws `RestoreManagerError.decodeFailed`.
 - Unit tests prove invalid persisted `StoredWorld` throws the exact validation
-  failure from `WinMgrCore`.
+  failure from `NarwhalCore`.
 - Unit tests prove `save(_:)` creates the parent directory and `load()` returns
   the exact saved `StoredWorld`.
 - Startup/shutdown smoke still passes with `--restore-state`, proving the app
@@ -363,7 +363,7 @@ Observed Rung 20 results:
 
 | Date | Commit | Restore tests | App runtime proof | Known failures |
 |---|---|---|---|---|
-| 2026-05-18 | `3a5ad57` | Passed: 5 `Restore persistence boundary` tests cover missing file, unsupported schema, corrupt JSON, invalid stored world, and save/load round-trip; full suite passed 123 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` used `/private/tmp/winmgr-startup-shutdown-smoke/state.json`, logged restore miss, saved state on IPC reset, handled IPC quit, exited, and removed the socket | None |
+| 2026-05-18 | `3a5ad57` | Passed: 5 `Restore persistence boundary` tests cover missing file, unsupported schema, corrupt JSON, invalid stored world, and save/load round-trip; full suite passed 123 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` used `/private/tmp/narwhal-startup-shutdown-smoke/state.json`, logged restore miss, saved state on IPC reset, handled IPC quit, exited, and removed the socket | None |
 
 ## Rung 21: Debounced Restore Persistence Scheduling
 
@@ -377,7 +377,7 @@ same flush path when the running app is responsive.
 Commands:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 scripts/smoke_startup_shutdown.sh
 ```
 
@@ -390,11 +390,11 @@ Pass criteria:
 - Shell tests prove explicit cancellation drops the pending write.
 - Shell tests prove a failed save emits an exact failure event and a later
   scheduled flush can still succeed.
-- `WinMgrApp` schedules restore persistence after successful command outcomes
+- `NarwhalApp` schedules restore persistence after successful command outcomes
   instead of writing synchronously on the main command path.
 - App-owned quit paths and AppKit termination flush any pending restore save
-  before `WinMgrApp stopped`.
-- Local install/uninstall scripts attempt `winmgrctl quit` and wait briefly for
+  before `NarwhalApp stopped`.
+- Local install/uninstall scripts attempt `narwhalctl quit` and wait briefly for
   the IPC socket to disappear before `launchctl bootout`.
 - Startup/shutdown smoke still passes with `--restore-state`, proving IPC reset
   schedules restore persistence and IPC quit exits cleanly after the pending
@@ -404,8 +404,8 @@ Observed Rung 21 results:
 
 | Date | Commit | Scheduler tests | App runtime proof | Known failures |
 |---|---|---|---|---|
-| 2026-05-18 | `6e7102a` | Passed: 7 restore scheduler tests cover pure latest-wins state, stale timer rejection, flush-once, cancellation, synchronous shell flush of latest save, failed-save event, and later successful flush; full suite passed 130 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` logged IPC reset, IPC quit, `Restore state saved (ipc reset)` to `/private/tmp/winmgr-startup-shutdown-smoke/state.json`, `WinMgrApp stopped`, process exit, and socket removal; `bash -n` passed for install/uninstall; no-launchctl install/uninstall completed | None |
-| 2026-05-18 | `55d649a` | Passed: 4 scheduler tests cover latest-wins debounce, immediate flush canceling delayed write, explicit cancellation, failed-save event, and later successful save; full suite passed 127 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` logged IPC reset, IPC quit, `Restore state saved (ipc reset)` to `/private/tmp/winmgr-startup-shutdown-smoke/state.json`, `WinMgrApp stopped`, process exit, and socket removal | None |
+| 2026-05-18 | `6e7102a` | Passed: 7 restore scheduler tests cover pure latest-wins state, stale timer rejection, flush-once, cancellation, synchronous shell flush of latest save, failed-save event, and later successful flush; full suite passed 130 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` logged IPC reset, IPC quit, `Restore state saved (ipc reset)` to `/private/tmp/narwhal-startup-shutdown-smoke/state.json`, `NarwhalApp stopped`, process exit, and socket removal; `bash -n` passed for install/uninstall; no-launchctl install/uninstall completed | None |
+| 2026-05-18 | `55d649a` | Passed: 4 scheduler tests cover latest-wins debounce, immediate flush canceling delayed write, explicit cancellation, failed-save event, and later successful save; full suite passed 127 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` logged IPC reset, IPC quit, `Restore state saved (ipc reset)` to `/private/tmp/narwhal-startup-shutdown-smoke/state.json`, `NarwhalApp stopped`, process exit, and socket removal | None |
 
 ## Rung 22: Quarter Drag-Zone Actions
 
@@ -417,7 +417,7 @@ zone to pure BSP insertion.
 Commands:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 ```
 
 Pass criteria:
@@ -450,7 +450,7 @@ window metadata.
 Commands:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 scripts/smoke_startup_shutdown.sh
 ```
 
@@ -472,7 +472,7 @@ Observed Rung 23 results:
 
 | Date | Commit | Core/DTO tests | App smoke | Known failures |
 |---|---|---|---|---|
-| 2026-05-18 | `006f000` | Passed: exact core tests cover tiled-window eject to floating, preserved `.void` zone slots, preserved metadata/display/constraints/pending rules, already-floating rejection, missing-window rejection, and stable IPC `eject` JSON; full suite passed 137 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
+| 2026-05-18 | `006f000` | Passed: exact core tests cover tiled-window eject to floating, preserved `.void` zone slots, preserved metadata/display/constraints/pending rules, already-floating rejection, missing-window rejection, and stable IPC `eject` JSON; full suite passed 137 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `NarwhalApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
 
 ## Rung 24: Toggle-Float Command
 
@@ -485,7 +485,7 @@ display.
 Commands:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 scripts/smoke_startup_shutdown.sh
 ```
 
@@ -510,7 +510,7 @@ Observed Rung 24 results:
 
 | Date | Commit | Core/DTO tests | App smoke | Known failures |
 |---|---|---|---|---|
-| 2026-05-18 | `f14bd27` | Passed: exact core tests cover tiled-to-floating toggle, floating-to-center-tiled toggle, active `SpaceState` creation, non-resizable floating-window rejection, preserved metadata/display/constraints/pending rules, and stable IPC `toggleFloat` JSON; full suite passed 141 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
+| 2026-05-18 | `f14bd27` | Passed: exact core tests cover tiled-to-floating toggle, floating-to-center-tiled toggle, active `SpaceState` creation, non-resizable floating-window rejection, preserved metadata/display/constraints/pending rules, and stable IPC `toggleFloat` JSON; full suite passed 141 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `NarwhalApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
 
 ## Rung 25: Explicit Focus Command
 
@@ -521,7 +521,7 @@ Space focus state, and the shell performs the AX raise/focus effect.
 Commands:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 scripts/smoke_startup_shutdown.sh
 ```
 
@@ -544,7 +544,7 @@ Observed Rung 25 results:
 
 | Date | Commit | Core/DTO tests | App smoke | Known failures |
 |---|---|---|---|---|
-| 2026-05-18 | `c2f64d1` | Passed: exact core tests cover focused-state update without layout mutation, empty active `SpaceState` creation, `.windowNotFound`, `.activeSpaceUnavailable`, and stable IPC `focus` JSON; full suite passed 144 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket; startup logged a transient focused-window AX read error but the gate completed | None |
+| 2026-05-18 | `c2f64d1` | Passed: exact core tests cover focused-state update without layout mutation, empty active `SpaceState` creation, `.windowNotFound`, `.activeSpaceUnavailable`, and stable IPC `focus` JSON; full suite passed 144 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `NarwhalApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket; startup logged a transient focused-window AX read error but the gate completed | None |
 
 ## Rung 26: Balance Command Core
 
@@ -556,7 +556,7 @@ resolution rule.
 Commands:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 scripts/smoke_startup_shutdown.sh
 ```
 
@@ -576,7 +576,7 @@ Observed Rung 26 results:
 
 | Date | Commit | Core tests | App smoke | Known failures |
 |---|---|---|---|---|
-| 2026-05-18 | `de05512` | Passed: exact core tests cover recursive split-weight normalization, preserved occupied and void paths, selected-Space-only application, preserved floating/focus/metadata/display/constraint/pending/config state, and `.spaceNotFound`; full suite passed 147 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
+| 2026-05-18 | `de05512` | Passed: exact core tests cover recursive split-weight normalization, preserved occupied and void paths, selected-Space-only application, preserved floating/focus/metadata/display/constraint/pending/config state, and `.spaceNotFound`; full suite passed 147 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `NarwhalApp`, loaded startup config, completed environment refresh, registered 15 hotkeys, brought IPC online, accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
 
 ## Rung 27: Balance Shell Route
 
@@ -587,7 +587,7 @@ environment read.
 Commands:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 scripts/smoke_startup_shutdown.sh
 ```
 
@@ -596,7 +596,7 @@ Pass criteria:
 - IPC JSON encodes and decodes the stable `{"command":"balance"}` shape.
 - `IPCCommandDTO.balance.toCommand()` remains `.shellCommandOnly`, because only
   the shell can resolve the current active Space.
-- `winmgrctl balance` sends the balance IPC command without requiring a window
+- `narwhalctl balance` sends the balance IPC command without requiring a window
   ID or exposing a Space ID.
 - Lua config accepts `action = { type = "balance" }` for user-defined hotkeys,
   and the renderer emits the same exact action shape.
@@ -609,7 +609,7 @@ Observed Rung 27 results:
 
 | Date | Commit | Core/DTO/config tests | App smoke | Known failures |
 |---|---|---|---|---|
-| 2026-05-18 | `b3d5623` | Passed: exact tests cover stable IPC `balance` JSON, `.shellCommandOnly` active-Space resolution, Lua parser support for `action = { type = "balance" }`, exact Lua renderer output for balance actions, and unchanged default keymap; full suite passed 148 tests / 18 suites | Passed: updated `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config with 15 default hotkeys, completed environment refresh, registered hotkeys, brought IPC online, `winmgrctl balance` returned `ok`, logged active-Space resolution and `IPC balance completed`, then accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
+| 2026-05-18 | `b3d5623` | Passed: exact tests cover stable IPC `balance` JSON, `.shellCommandOnly` active-Space resolution, Lua parser support for `action = { type = "balance" }`, exact Lua renderer output for balance actions, and unchanged default keymap; full suite passed 148 tests / 18 suites | Passed: updated `scripts/smoke_startup_shutdown.sh` launched `NarwhalApp`, loaded startup config with 15 default hotkeys, completed environment refresh, registered hotkeys, brought IPC online, `narwhalctl balance` returned `ok`, logged active-Space resolution and `IPC balance completed`, then accepted IPC reset and quit, flushed restore state, stopped the app, and removed the socket | None |
 
 ## Rung 28: Resize-Split Command Core
 
@@ -620,7 +620,7 @@ weight edit. It does not expose any new user-facing key binding by itself.
 Commands:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 scripts/smoke_startup_shutdown.sh
 ```
 
@@ -646,18 +646,18 @@ Observed Rung 28 results:
 
 | Date | Commit | Core tests | App smoke | Known failures |
 |---|---|---|---|---|
-| 2026-05-18 | `0a00be4` | Passed: exact tests cover nearest matching ancestor selection, exact split weight transfer, preserved occupied and void paths, `.windowNotFound`, `.noNeighbor`, `.nonFiniteDelta`, `.nonPositiveWeight`, stable `CommandError` mapping, non-resizable rejection, and min-size-aware flattened frames; full suite passed 155 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `WinMgrApp`, loaded startup config with unchanged 15 default hotkeys, completed environment refresh, registered hotkeys, brought IPC online, accepted IPC balance/reset/quit, flushed restore state, stopped the app, and removed the socket | None |
+| 2026-05-18 | `0a00be4` | Passed: exact tests cover nearest matching ancestor selection, exact split weight transfer, preserved occupied and void paths, `.windowNotFound`, `.noNeighbor`, `.nonFiniteDelta`, `.nonPositiveWeight`, stable `CommandError` mapping, non-resizable rejection, and min-size-aware flattened frames; full suite passed 155 tests / 18 suites | Passed: `scripts/smoke_startup_shutdown.sh` launched `NarwhalApp`, loaded startup config with unchanged 15 default hotkeys, completed environment refresh, registered hotkeys, brought IPC online, accepted IPC balance/reset/quit, flushed restore state, stopped the app, and removed the socket | None |
 
 ## Rung 29: Resize-Split Shell Route
 
-This post-MVP shell gate exposes resize-split through IPC, `winmgrctl`, and
+This post-MVP shell gate exposes resize-split through IPC, `narwhalctl`, and
 Lua-configurable hotkeys without choosing a default global hotkey. The shell
 keeps active focus/window lookup and AX writes outside the pure resize core.
 
 Commands:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 scripts/smoke_startup_shutdown.sh
 scripts/smoke_config_hot_reload.sh
 ```
@@ -669,7 +669,7 @@ Pass criteria:
   resize as the same shape plus `windowID`.
 - `IPCCommandDTO.resizeFocused(...).toCommand()` requires a focused
   `WindowID`; explicit resize resolves directly to `.resizeSplit`.
-- `winmgrctl resize <direction> --delta <weight>` requires a finite explicit
+- `narwhalctl resize <direction> --delta <weight>` requires a finite explicit
   delta and optionally accepts `--window WINDOW_ID`.
 - Lua config accepts `action = { type = "resize_split", direction = "...",
   delta = ... }`, rejects non-finite deltas at the exact key, and the renderer

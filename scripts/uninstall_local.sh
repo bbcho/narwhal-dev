@@ -10,13 +10,13 @@ usage() {
   cat <<'USAGE'
 usage: scripts/uninstall_local.sh [options]
 
-Boots out the local LaunchAgent, removes its plist, and removes WinMgr.app
+Boots out the local LaunchAgent, removes its plist, and removes Narwhal.app
 unless --keep-app is set.
 
 Options:
-  --app-dir DIR             Directory containing WinMgr.app. Default: ~/Applications.
+  --app-dir DIR             Directory containing Narwhal.app. Default: ~/Applications.
   --launch-agents-dir DIR   LaunchAgent directory. Default: ~/Library/LaunchAgents.
-  --keep-app                Leave WinMgr.app installed.
+  --keep-app                Leave Narwhal.app installed.
   --no-launchctl            Do not run launchctl bootout.
   --help                    Show this help.
 USAGE
@@ -63,9 +63,9 @@ if [[ "$launch_agents_dir" != /* ]]; then
   launch_agents_dir="$repo_root/$launch_agents_dir"
 fi
 
-installed_app="$app_dir/WinMgr.app"
-launch_agent="$launch_agents_dir/com.ben.winmgr.plist"
-socket_path="/tmp/winmgr-$(id -u).sock"
+installed_app="$app_dir/Narwhal.app"
+launch_agent="$launch_agents_dir/com.ben.narwhal.plist"
+socket_path="/tmp/narwhal-$(id -u).sock"
 
 wait_for_socket_absent() {
   local attempts="$1"
@@ -78,12 +78,12 @@ wait_for_socket_absent() {
 }
 
 graceful_quit_existing_app() {
-  local ctl="$installed_app/Contents/MacOS/winmgrctl"
+  local ctl="$installed_app/Contents/MacOS/narwhalctl"
   if [ "$use_launchctl" != "true" ]; then
     return 0
   fi
   if [ -x "$ctl" ] && [ -S "$socket_path" ]; then
-    echo "Requesting WinMgr quit before LaunchAgent bootout"
+    echo "Requesting Narwhal quit before LaunchAgent bootout"
     "$ctl" quit >/dev/null 2>&1 || true
     wait_for_socket_absent 50 0.1 || true
   fi

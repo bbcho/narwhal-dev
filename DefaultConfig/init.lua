@@ -1,5 +1,5 @@
 -- Bundled default configuration.
--- Copy this file to ~/.config/winmgr/init.lua to customize startup config.
+-- Copy this file to ~/.config/narwhal/init.lua to customize startup config.
 return {
   keymap = {
     { key = "h", modifiers = { "control", "option" }, action = { type = "focus_direction", direction = "left" } },

@@ -3,15 +3,15 @@
 import PackageDescription
 
 let package = Package(
-    name: "winMgr",
+    name: "narwhal",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .library(name: "WinMgrCore", targets: ["WinMgrCore"]),
-        .library(name: "WinMgrIPC", targets: ["WinMgrIPC"]),
-        .executable(name: "WinMgrApp", targets: ["WinMgrApp"]),
-        .executable(name: "WinMgrCtl", targets: ["WinMgrCtl"])
+        .library(name: "NarwhalCore", targets: ["NarwhalCore"]),
+        .library(name: "NarwhalIPC", targets: ["NarwhalIPC"]),
+        .executable(name: "NarwhalApp", targets: ["NarwhalApp"]),
+        .executable(name: "NarwhalCtl", targets: ["NarwhalCtl"])
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-testing.git", branch: "release/6.2")
@@ -25,44 +25,44 @@ let package = Package(
             ]
         ),
         .target(
-            name: "WinMgrCore"
+            name: "NarwhalCore"
         ),
         .target(
-            name: "WinMgrIPC",
-            dependencies: ["WinMgrCore"]
+            name: "NarwhalIPC",
+            dependencies: ["NarwhalCore"]
         ),
         .target(
-            name: "WinMgrAppSupport",
-            dependencies: ["WinMgrCore"]
+            name: "NarwhalAppSupport",
+            dependencies: ["NarwhalCore"]
         ),
         .executableTarget(
-            name: "WinMgrApp",
-            dependencies: ["WinMgrCore", "WinMgrIPC", "WinMgrAppSupport", "CLua"]
+            name: "NarwhalApp",
+            dependencies: ["NarwhalCore", "NarwhalIPC", "NarwhalAppSupport", "CLua"]
         ),
         .executableTarget(
-            name: "WinMgrCtl",
-            dependencies: ["WinMgrCore", "WinMgrIPC"]
+            name: "NarwhalCtl",
+            dependencies: ["NarwhalCore", "NarwhalIPC"]
         ),
         .testTarget(
-            name: "WinMgrCoreTests",
+            name: "NarwhalCoreTests",
             dependencies: [
-                "WinMgrCore",
+                "NarwhalCore",
                 .product(name: "Testing", package: "swift-testing")
             ]
         ),
         .testTarget(
-            name: "WinMgrIPCTests",
+            name: "NarwhalIPCTests",
             dependencies: [
-                "WinMgrCore",
-                "WinMgrIPC",
+                "NarwhalCore",
+                "NarwhalIPC",
                 .product(name: "Testing", package: "swift-testing")
             ]
         ),
         .testTarget(
-            name: "WinMgrAppSupportTests",
+            name: "NarwhalAppSupportTests",
             dependencies: [
-                "WinMgrCore",
-                "WinMgrAppSupport",
+                "NarwhalCore",
+                "NarwhalAppSupport",
                 .product(name: "Testing", package: "swift-testing")
             ]
         )

@@ -1,12 +1,12 @@
 # User Guide
 
-WinMgr is a manual tiling window manager for macOS. It does not constantly
+Narwhal is a manual tiling window manager for macOS. It does not constantly
 repack every visible window. Instead, every window starts floating, and you tile
 only the windows you choose.
 
 ## Mental Model
 
-WinMgr keeps one persistent BSP zone tree per display in the active macOS Space.
+Narwhal keeps one persistent BSP zone tree per display in the active macOS Space.
 The important ideas are:
 
 - A tiled window occupies a leaf in the tree.
@@ -30,9 +30,9 @@ scripts/install_local.sh --replace --configuration debug
 
 The installer:
 
-- Builds `WinMgr.app`.
-- Copies it to `~/Applications/WinMgr.app`.
-- Writes `~/Library/LaunchAgents/com.ben.winmgr.plist`.
+- Builds `Narwhal.app`.
+- Copies it to `~/Applications/Narwhal.app`.
+- Writes `~/Library/LaunchAgents/com.ben.narwhal.plist`.
 - Starts the LaunchAgent unless `--no-launchctl` is passed.
 
 Uninstall:
@@ -43,11 +43,11 @@ scripts/uninstall_local.sh
 
 ## First Run
 
-WinMgr requires macOS Accessibility permission because it reads and writes window
+Narwhal requires macOS Accessibility permission because it reads and writes window
 positions through Accessibility APIs.
 
 1. Start the app with `scripts/install_local.sh --replace --configuration debug`
-   or run `swift run WinMgrApp`.
+   or run `swift run NarwhalApp`.
 2. If macOS prompts for Accessibility, grant permission to the executable being
    used.
 3. Restart the app after granting permission if macOS does not apply the
@@ -55,7 +55,7 @@ positions through Accessibility APIs.
 4. Check logs:
 
 ```sh
-tail -n 80 /tmp/winmgr.log
+tail -n 80 /tmp/narwhal.log
 ```
 
 A healthy startup logs Accessibility trust, hotkey registration, observers, IPC
@@ -202,7 +202,7 @@ control-option-delete
 or:
 
 ```sh
-winmgrctl reset
+narwhalctl reset
 ```
 
 Reset clears BSP trees, floating lists, focus memory, pending rules, and observed
@@ -234,20 +234,20 @@ taller than the available screen space, it shows a scrollbar and
 The packaged CLI lives at:
 
 ```sh
-$HOME/Applications/WinMgr.app/Contents/MacOS/winmgrctl
+$HOME/Applications/Narwhal.app/Contents/MacOS/narwhalctl
 ```
 
 Useful commands:
 
 ```sh
-winmgrctl reset
-winmgrctl push left
-winmgrctl push right --window 12345
-winmgrctl swap up
-winmgrctl resize right --delta 0.25
-winmgrctl center --window 12345
-winmgrctl balance
-winmgrctl quit
+narwhalctl reset
+narwhalctl push left
+narwhalctl push right --window 12345
+narwhalctl swap up
+narwhalctl resize right --delta 0.25
+narwhalctl center --window 12345
+narwhalctl balance
+narwhalctl quit
 ```
 
 See [Command reference](commands.md) for all CLI and IPC details.
@@ -257,10 +257,10 @@ See [Command reference](commands.md) for all CLI and IPC details.
 User config path:
 
 ```text
-~/.config/winmgr/init.lua
+~/.config/narwhal/init.lua
 ```
 
-If the file is missing, WinMgr uses the built-in default config. The config
+If the file is missing, Narwhal uses the built-in default config. The config
 watcher hot-reloads valid edits while the app runs. Invalid edits are logged and
 the previous in-memory config remains active.
 
@@ -268,10 +268,10 @@ See [Configuration reference](configuration.md).
 
 ## Restore State
 
-WinMgr persists restore state by default at:
+Narwhal persists restore state by default at:
 
 ```text
-~/Library/Application Support/winmgr/state.json
+~/Library/Application Support/narwhal/state.json
 ```
 
 Restore stores stable window descriptors such as bundle ID, title, role,
@@ -281,7 +281,7 @@ identity, because macOS window IDs change across launches.
 You can override the restore path for testing:
 
 ```sh
-WinMgrApp --restore-state /private/tmp/winmgr-state.json
+NarwhalApp --restore-state /private/tmp/narwhal-state.json
 ```
 
 ## Troubleshooting Basics
@@ -289,25 +289,25 @@ WinMgrApp --restore-state /private/tmp/winmgr-state.json
 Check Accessibility:
 
 ```sh
-WinMgrApp --check-accessibility
+NarwhalApp --check-accessibility
 ```
 
 Check config:
 
 ```sh
-WinMgrApp --check-config
+NarwhalApp --check-config
 ```
 
 Check environment:
 
 ```sh
-WinMgrApp --check-environment
+NarwhalApp --check-environment
 ```
 
 Read logs:
 
 ```sh
-tail -n 100 /tmp/winmgr.log
+tail -n 100 /tmp/narwhal.log
 ```
 
 Common failures:

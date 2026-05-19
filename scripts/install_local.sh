@@ -12,13 +12,13 @@ usage() {
   cat <<'USAGE'
 usage: scripts/install_local.sh [options]
 
-Builds a local package, installs WinMgr.app, writes a LaunchAgent plist, and
+Builds a local package, installs Narwhal.app, writes a LaunchAgent plist, and
 bootstraps it unless --no-launchctl is set.
 
 Options:
   --configuration debug|release   Build configuration. Default: release.
-  --package-dir DIR               Temporary package output. Default: .build/winmgr-package-install.
-  --app-dir DIR                   Directory that will contain WinMgr.app. Default: ~/Applications.
+  --package-dir DIR               Temporary package output. Default: .build/narwhal-package-install.
+  --app-dir DIR                   Directory that will contain Narwhal.app. Default: ~/Applications.
   --launch-agents-dir DIR         LaunchAgent directory. Default: ~/Library/LaunchAgents.
   --replace                       Replace an existing installed app/plist.
   --no-launchctl                  Do not run launchctl bootout/bootstrap.
@@ -79,7 +79,7 @@ esac
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 if [ -z "$package_dir" ]; then
-  package_dir="$repo_root/.build/winmgr-package-install"
+  package_dir="$repo_root/.build/narwhal-package-install"
 elif [[ "$package_dir" != /* ]]; then
   package_dir="$repo_root/$package_dir"
 fi
@@ -90,11 +90,11 @@ if [[ "$launch_agents_dir" != /* ]]; then
   launch_agents_dir="$repo_root/$launch_agents_dir"
 fi
 
-source_app="$package_dir/WinMgr.app"
-installed_app="$app_dir/WinMgr.app"
-launch_agent="$launch_agents_dir/com.ben.winmgr.plist"
-app_executable="$installed_app/Contents/MacOS/WinMgrApp"
-socket_path="/tmp/winmgr-$(id -u).sock"
+source_app="$package_dir/Narwhal.app"
+installed_app="$app_dir/Narwhal.app"
+launch_agent="$launch_agents_dir/com.ben.narwhal.plist"
+app_executable="$installed_app/Contents/MacOS/NarwhalApp"
+socket_path="/tmp/narwhal-$(id -u).sock"
 
 wait_for_socket_absent() {
   local attempts="$1"
@@ -107,12 +107,12 @@ wait_for_socket_absent() {
 }
 
 graceful_quit_existing_app() {
-  local ctl="$installed_app/Contents/MacOS/winmgrctl"
+  local ctl="$installed_app/Contents/MacOS/narwhalctl"
   if [ "$use_launchctl" != "true" ]; then
     return 0
   fi
   if [ -x "$ctl" ] && [ -S "$socket_path" ]; then
-    echo "Requesting WinMgr quit before LaunchAgent bootout"
+    echo "Requesting Narwhal quit before LaunchAgent bootout"
     "$ctl" quit >/dev/null 2>&1 || true
     wait_for_socket_absent 50 0.1 || true
   fi
@@ -138,7 +138,7 @@ fi
 
 mkdir -p "$app_dir" "$launch_agents_dir"
 cp -R "$source_app" "$installed_app"
-cp "$repo_root/Packaging/com.ben.winmgr.plist" "$launch_agent"
+cp "$repo_root/Packaging/com.ben.narwhal.plist" "$launch_agent"
 plutil -insert ProgramArguments.0 -string "$app_executable" "$launch_agent"
 plutil -replace WorkingDirectory -string "$HOME" "$launch_agent"
 plutil -lint "$launch_agent"

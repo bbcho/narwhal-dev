@@ -1,4 +1,4 @@
-# WinMgr — Functional Architecture Design
+# Narwhal — Functional Architecture Design
 
 A macOS BSP tiling window manager. Manual push-to-tile, n-ary recursive split, native-Spaces aware, Lua-configurable, mouse-drag + hotkey + IPC controllable.
 
@@ -17,8 +17,8 @@ This is the pre-implementation gate for the fp-architect skill, adapted to Swift
 | Center anchor | Hotkey establishes 3-column root `[1, 2, 1]` weights. Center cell pushes split center vertically (TB stack). |
 | Workspaces | Native macOS Spaces. `CGSGetActiveSpace` via `dlsym` (read-only, 1 symbol). One active Space identity is tracked globally; per-display Space identity is deferred because it requires broader private API use. No programmatic Space moves. |
 | Restore | Fuzzy match on stable window descriptors `(bundleID, title, role)`. Restore JSON stores descriptors, not raw OS window/display IDs. Native Space pinning is deferred until a stable Space-slot mapping exists. |
-| Config | Lua 5.4 embedded via C interop. `~/.config/winmgr/init.lua`. FSEvent hot reload, last-good fallback. |
-| Input | Carbon hotkeys + `CGEventTap` shift-drag + Unix-socket IPC + `winmgrctl` CLI. |
+| Config | Lua 5.4 embedded via C interop. `~/.config/narwhal/init.lua`. FSEvent hot reload, last-good fallback. |
+| Input | Carbon hotkeys + `CGEventTap` shift-drag + Unix-socket IPC + `narwhalctl` CLI. |
 | Default key families | `ctrl-option-H/J/K/L` tiled focus, `ctrl-option-U/I` non-tiled cycle, `ctrl-option-P` previous focus, `ctrl-option-shift-H/J/K/L` swap, `ctrl-option-command-H/J/K/L` push, `ctrl-option-command-N` next display, `ctrl-option-shift-command-H/J/K/L` resize split, `ctrl-option-command-return` balance, `ctrl-option-Z` undo, `ctrl-option-space` pause, `ctrl-option-/` overlay, `ctrl-option-delete` reset. |
 | Visuals | Focus border overlay, Space HUD on switch, gaps, NSStatusItem menubar. No animations. |
 | Distribution | Notarized `.app` bundle + LaunchAgent + brew cask (later). Private repo. |
@@ -153,7 +153,7 @@ Rules:
 5. Floating order, focused window, display inventory, live window metadata,
    display ownership, observed constraints, pending rules, and config are
    preserved exactly.
-6. Shell balance commands never accept raw Space IDs from users. `winmgrctl
+6. Shell balance commands never accept raw Space IDs from users. `narwhalctl
    balance` and configurable Lua hotkeys resolve `World.activeSpace` at
    execution time after refreshing the environment.
 7. Shell balance requires Accessibility trust and a complete AX snapshot before
@@ -191,7 +191,7 @@ Rules:
 8. Min-size constraints are still enforced after planning by the existing
    min-size-aware layout solver; an otherwise valid weight edit can still be
    rejected as `.layoutUnsatisfiable`.
-9. Shell resize commands expose the same model directly: `winmgrctl resize
+9. Shell resize commands expose the same model directly: `narwhalctl resize
    <direction> --delta <weight>` and Lua `action = { type = "resize_split",
    direction = "...", delta = ... }`. The CLI requires `--delta`; no hidden
    default step size is chosen.
@@ -384,7 +384,7 @@ Later policies may add "float newest window", "stack within lane", or "move to a
 The full architecture below is the destination, not the first slice. The MVP path optimizes for the earliest manual tiling loop that can be run daily:
 
 ```sh
-swift run WinMgrApp
+swift run NarwhalApp
 ```
 
 MVP means:
@@ -403,8 +403,8 @@ Anything not required for that loop is deferred until after the loop works.
 
 | Rung | Build slice | User-visible proof | May defer |
 |---|---|---|---|
-| 0 | Package + `WinMgrCore` ADTs + Swift Testing | `swift test` passes | Shell, AX, hotkeys |
-| 1 | `WinMgrApp` executable with AppKit run loop and Accessibility gate | `swift run WinMgrApp` stays alive and reports permission state | Config loading, restore, observers |
+| 0 | Package + `NarwhalCore` ADTs + Swift Testing | `swift test` passes | Shell, AX, hotkeys |
+| 1 | `NarwhalApp` executable with AppKit run loop and Accessibility gate | `swift run NarwhalApp` stays alive and reports permission state | Config loading, restore, observers |
 | 2 | Minimal `AXClient`: focused window snapshot only | Debug log shows focused window id/title/frame | Multi-window listing, AXObserver |
 | 3 | Minimal `AXClient.setFrame` plus one built-in command: left half of active display | Running the command moves the focused window | BSP, rules, Lua |
 | 4 | One hardcoded Carbon hotkey wired to the built-in command | Hotkey moves focused window | Configurable keymap, rebind |
@@ -415,26 +415,26 @@ Anything not required for that loop is deferred until after the loop works.
 | 8 | Environment refresh: list windows, display/Space snapshot, startup convergence | Relaunch preserves a sensible active-display state | Full restore fuzzy matching |
 | 9 | Restore JSON for active Space | Relaunch retiles currently matchable windows | Cross-Space restore |
 | 10 | Quality-of-life shell adapters: focus border, menubar reload, AXObserver echo filtering | Daily-use loop is tolerable | IPC, drag zones |
-| 11a | IPC socket + `winmgrctl` | `winmgrctl reset` works against the running app; IPC tests cover newline-delimited JSON, connection reuse, and invalid command replies | Drag zones |
+| 11a | IPC socket + `narwhalctl` | `narwhalctl reset` works against the running app; IPC tests cover newline-delimited JSON, connection reuse, and invalid command replies | Drag zones |
 | 11b | Drag zones | Shift-drag onto configured zones maps to the same push pipeline | Packaging |
 | 12 | Local packaging | `scripts/build_app_bundle.sh` emits a runnable `.app`, embeds Lua, copies default config into Resources, and generates a LaunchAgent plist | Notarization, brew cask |
 | 13 | Local install lifecycle | `scripts/install_local.sh --no-launchctl --app-dir .build/install-test/Applications --launch-agents-dir .build/install-test/LaunchAgents --replace --configuration debug` installs a test app/plist, and `scripts/uninstall_local.sh --no-launchctl ...` removes them | Notarized installer, brew cask |
-| 14 | User LaunchAgent smoke | `scripts/install_local.sh --replace --configuration debug` installs into `~/Applications` and `~/Library/LaunchAgents`; `launchctl print gui/$UID/com.ben.winmgr` reports running; installed `winmgrctl reset` returns `ok` | Notarized installer, brew cask |
+| 14 | User LaunchAgent smoke | `scripts/install_local.sh --replace --configuration debug` installs into `~/Applications` and `~/Library/LaunchAgents`; `launchctl print gui/$UID/com.ben.narwhal` reports running; installed `narwhalctl reset` returns `ok` | Notarized installer, brew cask |
 | 15 | Config hot reload | FSEvents watches the active config path; file changes debounce into `reloadConfig`; invalid configs leave the last-good runtime config active and report failure in the menu/log | Notarization, brew cask |
 | 16 | Startup/shutdown smoke | `scripts/smoke_startup_shutdown.sh` proves service startup, temp restore-state path, IPC reset, IPC quit, `applicationWillTerminate`, process exit, and socket cleanup | Unit-level fake service orchestration |
-| 17 | Service lifecycle orchestration | `WinMgrAppSupportTests` prove ordered startup, reverse-order rollback on a later startup failure, and idempotent normal shutdown | Real AX shell startup failure injection |
+| 17 | Service lifecycle orchestration | `NarwhalAppSupportTests` prove ordered startup, reverse-order rollback on a later startup failure, and idempotent normal shutdown | Real AX shell startup failure injection |
 | 18 | Startup failure rollback smoke | `scripts/smoke_startup_failure_rollback.sh` injects a failure at `dragZones` after IPC startup; app terminates and the IPC socket is removed without reaching layout-loop ready | Broader failure injection matrix |
 | 19 | Startup failure matrix | `scripts/smoke_startup_failure_matrix.sh` injects failure at every service boundary and proves each rollback terminates without layout-loop readiness or leftover IPC socket | Adapter-specific failure simulations |
-| 20 | Restore persistence boundary | `WinMgrAppSupportTests` prove missing file, unsupported schema, corrupt JSON, invalid persisted `StoredWorld`, and save/load round-trip from a temp restore path | Debounced async persistence scheduling |
-| 21 | Debounced restore persistence scheduling | `WinMgrAppSupportTests` prove pure latest-wins coalescing, stale generation rejection, immediate flush, cancellation, failed-save reporting, and successful later save; startup/shutdown smoke proves AppKit termination and app-owned quit flush pending restore state before exit; install/uninstall request graceful IPC quit before `launchctl bootout` | Cross-process crash recovery while a save is still pending |
-| 22 | Quarter drag-zone actions | `WinMgrCoreTests` prove configured `.insertAsQuarter` zones place a dragged window into each exact display corner and preserve persistent void lanes; unsupported subtree actions still fail explicitly | Custom subtree-targeted zones |
-| 23 | Eject command | `WinMgrCoreTests` prove `.eject` moves a tiled window to the floating layer while preserving the zone shape; IPC DTO tests prove stable JSON; startup/shutdown smoke proves the app shell still boots with the new command route | Toggle-float, resize-split, balance |
-| 24 | Toggle-float command | `WinMgrCoreTests` prove `.toggleFloat` ejects tiled windows, center-tiles floating windows, preserves state metadata, and rejects non-resizable floating windows; IPC DTO tests prove stable JSON; startup/shutdown smoke proves the app shell still boots with the new command route | User-selected default key binding, resize-split, balance |
-| 25 | Explicit focus command | `WinMgrCoreTests` prove `.focus` records focused window state without layout mutation; IPC DTO tests prove stable JSON; startup/shutdown smoke proves explicit IPC focus routing does not break app startup | Resize-split, balance |
-| 26 | Balance command core | `WinMgrCoreTests` prove `.balance(spaceID)` recursively normalizes all split weights in the selected Space while preserving tree shape, void leaves, floating order, focus, and world metadata | User-facing balance IPC/key binding, resize-split |
-| 27 | Balance shell route | IPC DTO, `winmgrctl balance`, and Lua `action = { type = "balance" }` resolve active Space at execution time; startup/shutdown smoke proves IPC balance succeeds before reset/quit | Resize-split, user-selected default balance key binding |
-| 28 | Resize-split command core | `WinMgrCoreTests` prove `.resizeSplit(windowID, direction, delta)` adjusts only the nearest matching split weights, preserves tree shape/metadata, and fails explicitly on no-neighbor, non-finite delta, or collapsing weights | User-facing resize IPC/key binding |
-| 29 | Resize-split shell route | IPC DTO, `winmgrctl resize <direction> --delta <weight>`, and Lua `action = { type = "resize_split", direction = "...", delta = ... }` route through `WorldActor.planResize`; startup/shutdown smoke proves the app shell still boots with the route | User-selected default resize key binding |
+| 20 | Restore persistence boundary | `NarwhalAppSupportTests` prove missing file, unsupported schema, corrupt JSON, invalid persisted `StoredWorld`, and save/load round-trip from a temp restore path | Debounced async persistence scheduling |
+| 21 | Debounced restore persistence scheduling | `NarwhalAppSupportTests` prove pure latest-wins coalescing, stale generation rejection, immediate flush, cancellation, failed-save reporting, and successful later save; startup/shutdown smoke proves AppKit termination and app-owned quit flush pending restore state before exit; install/uninstall request graceful IPC quit before `launchctl bootout` | Cross-process crash recovery while a save is still pending |
+| 22 | Quarter drag-zone actions | `NarwhalCoreTests` prove configured `.insertAsQuarter` zones place a dragged window into each exact display corner and preserve persistent void lanes; unsupported subtree actions still fail explicitly | Custom subtree-targeted zones |
+| 23 | Eject command | `NarwhalCoreTests` prove `.eject` moves a tiled window to the floating layer while preserving the zone shape; IPC DTO tests prove stable JSON; startup/shutdown smoke proves the app shell still boots with the new command route | Toggle-float, resize-split, balance |
+| 24 | Toggle-float command | `NarwhalCoreTests` prove `.toggleFloat` ejects tiled windows, center-tiles floating windows, preserves state metadata, and rejects non-resizable floating windows; IPC DTO tests prove stable JSON; startup/shutdown smoke proves the app shell still boots with the new command route | User-selected default key binding, resize-split, balance |
+| 25 | Explicit focus command | `NarwhalCoreTests` prove `.focus` records focused window state without layout mutation; IPC DTO tests prove stable JSON; startup/shutdown smoke proves explicit IPC focus routing does not break app startup | Resize-split, balance |
+| 26 | Balance command core | `NarwhalCoreTests` prove `.balance(spaceID)` recursively normalizes all split weights in the selected Space while preserving tree shape, void leaves, floating order, focus, and world metadata | User-facing balance IPC/key binding, resize-split |
+| 27 | Balance shell route | IPC DTO, `narwhalctl balance`, and Lua `action = { type = "balance" }` resolve active Space at execution time; startup/shutdown smoke proves IPC balance succeeds before reset/quit | Resize-split, user-selected default balance key binding |
+| 28 | Resize-split command core | `NarwhalCoreTests` prove `.resizeSplit(windowID, direction, delta)` adjusts only the nearest matching split weights, preserves tree shape/metadata, and fails explicitly on no-neighbor, non-finite delta, or collapsing weights | User-facing resize IPC/key binding |
+| 29 | Resize-split shell route | IPC DTO, `narwhalctl resize <direction> --delta <weight>`, and Lua `action = { type = "resize_split", direction = "...", delta = ... }` route through `WorldActor.planResize`; startup/shutdown smoke proves the app shell still boots with the route | User-selected default resize key binding |
 
 ### Fast-path constraints
 
@@ -451,7 +451,7 @@ the work after this point is post-MVP implementation of the remaining design.
 
 Sprint 1 is done when this exact manual smoke works:
 
-1. Run `swift run WinMgrApp`.
+1. Run `swift run NarwhalApp`.
 2. Grant Accessibility if prompted.
 3. Open three Finder/TextEdit windows on the active display.
 4. Press the push hotkey repeatedly.
@@ -468,11 +468,11 @@ Post-MVP work starts only after that loop works. The full design below remains t
 This layout is intentionally larger than the MVP ladder. Create files when their rung requires them; do not pre-create empty adapters or placeholder managers.
 
 ```
-winMgr/
+narwhal/
 ├── Package.swift
 ├── design.md                  ← this file
 ├── Sources/
-│   ├── WinMgrCore/            ← PURE. No AppKit. No Foundation I/O.
+│   ├── NarwhalCore/            ← PURE. No AppKit. No Foundation I/O.
 │   │   ├── ADTs.swift                  (Node, Cell, Axis, Direction, IDs, support types)
 │   │   ├── World.swift                 (World, SpaceState, DisplaySpaceState, DisplayInfo)
 │   │   ├── Command.swift               (Command enum + CommandError)
@@ -483,7 +483,7 @@ winMgr/
 │   │   ├── Focus.swift                 (nearestWindowInDirection)
 │   │   ├── Rules.swift                 (matchRule, windowOpenDecision)
 │   │   └── Config.swift                (Config, HotkeyBinding, Zone, Gaps)
-│   ├── WinMgrShell/           ← IMPURE. AppKit + AX + IPC + Lua.
+│   ├── NarwhalShell/           ← IMPURE. AppKit + AX + IPC + Lua.
 │   │   ├── AXClient.swift              (read+write AX)
 │   │   ├── AXObserver.swift            (AX event source)
 │   │   ├── SpaceClient.swift           (dlsym CGSGetActiveSpace)
@@ -503,21 +503,21 @@ winMgr/
 │   ├── CLua/                  ← Vanilla Lua 5.4 sources as C target
 │   │   ├── lua.c, lauxlib.c, ...       (vendored)
 │   │   └── module.modulemap
-│   └── winmgrctl/             ← CLI binary
+│   └── narwhalctl/             ← CLI binary
 │       └── main.swift                  (swift-argument-parser → socket)
 ├── Tests/
-│   ├── WinMgrCoreTests/                (Swift Testing + hand-rolled prop)
+│   ├── NarwhalCoreTests/                (Swift Testing + hand-rolled prop)
 │   │   ├── TreeTests.swift
 │   │   ├── LayoutTests.swift
 │   │   ├── FocusTests.swift
 │   │   ├── ApplyTests.swift
 │   │   ├── PropertyHarness.swift       (hand-rolled gen/shrink)
 │   │   └── Generators.swift
-│   └── WinMgrShellTests/               (integration, real AX test target)
+│   └── NarwhalShellTests/               (integration, real AX test target)
 └── DefaultConfig/init.lua              (ships in app bundle)
 ```
 
-`WinMgrCore` has **zero dependencies** on AppKit, Foundation I/O, or AX. It links only `CoreGraphics` (for `CGRect`/`CGPoint`/`CGSize`) and the Swift standard library. Core defines its own `Insets`, `ModifierSet`, and serializable DTOs; shell translates to AppKit/Carbon types. This is enforced by the Package.swift target boundary.
+`NarwhalCore` has **zero dependencies** on AppKit, Foundation I/O, or AX. It links only `CoreGraphics` (for `CGRect`/`CGPoint`/`CGSize`) and the Swift standard library. Core defines its own `Insets`, `ModifierSet`, and serializable DTOs; shell translates to AppKit/Carbon types. This is enforced by the Package.swift target boundary.
 
 ---
 
@@ -609,7 +609,7 @@ All "no" on the 5 questions:
 | `Menubar.start(reload:quit:) @MainActor -> ServiceHandle` | Menubar | Creates NSStatusItem with reload/quit actions and returns an owned removal handle. |
 | `Menubar.updateConfigStatus(_:) @MainActor` | Menubar | Shows last config load state in the status menu. |
 | `scheduleRestoreSave`, `fireRestoreSaveTimer`, `flushRestoreSave`, `cancelRestoreSave` | RestoreManager | Pure latest-wins restore-save coalescing policy. |
-| `RestorePersistence.scheduleSave(_:reason:) @MainActor` | RestoreManager | Debounced atomic save shell for `~/Library/Application Support/winmgr/state.json`; AppKit termination and app-owned quit paths call `flushPending()` synchronously. |
+| `RestorePersistence.scheduleSave(_:reason:) @MainActor` | RestoreManager | Debounced atomic save shell for `~/Library/Application Support/narwhal/state.json`; AppKit termination and app-owned quit paths call `flushPending()` synchronously. |
 | `RestoreManager.load() throws -> StoredWorld?` | RestoreManager | Reads restore JSON; returns nil for no file or unsupported schema version. |
 
 **Core:shell ratio**: 26 core / 39 shell function families = ~0.7:1. Target was 4:1, but a window manager is by nature I/O-heavy. The *line-count* ratio matters more here — the core implementations are substantial (tree ops + layout + apply + restore remap/projection + coalescing policies) while shell wrappers are thin. Acceptable.
@@ -620,7 +620,7 @@ All "no" on the 5 questions:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ IMPURE SHELL (WinMgrShell)                                           │
+│ IMPURE SHELL (NarwhalShell)                                           │
 │                                                                      │
 │  Event sources                       State holder                    │
 │  ┌─────────────────┐                ┌──────────────────────┐         │
@@ -642,7 +642,7 @@ All "no" on the 5 questions:
 │                              AXClient (writes)                       │
 │                                                                      │
 │  ┌─────────────────────────────────────────────────────────────┐     │
-│  │ PURE CORE (WinMgrCore)                                      │     │
+│  │ PURE CORE (NarwhalCore)                                      │     │
 │  │   apply(Command, World) -> Result<World, CommandError>      │     │
 │  │   solveLayout(..., constraints) -> LayoutSolveResult        │     │
 │  │   layout(SpaceState, DisplayID, CGRect, Gaps) -> Layout     │     │
@@ -1588,10 +1588,10 @@ For every value the code reads or writes that outlives a call:
 | FSEvent stream | `ConfigLoader` | FSEventStream on dedicated queue → actor handoff | FSEvent callbacks on arbitrary thread. |
 | Space changes | `SpaceClient` | NSWorkspace notification plus active-Space dlsym read, de-duplicated in `AsyncStream`; owned by `ServiceHandle` | Native Space switches have no public typed Space ID; shell observes switch then reads current ID. |
 | Display changes | `DisplayClient` | CGDisplay/NSApplication screen-change notification → `AsyncStream`; owned by `ServiceHandle` | Display topology and visible frames can change independently of window events. |
-| AX inventory refresh coalescer | App shell, with pure policy in `WinMgrCore` | `@MainActor` pending timer + latest-generation token | Window open/close bursts can emit many stale-but-complete inventories. Coalesce shell-triggered environment refreshes before they enter `WorldActor`; user commands still bypass coalescing and force an immediate pre-command refresh. |
+| AX inventory refresh coalescer | App shell, with pure policy in `NarwhalCore` | `@MainActor` pending timer + latest-generation token | Window open/close bursts can emit many stale-but-complete inventories. Coalesce shell-triggered environment refreshes before they enter `WorldActor`; user commands still bypass coalescing and force an immediate pre-command refresh. |
 | Service task/service handles | `AppDelegate.serviceTasks` + `serviceHandles` | `@MainActor` arrays of `Task<Void, Never>` and `ServiceHandle` | Long-lived stream consumers are cancelled and registered OS services are stopped on startup failure. |
 | Restore save scheduler | Pure scheduler state + `RestorePersistence` shell | `RestoreSaveSchedulerState` is immutable value state; `RestorePersistence` owns one AppKit-run-loop `Timer` and one synchronous atomic writer. | Timer callbacks may be stale; generation checks prevent stale callbacks from clearing or saving newer pending state. |
-| Restore state on disk | `RestoreManager` | File written atomically (`.atomic` write option) to `~/Library/Application Support/winmgr/state.json` | One writer, one reader. `applicationWillTerminate`, app-owned quit paths, and install/uninstall graceful quit flush pending state before process exit. |
+| Restore state on disk | `RestoreManager` | File written atomically (`.atomic` write option) to `~/Library/Application Support/narwhal/state.json` | One writer, one reader. `applicationWillTerminate`, app-owned quit paths, and install/uninstall graceful quit flush pending state before process exit. |
 | Logger | `os.Logger` | Apple-provided, thread-safe | Trust framework. |
 | AX echo suppression table | `LayoutApplier` / `AXObserver` bridge | actor-isolated map with expiry | Filters self-generated move/resize/focus events by expected origin, expected size, and expected focused `WindowID` independently. |
 
@@ -1613,7 +1613,7 @@ External-input boundaries and their validation:
 | Lua config → Config | `LuaConfigData` (decoded from Lua stack) | `parseConfig(_:LuaConfigData)` validates types, finite numeric values, ranges, regex syntax, key spec syntax, weight > 0, etc. Returns `Result<Config, ConfigError>`. | Reload aborted; last-good retained. |
 | IPC socket → IPCCommandDTO → Command → IPCReplyDTO | newline-delimited JSON | Shell decodes a Codable DTO, awaits `WorldActor.handle`, then converts `CommandOutcome` to `IPCReplyDTO`. | Reply with success/error JSON; connection stays open. |
 | Restore JSON → StoredWorld | file content | `Decodable` + `validateStoredWorld(_:)`: supported `schemaVersion`, non-negative `StoredWindowRef.occurrence`, finite `lastKnownFrame`, and constructor-backed stored tree weights. Stored tree uses stable window refs, not raw `WindowID`/`DisplayID`/`SpaceID`. MVP restore applies only to the active Space because stable native-Space enumeration is not available. | Unsupported schema returns nil and starts fresh; corrupt/unreadable JSON throws. Validation failure throws `RestoreError.invalidStoredWorld`. Valid stored refs are remapped from the live AX snapshot; unmatched refs dropped. |
-| FSEvent → file path | path string | Whitelist check: must be exactly `~/.config/winmgr/init.lua` (resolved). | Other paths ignored. |
+| FSEvent → file path | path string | Whitelist check: must be exactly `~/.config/narwhal/init.lua` (resolved). | Other paths ignored. |
 | Drag drop → Command | `DragEvent` with screen point | `resolveDrop(_:zones:displays:)` hit-tests current zones and display using half-open bounds `[minX, maxX) × [minY, maxY)`; exactly one zone yields `.dropAtZone(window, display, zone)`. | Drop discarded. |
 | Hotkey fire → Command or shell reload | `HotkeyAction` + active window query | `.command(template)` uses `resolveTemplate(_:focused:)`; `.reloadConfig` calls `ConfigLoader.reloadNow()`. | Window-scoped hotkey ignored with debug log if no focused window; reload errors logged. |
 
@@ -1634,7 +1634,7 @@ Swift idiom: **constructor injection**, no service locator, no global container.
 The composition root below is the post-MVP target. During MVP Rungs 1-4, `App.swift` contains only the AppKit lifecycle, Accessibility gate, minimal AX client, and one hotkey. Rung 5 introduces `WorldActor`/`LayoutApplier`; later rungs add config, observers, restore, overlays, IPC, and drag in the order defined by the MVP ladder.
 
 ```swift
-// Composition root: WinMgrShell/App.swift.
+// Composition root: NarwhalShell/App.swift.
 // AppKit owns the main run loop; async services start from the delegate.
 
 struct ServiceHandle: Sendable {
@@ -1890,7 +1890,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 The final `.startupConverge` command is intentional even though `initialWorld` is already restored in memory: it leaves `World` unchanged but causes `WorldActor` to emit the first `DesiredLayout`, focus-border effect, and restore persistence decision before any user input, so AX state converges to the restored tree immediately after services are registered.
 
-All `start()` methods in this snippet are registration methods: they bind sockets, install taps/watchers/observers, launch their owned background loop if needed, and return a `ServiceHandle`. Startup registers each handle immediately; if a later registration fails, `stopStartedServices()` cancels stream-consumer tasks and stops registered services in reverse order. `applicationWillTerminate` first flushes pending restore persistence synchronously, then uses the same cleanup path for normal shutdown. Install/uninstall scripts request `winmgrctl quit` before falling back to `launchctl bootout` so the app gets the same flush path when possible. Process lifetime remains `NSApplication.shared.run()`.
+All `start()` methods in this snippet are registration methods: they bind sockets, install taps/watchers/observers, launch their owned background loop if needed, and return a `ServiceHandle`. Startup registers each handle immediately; if a later registration fails, `stopStartedServices()` cancels stream-consumer tasks and stops registered services in reverse order. `applicationWillTerminate` first flushes pending restore persistence synchronously, then uses the same cleanup path for normal shutdown. Install/uninstall scripts request `narwhalctl quit` before falling back to `launchctl bootout` so the app gets the same flush path when possible. Process lifetime remains `NSApplication.shared.run()`.
 
 **Twenty-parameter caveat (fp-architect Step 7)**: components do approach 4-6 params. Mitigation: pass a `Dependencies` struct only when count exceeds 6. As of design time, each component sits under the threshold; revisit if it creeps.
 
@@ -1925,7 +1925,7 @@ All `start()` methods in this snippet are registration methods: they bind socket
 
 ## 9. Property-based test plan
 
-Hand-rolled property harness in `Tests/WinMgrCoreTests/PropertyHarness.swift`. ~80 lines: `Gen<T>` w/ random + shrink. Inspired by Hypothesis, not SwiftCheck.
+Hand-rolled property harness in `Tests/NarwhalCoreTests/PropertyHarness.swift`. ~80 lines: `Gen<T>` w/ random + shrink. Inspired by Hypothesis, not SwiftCheck.
 
 ```swift
 struct Gen<A> {
@@ -2008,9 +2008,9 @@ Total ≈ 130 example tests + 20 property tests. Achievable in the per-phase bud
 | World | `struct` w/ `Dictionary`/`Array` fields | Swift COW handles persistence efficiency. Update via explicit `with...` helpers. |
 | Bulk-build hot path | Direct `[Cell]` array build then construct Split | No mutable scope leakage. |
 | Tabular workloads | N/A — we have no tabular data. | If we add metrics: skip Polars, use plain `[Sample]`. |
-| Restore JSON | `StoredWorld` via `Codable` to `~/Library/Application Support/winmgr/state.json` | Debounced atomic write. Schema-versioned. Contains active-Space stored layout, stable window refs, and display slots; no raw OS IDs. |
+| Restore JSON | `StoredWorld` via `Codable` to `~/Library/Application Support/narwhal/state.json` | Debounced atomic write. Schema-versioned. Contains active-Space stored layout, stable window refs, and display slots; no raw OS IDs. |
 
-**No `class` types in `WinMgrCore`.** All types are `struct` or `enum`. Reference types (`AXUIElement`, etc.) live only in `WinMgrShell`.
+**No `class` types in `NarwhalCore`.** All types are `struct` or `enum`. Reference types (`AXUIElement`, etc.) live only in `NarwhalShell`.
 
 `World` is intentionally **not** `Codable`. It contains live OS identity (`WindowID`, `DisplayID`, `SpaceID`) that is only meaningful for the current session. Persistence goes through `storedWorld(from:)`, which projects only the active Space into stable descriptors, then `restoreWorld(...)` remaps those descriptors to live AX windows.
 
@@ -2032,7 +2032,7 @@ Per design step, the Hickey check:
 | Plain init-injection DI | Simple | No container, no service locator, no global registry. Each component's deps are visible at construction. |
 | FSEvent + parse + atomic swap for config | Simple | Three small stages, each named. Not a Combine pipeline graph. |
 | WorldActor emits `CommandEffects` via `AsyncStream` | Simple | Producer/consumer split. LayoutApplier receives layout submissions non-blockingly; focus/raise effects are explicit shell writes. |
-| Lua API surface (`winmgr.keymap`, `winmgr.rule`, `winmgr.zone`) | Easy | Familiar pattern for users from neovim/Hammerspoon. Implementation cost in the engine — three small registrations. |
+| Lua API surface (`narwhal.keymap`, `narwhal.rule`, `narwhal.zone`) | Easy | Familiar pattern for users from neovim/Hammerspoon. Implementation cost in the engine — three small registrations. |
 | Smart constructors (`Split.create`) | Simple | Invariant enforcement at the only entry point. No "TODO: validate elsewhere too." |
 
 **Three deliberate "easy over simple" choices**, each documented with cost. All others trend simple.
@@ -2047,7 +2047,7 @@ Per design step, the Hickey check:
 
 | Artifact | Versioning |
 |---|---|
-| `~/Library/Application Support/winmgr/state.json` (restore) | `schemaVersion: Int`, currently 1. Contains `StoredWorld` only: active-Space stored tree, stable window refs, display slots/fingerprints, and pending rules. On mismatch, ignore file (start fresh). No backward migration. |
+| `~/Library/Application Support/narwhal/state.json` (restore) | `schemaVersion: Int`, currently 1. Contains `StoredWorld` only: active-Space stored tree, stable window refs, display slots/fingerprints, and pending rules. On mismatch, ignore file (start fresh). No backward migration. |
 | `init.lua` config schema | No versioning needed — schema is enforced at parse time. Old configs that don't use new fields continue to work (defaults applied). Removed fields trigger a parse error (loud, intentional). |
 
 If we ever add an event log (e.g., for analytics or replay debugging), revisit this section with the full §7.3 schema-evolution rules: events immutable, additive fields only, versioned types.
@@ -2060,15 +2060,15 @@ If we ever add an event log (e.g., for analytics or replay debugging), revisit t
 
 ```swift
 final class AppLogger {
-    let app     = Logger(subsystem: "ca.quantim.winmgr", category: "app")
-    let core    = Logger(subsystem: "ca.quantim.winmgr", category: "core")
-    let ax      = Logger(subsystem: "ca.quantim.winmgr", category: "ax")
-    let lua     = Logger(subsystem: "ca.quantim.winmgr", category: "lua")
-    let ipc     = Logger(subsystem: "ca.quantim.winmgr", category: "ipc")
-    let layout  = Logger(subsystem: "ca.quantim.winmgr", category: "layout")
-    let hotkey  = Logger(subsystem: "ca.quantim.winmgr", category: "hotkey")
-    let config  = Logger(subsystem: "ca.quantim.winmgr", category: "config")
-    let restore = Logger(subsystem: "ca.quantim.winmgr", category: "restore")
+    let app     = Logger(subsystem: "ca.quantim.narwhal", category: "app")
+    let core    = Logger(subsystem: "ca.quantim.narwhal", category: "core")
+    let ax      = Logger(subsystem: "ca.quantim.narwhal", category: "ax")
+    let lua     = Logger(subsystem: "ca.quantim.narwhal", category: "lua")
+    let ipc     = Logger(subsystem: "ca.quantim.narwhal", category: "ipc")
+    let layout  = Logger(subsystem: "ca.quantim.narwhal", category: "layout")
+    let hotkey  = Logger(subsystem: "ca.quantim.narwhal", category: "hotkey")
+    let config  = Logger(subsystem: "ca.quantim.narwhal", category: "config")
+    let restore = Logger(subsystem: "ca.quantim.narwhal", category: "restore")
 }
 ```
 
@@ -2083,7 +2083,7 @@ final class AppLogger {
 
 **Sinks:**
 - `os.Logger` → Console.app (default, automatic).
-- Additional rolling file at `~/Library/Logs/winmgr/winmgr.log` (max 10MB × 5 rotations). Implemented as a direct `FileLogSink` fed by the shell logger wrapper. Optional — debug builds only by default.
+- Additional rolling file at `~/Library/Logs/narwhal/narwhal.log` (max 10MB × 5 rotations). Implemented as a direct `FileLogSink` fed by the shell logger wrapper. Optional — debug builds only by default.
 
 **Correlation IDs**: each Command gets a UUID string at the shell boundary (hotkey / drag / IPC / AX / Space / display event). The value flows through logs for tracing as `CommandEnvelope { id: CommandID, source: CommandSource, command: Command }` — *not* in `Command` itself, and generated only in shell.
 
@@ -2167,7 +2167,7 @@ For `.startupConverge`, `apply` returns the existing `World` unchanged. The comm
 
 **Schema validation between stages**: not formal — we use the type system. Each stage's return type is its schema.
 
-**Introspection hooks**: in debug builds, `WorldActor` exposes `var lastNCommands: [CommandOutcome]` (ring buffer of last 64) for the IPC `winmgrctl debug history` command. Off by default; gated by `--debug`.
+**Introspection hooks**: in debug builds, `WorldActor` exposes `var lastNCommands: [CommandOutcome]` (ring buffer of last 64) for the IPC `narwhalctl debug history` command. Off by default; gated by `--debug`.
 
 ---
 
@@ -2224,25 +2224,25 @@ No external lens library needed. Sum types (enums) need custom matchers — done
 
 | Layer | Test type | Where |
 |---|---|---|
-| Pure core (tree, layout, focus, apply) | Example + property tests via Swift Testing | `Tests/WinMgrCoreTests/` |
-| Min-size layout solver | Example + property tests for no-constraint equivalence, constrained allocation, unsatisfiable detection, and observed Finder 500px clamp | `Tests/WinMgrCoreTests/LayoutSolverTests.swift` |
-| Smart constructors | Example tests verifying rejection of invalid inputs | `Tests/WinMgrCoreTests/`ADTTests.swift |
-| Rules engine | Truth-table/property tests for `and`/`or`/`not`, regex predicates, and first-match-wins ordering | `Tests/WinMgrCoreTests/RulesTests.swift` |
-| StoredWorld Codable round-trip | Property | `Tests/WinMgrCoreTests/StoredWorldCodableTests.swift` |
-| Restore remap | Example + property tests for fuzzy stored refs to live windows | `Tests/WinMgrCoreTests/RestoreTests.swift` |
-| AXClient (shell) | Integration test against real AX with a known test app (e.g. spawn `TextEdit`); assert complete/partial snapshot, setFrame, raise, and focus behavior | `Tests/WinMgrShellTests/AXClientTests.swift` |
-| LayoutApplier | Integration: submit stale and current `DesiredLayout`, assert latest generation wins via AX re-query; submit below-min Finder/TextEdit frame and assert clamp is returned as `AXFrameWriteOutcome.clamped` | `Tests/WinMgrShellTests/ApplierTests.swift` |
-| AX echo suppression | Integration: self-generated move-only, resize-only, combined frame, and focus callbacks do not persist as external move/resize/focus commands | `Tests/WinMgrShellTests/AXEchoTests.swift` |
-| AX inventory refresh coalescing | Pure unit test: open/close/display/Space-settle burst produces one latest-generation request; stale generations cannot run or clear newer pending work; partial AX snapshot retains pending state and does not imply restore persistence | `Tests/WinMgrCoreTests/EnvironmentRefreshCoalescerTests.swift` |
-| Overlay | Unit/integration: focus-border effect shows/moves/hides border from outcomes; Space HUD only from Space-sourced environment changes | `Tests/WinMgrShellTests/OverlayTests.swift` |
-| HotkeyManager | Unit test with mock Carbon-bind closure; reload rebinds exact new keymap | `Tests/WinMgrShellTests/HotkeyTests.swift` |
-| LuaEngine | Unit test: eval simple expressions, exposed function calls return | `Tests/WinMgrShellTests/LuaTests.swift` |
-| ConfigLoader | Integration: write a temp init.lua, start watcher with recording callback, mutate file, observe exact callback emission and adapter rebind/update | `Tests/WinMgrShellTests/ConfigLoaderTests.swift` |
-| RestoreManager | Unit/integration: load/save boundary returns nil for no file and unsupported schema, throws typed failures for corrupt JSON and invalid persisted `StoredWorld`, round-trips saved state from a temp path, pure scheduler tests prove latest-wins/stale-generation/flush/cancel semantics exactly, shell tests prove synchronous flush writes the latest `StoredWorld`, cancellation drops pending writes, and failures are reported without blocking later successful saves. | `Tests/WinMgrAppSupportTests/RestoreManagerTests.swift` |
-| IPC | Integration: in-proc client + server, send valid and invalid commands, assert exact `IPCReplyDTO` success/error JSON and open connection reuse | `Tests/WinMgrShellTests/IPCTests.swift` |
-| Menubar | Unit/integration: starts NSStatusItem, reload action invokes loader, quit action terminates app delegate path, stop handle removes item | `Tests/WinMgrShellTests/MenubarTests.swift` |
-| Startup/shutdown orchestration | Unit/integration with fake services: each `start()` returns a `ServiceHandle`; a failing later start cancels retained stream tasks and stops registered handles in reverse order, including Space/Display observer-token removal; normal app termination does the same cleanup and unlinks the IPC socket | `Tests/WinMgrShellTests/StartupTests.swift` |
-| Initial restore dispatch | Integration: restored `StoredWorld` at launch emits `.startupConverge`, first `DesiredLayout`, focus-border effect, and restore persistence decision before user input | `Tests/WinMgrShellTests/StartupTests.swift` |
+| Pure core (tree, layout, focus, apply) | Example + property tests via Swift Testing | `Tests/NarwhalCoreTests/` |
+| Min-size layout solver | Example + property tests for no-constraint equivalence, constrained allocation, unsatisfiable detection, and observed Finder 500px clamp | `Tests/NarwhalCoreTests/LayoutSolverTests.swift` |
+| Smart constructors | Example tests verifying rejection of invalid inputs | `Tests/NarwhalCoreTests/`ADTTests.swift |
+| Rules engine | Truth-table/property tests for `and`/`or`/`not`, regex predicates, and first-match-wins ordering | `Tests/NarwhalCoreTests/RulesTests.swift` |
+| StoredWorld Codable round-trip | Property | `Tests/NarwhalCoreTests/StoredWorldCodableTests.swift` |
+| Restore remap | Example + property tests for fuzzy stored refs to live windows | `Tests/NarwhalCoreTests/RestoreTests.swift` |
+| AXClient (shell) | Integration test against real AX with a known test app (e.g. spawn `TextEdit`); assert complete/partial snapshot, setFrame, raise, and focus behavior | `Tests/NarwhalShellTests/AXClientTests.swift` |
+| LayoutApplier | Integration: submit stale and current `DesiredLayout`, assert latest generation wins via AX re-query; submit below-min Finder/TextEdit frame and assert clamp is returned as `AXFrameWriteOutcome.clamped` | `Tests/NarwhalShellTests/ApplierTests.swift` |
+| AX echo suppression | Integration: self-generated move-only, resize-only, combined frame, and focus callbacks do not persist as external move/resize/focus commands | `Tests/NarwhalShellTests/AXEchoTests.swift` |
+| AX inventory refresh coalescing | Pure unit test: open/close/display/Space-settle burst produces one latest-generation request; stale generations cannot run or clear newer pending work; partial AX snapshot retains pending state and does not imply restore persistence | `Tests/NarwhalCoreTests/EnvironmentRefreshCoalescerTests.swift` |
+| Overlay | Unit/integration: focus-border effect shows/moves/hides border from outcomes; Space HUD only from Space-sourced environment changes | `Tests/NarwhalShellTests/OverlayTests.swift` |
+| HotkeyManager | Unit test with mock Carbon-bind closure; reload rebinds exact new keymap | `Tests/NarwhalShellTests/HotkeyTests.swift` |
+| LuaEngine | Unit test: eval simple expressions, exposed function calls return | `Tests/NarwhalShellTests/LuaTests.swift` |
+| ConfigLoader | Integration: write a temp init.lua, start watcher with recording callback, mutate file, observe exact callback emission and adapter rebind/update | `Tests/NarwhalShellTests/ConfigLoaderTests.swift` |
+| RestoreManager | Unit/integration: load/save boundary returns nil for no file and unsupported schema, throws typed failures for corrupt JSON and invalid persisted `StoredWorld`, round-trips saved state from a temp path, pure scheduler tests prove latest-wins/stale-generation/flush/cancel semantics exactly, shell tests prove synchronous flush writes the latest `StoredWorld`, cancellation drops pending writes, and failures are reported without blocking later successful saves. | `Tests/NarwhalAppSupportTests/RestoreManagerTests.swift` |
+| IPC | Integration: in-proc client + server, send valid and invalid commands, assert exact `IPCReplyDTO` success/error JSON and open connection reuse | `Tests/NarwhalShellTests/IPCTests.swift` |
+| Menubar | Unit/integration: starts NSStatusItem, reload action invokes loader, quit action terminates app delegate path, stop handle removes item | `Tests/NarwhalShellTests/MenubarTests.swift` |
+| Startup/shutdown orchestration | Unit/integration with fake services: each `start()` returns a `ServiceHandle`; a failing later start cancels retained stream tasks and stops registered handles in reverse order, including Space/Display observer-token removal; normal app termination does the same cleanup and unlinks the IPC socket | `Tests/NarwhalShellTests/StartupTests.swift` |
+| Initial restore dispatch | Integration: restored `StoredWorld` at launch emits `.startupConverge`, first `DesiredLayout`, focus-border effect, and restore persistence decision before user input | `Tests/NarwhalShellTests/StartupTests.swift` |
 | End-to-end (Sprint 1 gate) | Manual smoke + scripted: open Finder × 3, press hotkeys, eyeball window positions | Manual checklist in `docs/sprint-gates.md` |
 | Full app | Manual nightly use by user | After Sprint 1 |
 
@@ -2250,7 +2250,7 @@ No external lens library needed. Sum types (enums) need custom matchers — done
 
 **Property tests are mandatory for**: every pure function in the "Tree primitives" and "Layout" sections. Optional for everything else (covered by example tests).
 
-**Coverage target**: 90%+ line coverage on `WinMgrCore`. Not a target for shell — coverage there is misleading because integration tests hit AX rather than line-counted Swift code.
+**Coverage target**: 90%+ line coverage on `NarwhalCore`. Not a target for shell — coverage there is misleading because integration tests hit AX rather than line-counted Swift code.
 
 ---
 

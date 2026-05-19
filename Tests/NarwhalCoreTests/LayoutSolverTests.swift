@@ -1,0 +1,207 @@
+import CoreGraphics
+import Testing
+@testable import NarwhalCore
+
+@Suite("Min-size-aware layout solver")
+struct LayoutSolverTests {
+    @Test("No constraints solve to the existing layout exactly")
+    func noConstraintsMatchUnconstrainedLayout() {
+        let display = DisplayID(raw: 1)
+        let tree = pushSequence([
+            (WindowID(raw: 1), Direction.left),
+            (WindowID(raw: 2), Direction.right),
+            (WindowID(raw: 3), Direction.down),
+            (WindowID(raw: 4), Direction.up)
+        ])
+        let space = spaceState(display: display, tree: tree)
+        let frame = CGRect(x: 0, y: 0, width: 1200, height: 800)
+        let gaps = noGaps
+
+        let expected = layout(spaceState: space, displayID: display, frame: frame, gaps: gaps)
+
+        #expect(
+            solveLayout(spaceState: space, displayID: display, frame: frame, gaps: gaps, constraints: [:])
+                == .solved(layout: expected, status: .exact)
+        )
+    }
+
+    @Test("Minimum below ideal allocation does not distort layout")
+    func nonBindingMinimumKeepsWeightedLayout() {
+        let display = DisplayID(raw: 1)
+        let a = WindowID(raw: 1)
+        let b = WindowID(raw: 2)
+        let tree = pushIntoTree(b, .right, pushIntoTree(a, .left, .void))
+        let space = spaceState(display: display, tree: tree)
+        let frame = CGRect(x: 0, y: 0, width: 1200, height: 800)
+        let gaps = noGaps
+        let expected = layout(spaceState: space, displayID: display, frame: frame, gaps: gaps)
+
+        #expect(
+            solveLayout(
+                spaceState: space,
+                displayID: display,
+                frame: frame,
+                gaps: gaps,
+                constraints: [a: WindowConstraints(minWidth: 500)]
+            ) == .solved(layout: expected, status: .exact)
+        )
+    }
+
+    @Test("Binding minimum takes only the required space from flexible siblings")
+    func bindingMinimumUsesWaterFillAllocation() {
+        let display = DisplayID(raw: 1)
+        let a = WindowID(raw: 1)
+        let b = WindowID(raw: 2)
+        let c = WindowID(raw: 3)
+        let d = WindowID(raw: 4)
+        let tree = pushIntoTree(d, .up, pushIntoTree(c, .down, pushIntoTree(b, .right, pushIntoTree(a, .left, .void))))
+        let space = spaceState(display: display, tree: tree)
+        let frame = CGRect(x: 0, y: 0, width: 1472, height: 800)
+        let gaps = noGaps
+
+        let result = solveLayout(
+            spaceState: space,
+            displayID: display,
+            frame: frame,
+            gaps: gaps,
+            constraints: [a: WindowConstraints(minWidth: 500)]
+        )
+
+        guard case .solved(let solved, .adjusted(let adjustments)) = result else {
+            Issue.record("Expected adjusted solved layout, got \(String(describing: result))")
+            return
+        }
+
+        #expect(solved.tiled[a] == CGRect(x: 0, y: 0, width: 500, height: 800))
+        #expect(solved.tiled[d] == CGRect(x: 500, y: 0, width: 486, height: 400))
+        #expect(solved.tiled[c] == CGRect(x: 500, y: 400, width: 486, height: 400))
+        #expect(solved.tiled[b] == CGRect(x: 986, y: 0, width: 486, height: 800))
+        #expect(adjustments.count == 1)
+        #expect(adjustments.first?.windowID == a)
+        #expect(adjustments.first?.reason == .minimumWidth(500))
+    }
+
+    @Test("Unsatisfiable horizontal minimums return a domain failure")
+    func unsatisfiableMinimumsReturnReason() {
+        let display = DisplayID(raw: 1)
+        let a = WindowID(raw: 1)
+        let b = WindowID(raw: 2)
+        let tree = pushIntoTree(b, .right, pushIntoTree(a, .left, .void))
+        let space = spaceState(display: display, tree: tree)
+
+        let result = solveLayout(
+            spaceState: space,
+            displayID: display,
+            frame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+            gaps: noGaps,
+            constraints: [
+                a: WindowConstraints(minWidth: 600),
+                b: WindowConstraints(minWidth: 600)
+            ]
+        )
+
+        #expect(result == .unsatisfiable(UnsatisfiableLayout(
+            displayID: display,
+            axis: .horizontal,
+            available: 1000,
+            required: 1200,
+            windows: [a, b]
+        )))
+    }
+
+    @Test("Finder-width clamp is inferred as a width minimum only")
+    func inferFinderWidthClamp() {
+        let observed = inferObservedConstraints(
+            target: CGRect(x: 12, y: 45, width: 490.666_666_666_7, height: 420.5),
+            actual: CGRect(x: 12, y: 45, width: 500, height: 421),
+            tolerance: 2
+        )
+
+        #expect(observed == WindowConstraints(minWidth: 500))
+    }
+
+    @Test("Origin drift and invalid sizes do not become minimum constraints")
+    func inferConstraintsIgnoresNonMinimumSignals() {
+        #expect(inferObservedConstraints(
+            target: CGRect(x: 0, y: 0, width: 500, height: 400),
+            actual: CGRect(x: 12, y: 10, width: 500, height: 400),
+            tolerance: 2
+        ) == nil)
+
+        #expect(inferObservedConstraints(
+            target: CGRect(x: 0, y: 0, width: 500, height: 400),
+            actual: CGRect(x: 0, y: 0, width: CGFloat.infinity, height: 400),
+            tolerance: 2
+        ) == nil)
+    }
+
+    @Test("Constraint observations merge monotonically")
+    func observedConstraintsMergeByMaximum() {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 1)
+        let world = World(
+            displays: [
+                display: DisplayInfo(
+                    id: display,
+                    slot: 0,
+                    fingerprint: nil,
+                    frame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+                    visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 800)
+                )
+            ],
+            activeSpace: space,
+            spaces: [space: SpaceState(id: space, displays: [:], focused: nil)],
+            windows: [window: metadata(for: window)],
+            windowDisplay: [window: display],
+            windowConstraints: [window: WindowConstraints(minWidth: 500, minHeight: 300)],
+            pendingRules: [:],
+            config: .default
+        )
+
+        let next = recordObservedConstraints(WindowConstraints(minWidth: 490, minHeight: 350), for: window, in: world)
+
+        #expect(next.windowConstraints[window] == WindowConstraints(minWidth: 500, minHeight: 350))
+
+        guard case .success(let commandNext) = apply(
+            .windowConstraintObserved(window, WindowConstraints(minWidth: 525, minHeight: 325)),
+            to: next
+        ) else {
+            Issue.record("Expected windowConstraintObserved command to succeed")
+            return
+        }
+
+        #expect(commandNext.windowConstraints[window] == WindowConstraints(minWidth: 525, minHeight: 350))
+    }
+
+    private var noGaps: Gaps {
+        Gaps(inner: 0, outer: Insets(top: 0, left: 0, bottom: 0, right: 0))
+    }
+
+    private func pushSequence(_ entries: [(WindowID, Direction)]) -> Node {
+        entries.reduce(Node.void) { tree, entry in
+            pushIntoTree(entry.0, entry.1, tree)
+        }
+    }
+
+    private func spaceState(display: DisplayID, tree: Node) -> SpaceState {
+        SpaceState(
+            id: SpaceID(raw: 1),
+            displays: [display: DisplaySpaceState(displayID: display, tree: tree, floating: [])],
+            focused: nil
+        )
+    }
+
+    private func metadata(for window: WindowID) -> WindowMetadata {
+        WindowMetadata(
+            id: window,
+            bundleID: BundleID(raw: "com.example"),
+            title: "Window \(window.raw)",
+            role: "AXWindow",
+            pid: 42,
+            frame: CGRect(x: 0, y: 0, width: 100, height: 100),
+            isResizable: true,
+            isMinimized: false
+        )
+    }
+}

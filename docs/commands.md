@@ -1,6 +1,6 @@
 # Command Reference
 
-WinMgr commands can come from hotkeys, drag zones, the menu bar, `winmgrctl`,
+Narwhal commands can come from hotkeys, drag zones, the menu bar, `narwhalctl`,
 or direct IPC JSON.
 
 ## Direction Names
@@ -87,19 +87,19 @@ Rows are grouped by purpose:
 The CLI talks to the app over the per-user Unix socket:
 
 ```text
-/tmp/winmgr-$(id -u).sock
+/tmp/narwhal-$(id -u).sock
 ```
 
 Installed path:
 
 ```sh
-$HOME/Applications/WinMgr.app/Contents/MacOS/winmgrctl
+$HOME/Applications/Narwhal.app/Contents/MacOS/narwhalctl
 ```
 
 During development:
 
 ```sh
-swift run WinMgrCtl -- reset
+swift run NarwhalCtl -- reset
 ```
 
 ### Global Option
@@ -113,7 +113,7 @@ Use a non-default socket path. This is mainly useful for tests.
 ### `reset`
 
 ```sh
-winmgrctl reset
+narwhalctl reset
 ```
 
 Clears layout memory and persists an empty restore snapshot.
@@ -121,14 +121,14 @@ Clears layout memory and persists an empty restore snapshot.
 Aliases:
 
 ```sh
-winmgrctl reset-layout
-winmgrctl resetLayout
+narwhalctl reset-layout
+narwhalctl resetLayout
 ```
 
 ### `balance`
 
 ```sh
-winmgrctl balance
+narwhalctl balance
 ```
 
 Refreshes the active environment, requires a complete AX snapshot, normalizes
@@ -138,7 +138,7 @@ restore state.
 ### `quit`
 
 ```sh
-winmgrctl quit
+narwhalctl quit
 ```
 
 Asks the app to flush pending restore state and terminate.
@@ -146,8 +146,8 @@ Asks the app to flush pending restore state and terminate.
 ### `push`
 
 ```sh
-winmgrctl push left
-winmgrctl push right --window 12345
+narwhalctl push left
+narwhalctl push right --window 12345
 ```
 
 Without `--window`, push uses the focused window. With `--window`, it applies to
@@ -156,8 +156,8 @@ the explicit macOS window ID.
 ### `swap`
 
 ```sh
-winmgrctl swap up
-winmgrctl swap down --window 12345
+narwhalctl swap up
+narwhalctl swap down --window 12345
 ```
 
 Without `--window`, swap uses the focused window.
@@ -165,15 +165,15 @@ Without `--window`, swap uses the focused window.
 ### `resize`
 
 ```sh
-winmgrctl resize right --delta 0.25
-winmgrctl resize left --delta -0.5 --window 12345
+narwhalctl resize right --delta 0.25
+narwhalctl resize left --delta -0.5 --window 12345
 ```
 
 Aliases:
 
 ```sh
-winmgrctl resize-split right --delta 0.25
-winmgrctl resizeSplit right --delta 0.25
+narwhalctl resize-split right --delta 0.25
+narwhalctl resizeSplit right --delta 0.25
 ```
 
 `--delta` is required and must be finite.
@@ -181,7 +181,7 @@ winmgrctl resizeSplit right --delta 0.25
 ### `center`
 
 ```sh
-winmgrctl center --window 12345
+narwhalctl center --window 12345
 ```
 
 `center` currently requires an explicit window ID in the CLI.
@@ -291,7 +291,7 @@ and drag-to-tile drops while paused.
 ### Focus
 
 Directional focus uses the solved layout geometry. Cycle focus walks non-tiled
-windows in frame order and wraps. Previous focus uses WinMgr's recent focus
+windows in frame order and wraps. Previous focus uses Narwhal's recent focus
 history and does not mutate the layout.
 
 ### Reset

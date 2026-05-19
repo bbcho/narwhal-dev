@@ -9,11 +9,11 @@ usage() {
   cat <<'USAGE'
 usage: scripts/build_app_bundle.sh [--configuration debug|release] [--output DIR] [--replace]
 
-Builds WinMgrApp and WinMgrCtl, then assembles:
-  DIR/WinMgr.app
-  DIR/com.ben.winmgr.plist
+Builds NarwhalApp and NarwhalCtl, then assembles:
+  DIR/Narwhal.app
+  DIR/com.ben.narwhal.plist
 
-Default DIR is .build/winmgr-package.
+Default DIR is .build/narwhal-package.
 USAGE
 }
 
@@ -56,19 +56,19 @@ esac
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 if [ -z "$output_root" ]; then
-  output_root="$repo_root/.build/winmgr-package"
+  output_root="$repo_root/.build/narwhal-package"
 elif [[ "$output_root" != /* ]]; then
   output_root="$repo_root/$output_root"
 fi
 
-bundle="$output_root/WinMgr.app"
+bundle="$output_root/Narwhal.app"
 contents="$bundle/Contents"
 macos="$contents/MacOS"
 resources="$contents/Resources"
 frameworks="$contents/Frameworks"
-app_executable="$macos/WinMgrApp"
-ctl_executable="$macos/winmgrctl"
-launch_agent="$output_root/com.ben.winmgr.plist"
+app_executable="$macos/NarwhalApp"
+ctl_executable="$macos/narwhalctl"
+launch_agent="$output_root/com.ben.narwhal.plist"
 lua_dylib="/opt/homebrew/opt/lua/lib/liblua.dylib"
 
 if [ -e "$bundle" ] || [ -e "$launch_agent" ]; then
@@ -86,7 +86,7 @@ if [ ! -f "$lua_dylib" ]; then
 fi
 
 cd "$repo_root"
-export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/winmgr-clang-module-cache}"
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/narwhal-clang-module-cache}"
 swiftpm_cache="$repo_root/.build/swiftpm-cache"
 mkdir -p "$swiftpm_cache/cache" "$swiftpm_cache/config" "$swiftpm_cache/security"
 swift_build_args=(
@@ -101,15 +101,15 @@ swift_build_args=(
   --configuration "$configuration"
 )
 
-swift build "${swift_build_args[@]}" --product WinMgrApp
-swift build "${swift_build_args[@]}" --product WinMgrCtl
+swift build "${swift_build_args[@]}" --product NarwhalApp
+swift build "${swift_build_args[@]}" --product NarwhalCtl
 
 bin_path="$(swift build "${swift_build_args[@]}" --show-bin-path)"
 mkdir -p "$macos" "$resources/DefaultConfig" "$frameworks"
 
-cp "$bin_path/WinMgrApp" "$app_executable"
-cp "$bin_path/WinMgrCtl" "$ctl_executable"
-cp "$repo_root/Packaging/WinMgrInfo.plist" "$contents/Info.plist"
+cp "$bin_path/NarwhalApp" "$app_executable"
+cp "$bin_path/NarwhalCtl" "$ctl_executable"
+cp "$repo_root/Packaging/NarwhalInfo.plist" "$contents/Info.plist"
 cp "$repo_root/DefaultConfig/init.lua" "$resources/DefaultConfig/init.lua"
 cp "$lua_dylib" "$frameworks/liblua.dylib"
 chmod 755 "$app_executable" "$ctl_executable" "$frameworks/liblua.dylib"
@@ -117,7 +117,7 @@ chmod 755 "$app_executable" "$ctl_executable" "$frameworks/liblua.dylib"
 install_name_tool -id "@rpath/liblua.dylib" "$frameworks/liblua.dylib"
 install_name_tool -change "$lua_dylib" "@executable_path/../Frameworks/liblua.dylib" "$app_executable"
 
-cp "$repo_root/Packaging/com.ben.winmgr.plist" "$launch_agent"
+cp "$repo_root/Packaging/com.ben.narwhal.plist" "$launch_agent"
 plutil -insert ProgramArguments.0 -string "$app_executable" "$launch_agent"
 plutil -replace WorkingDirectory -string "$repo_root" "$launch_agent"
 
@@ -130,9 +130,9 @@ Built $launch_agent
 
 Install LaunchAgent:
   mkdir -p "$HOME/Library/LaunchAgents"
-  cp "$launch_agent" "$HOME/Library/LaunchAgents/com.ben.winmgr.plist"
-  launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.winmgr.plist"
+  cp "$launch_agent" "$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
+  launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
 
 Unload LaunchAgent:
-  launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.winmgr.plist"
+  launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
 EOF

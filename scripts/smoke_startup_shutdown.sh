@@ -3,11 +3,11 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
-tmp_root="/private/tmp/winmgr-startup-shutdown-smoke"
+tmp_root="/private/tmp/narwhal-startup-shutdown-smoke"
 config="$tmp_root/init.lua"
 state_path="$tmp_root/state.json"
-log_path="/tmp/winmgr.log"
-socket_path="/tmp/winmgr-$(id -u).sock"
+log_path="/tmp/narwhal.log"
+socket_path="/tmp/narwhal-$(id -u).sock"
 app_pid=""
 
 cleanup() {
@@ -59,7 +59,7 @@ wait_for_process_exit() {
   wait "$watchdog_pid" 2>/dev/null || true
 
   if [ -f "$timeout_marker" ]; then
-    fail "timed out waiting for WinMgrApp to exit"
+    fail "timed out waiting for NarwhalApp to exit"
   fi
 }
 
@@ -75,8 +75,8 @@ wait_for_socket_absent() {
   fail "IPC socket still exists after shutdown: $socket_path"
 }
 
-if pgrep -x WinMgrApp >/dev/null 2>&1; then
-  fail "WinMgrApp is already running; stop it before running this smoke"
+if pgrep -x NarwhalApp >/dev/null 2>&1; then
+  fail "NarwhalApp is already running; stop it before running this smoke"
 fi
 
 rm -rf "$tmp_root"
@@ -85,12 +85,12 @@ cp "$repo_root/DefaultConfig/init.lua" "$config"
 rm -f "$log_path" "$socket_path"
 
 cd "$repo_root"
-export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/winmgr-clang-module-cache}"
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/narwhal-clang-module-cache}"
 
-swift build --disable-sandbox --product WinMgrApp --product WinMgrCtl
+swift build --disable-sandbox --product NarwhalApp --product NarwhalCtl
 bin_path="$(swift build --disable-sandbox --show-bin-path)"
 
-"$bin_path/WinMgrApp" --config "$config" --restore-state "$state_path" &
+"$bin_path/NarwhalApp" --config "$config" --restore-state "$state_path" &
 app_pid="$!"
 
 wait_for_log "Using restore state path $state_path" 20
@@ -103,18 +103,18 @@ wait_for_log "IPC server ready at $socket_path" 20
 wait_for_log "Drag zones ready with modifier shift" 20
 wait_for_log "Layout command loop ready" 20
 
-"$bin_path/WinMgrCtl" balance | grep -Eq '^ok ipc-' || fail "winmgrctl balance did not return ok"
+"$bin_path/NarwhalCtl" balance | grep -Eq '^ok ipc-' || fail "narwhalctl balance did not return ok"
 wait_for_log "IPC balance completed" 10
 
-"$bin_path/WinMgrCtl" reset | grep -Eq '^ok ipc-' || fail "winmgrctl reset did not return ok"
+"$bin_path/NarwhalCtl" reset | grep -Eq '^ok ipc-' || fail "narwhalctl reset did not return ok"
 wait_for_log "IPC reset layout memory" 10
 
-"$bin_path/WinMgrCtl" quit | grep -Eq '^ok ipc-' || fail "winmgrctl quit did not return ok"
+"$bin_path/NarwhalCtl" quit | grep -Eq '^ok ipc-' || fail "narwhalctl quit did not return ok"
 wait_for_log "IPC quit requested" 10
 wait_for_process_exit "$app_pid" 10
 wait "$app_pid" 2>/dev/null || true
 app_pid=""
-wait_for_log "WinMgrApp stopped" 5
+wait_for_log "NarwhalApp stopped" 5
 wait_for_socket_absent 5
 
 echo "smoke_startup_shutdown passed"

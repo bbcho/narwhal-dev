@@ -27,11 +27,11 @@ DefaultConfig/init.lua
 Packaging/
 Sources/
   CLua/
-  WinMgrApp/
-  WinMgrAppSupport/
-  WinMgrCore/
-  WinMgrCtl/
-  WinMgrIPC/
+  NarwhalApp/
+  NarwhalAppSupport/
+  NarwhalCore/
+  NarwhalCtl/
+  NarwhalIPC/
 Tests/
 docs/
 scripts/
@@ -48,14 +48,14 @@ swift build
 Specific product:
 
 ```sh
-swift build --product WinMgrApp
-swift build --product WinMgrCtl
+swift build --product NarwhalApp
+swift build --product NarwhalCtl
 ```
 
 Package app bundle:
 
 ```sh
-scripts/build_app_bundle.sh --configuration debug --output .build/winmgr-package-next --replace
+scripts/build_app_bundle.sh --configuration debug --output .build/narwhal-package-next --replace
 ```
 
 ## Test
@@ -63,7 +63,7 @@ scripts/build_app_bundle.sh --configuration debug --output .build/winmgr-package
 Preferred command:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/winmgr-clang-module-cache swift test --disable-sandbox
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
 ```
 
 The explicit module cache path avoids Swift/Clang cache permission problems in
@@ -104,7 +104,7 @@ state, hotkeys, and event taps.
 
 Preserve the current architecture:
 
-- Put domain behavior in `WinMgrCore` as value types and pure functions.
+- Put domain behavior in `NarwhalCore` as value types and pure functions.
 - Keep AppKit, AX, Lua, filesystem, launchd, and socket effects in shell targets.
 - Validate untrusted data once at the boundary.
 - Return `Result` for expected domain failures.
@@ -123,7 +123,7 @@ Avoid:
 
 ## Core Change Checklist
 
-Before changing `WinMgrCore`:
+Before changing `NarwhalCore`:
 
 1. Identify the invariant or command behavior being changed.
 2. Add or update direct example tests.
@@ -138,7 +138,7 @@ swift test --filter ConfigTests
 
 ## Shell Change Checklist
 
-Before changing `WinMgrApp`, `WinMgrIPC`, or `WinMgrAppSupport`:
+Before changing `NarwhalApp`, `NarwhalIPC`, or `NarwhalAppSupport`:
 
 1. Identify the effect boundary: AX, AppKit, Lua, file, socket, timer, launchd,
    or logging.
@@ -159,7 +159,7 @@ When adding a config field:
 3. Add rendering support in `DefaultConfigLua`.
 4. Add parsing support in `ConfigParsing`.
 5. Update `DefaultConfig/init.lua`.
-6. Update `Tests/WinMgrCoreTests/ConfigTests.swift`.
+6. Update `Tests/NarwhalCoreTests/ConfigTests.swift`.
 7. Update [Configuration reference](configuration.md).
 
 The test `Bundled init.lua exactly mirrors Swift Config.default` should fail if
@@ -173,7 +173,7 @@ When adding an IPC command:
 2. Update encode/decode shape.
 3. Update `IPCDTOTests`.
 4. Add shell handling in `App.handleIPCCommand`.
-5. Add CLI parsing if the command should be user-facing through `winmgrctl`.
+5. Add CLI parsing if the command should be user-facing through `narwhalctl`.
 6. Update [Command reference](commands.md).
 
 ## Packaging Changes
@@ -199,10 +199,10 @@ scripts/uninstall_local.sh
 Any packaging change should run:
 
 ```sh
-scripts/build_app_bundle.sh --configuration debug --output .build/winmgr-package-next --replace
-plutil -p .build/winmgr-package-next/WinMgr.app/Contents/Info.plist
-plutil -p .build/winmgr-package-next/com.ben.winmgr.plist
-otool -L .build/winmgr-package-next/WinMgr.app/Contents/MacOS/WinMgrApp | sed -n '1,4p'
+scripts/build_app_bundle.sh --configuration debug --output .build/narwhal-package-next --replace
+plutil -p .build/narwhal-package-next/Narwhal.app/Contents/Info.plist
+plutil -p .build/narwhal-package-next/com.ben.narwhal.plist
+otool -L .build/narwhal-package-next/Narwhal.app/Contents/MacOS/NarwhalApp | sed -n '1,4p'
 ```
 
 ## Release Checklist
@@ -214,8 +214,8 @@ For a local release candidate:
 3. Run the local install lifecycle gate.
 4. Install to user paths with LaunchAgent.
 5. Verify `launchctl print`.
-6. Run `winmgrctl reset`.
+6. Run `narwhalctl reset`.
 7. Run manual tiling/focus/swap/reset smoke.
-8. Check `/tmp/winmgr.log`.
+8. Check `/tmp/narwhal.log`.
 
 See [Sprint gates](sprint-gates.md) for detailed acceptance criteria.

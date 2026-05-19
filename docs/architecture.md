@@ -1,6 +1,6 @@
 # Architecture
 
-WinMgr is split into a mostly pure core and a thin macOS shell. The main design
+Narwhal is split into a mostly pure core and a thin macOS shell. The main design
 goal is that layout decisions are replayable from value inputs, while AppKit,
 Accessibility, Carbon hotkeys, Lua, filesystem, and IPC effects stay at the
 edge.
@@ -9,11 +9,11 @@ edge.
 
 | Target | Role |
 |---|---|
-| `WinMgrCore` | Pure domain types and functions: config parsing, rules, world reconciliation, tree operations, layout solving, focus navigation, drag-zone resolution, restore projection/remap, echo/coalescer state machines, IPC DTOs. |
-| `WinMgrApp` | macOS shell: AppKit lifecycle, AX reads/writes, hotkeys, event tap, display/Space reads, Lua loading, config watching, IPC command handling, overlays, menubar, logging. |
-| `WinMgrAppSupport` | Shell-support code that is testable without AppKit app startup: service lifecycle and restore persistence scheduler. |
-| `WinMgrIPC` | Unix socket client/server transport. |
-| `WinMgrCtl` | CLI wrapper around IPC DTOs. |
+| `NarwhalCore` | Pure domain types and functions: config parsing, rules, world reconciliation, tree operations, layout solving, focus navigation, drag-zone resolution, restore projection/remap, echo/coalescer state machines, IPC DTOs. |
+| `NarwhalApp` | macOS shell: AppKit lifecycle, AX reads/writes, hotkeys, event tap, display/Space reads, Lua loading, config watching, IPC command handling, overlays, menubar, logging. |
+| `NarwhalAppSupport` | Shell-support code that is testable without AppKit app startup: service lifecycle and restore persistence scheduler. |
+| `NarwhalIPC` | Unix socket client/server transport. |
+| `NarwhalCtl` | CLI wrapper around IPC DTOs. |
 | `CLua` | Minimal C shim around Lua 5.4 APIs used by the Swift loader. |
 
 ## Boundary Diagram
@@ -22,15 +22,15 @@ edge.
 Hotkeys / CLI / IPC / AX / Display / Space / Lua / Files
                       |
                       v
-                WinMgrApp shell
+                NarwhalApp shell
      reads effects, validates boundaries, logs outcomes
                       |
                       v
-                 WinMgrCore
+                 NarwhalCore
    pure commands, layout, restore, rules, config, focus
                       |
                       v
-                WinMgrApp shell
+                NarwhalApp shell
        AX writes, restore save, overlay, menubar status
 ```
 
@@ -137,8 +137,8 @@ in the shell.
 
 Restore uses two layers:
 
-- Pure projection/remap in `WinMgrCore/Restore.swift`.
-- File persistence and save debouncing in `WinMgrAppSupport/RestoreManager.swift`.
+- Pure projection/remap in `NarwhalCore/Restore.swift`.
+- File persistence and save debouncing in `NarwhalAppSupport/RestoreManager.swift`.
 
 Stored restore data uses:
 
@@ -169,7 +169,7 @@ bounds.
 IPC uses a newline-delimited JSON protocol over a per-user Unix socket:
 
 ```text
-/tmp/winmgr-$(id -u).sock
+/tmp/narwhal-$(id -u).sock
 ```
 
 The transport layer is intentionally small:
