@@ -62,6 +62,7 @@ elif [[ "$output_root" != /* ]]; then
 fi
 
 bundle="$output_root/Narwhal.app"
+legacy_bundle="$output_root/WinMgr.app"
 contents="$bundle/Contents"
 macos="$contents/MacOS"
 resources="$contents/Resources"
@@ -69,14 +70,15 @@ frameworks="$contents/Frameworks"
 app_executable="$macos/NarwhalApp"
 ctl_executable="$macos/narwhalctl"
 launch_agent="$output_root/com.ben.narwhal.plist"
+legacy_launch_agent="$output_root/com.ben.winmgr.plist"
 lua_dylib="/opt/homebrew/opt/lua/lib/liblua.dylib"
 
-if [ -e "$bundle" ] || [ -e "$launch_agent" ]; then
+if [ -e "$bundle" ] || [ -e "$launch_agent" ] || [ -e "$legacy_bundle" ] || [ -e "$legacy_launch_agent" ]; then
   if [ "$replace_existing" != "true" ]; then
     echo "package output exists; rerun with --replace: $output_root" >&2
     exit 1
   fi
-  rm -rf "$bundle" "$launch_agent"
+  rm -rf "$bundle" "$launch_agent" "$legacy_bundle" "$legacy_launch_agent"
 fi
 
 if [ ! -f "$lua_dylib" ]; then

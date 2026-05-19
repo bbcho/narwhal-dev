@@ -66,15 +66,19 @@ fi
 installed_app="$app_dir/Narwhal.app"
 launch_agent="$launch_agents_dir/com.ben.narwhal.plist"
 socket_path="/tmp/narwhal-$(id -u).sock"
+legacy_installed_app="$app_dir/WinMgr.app"
+legacy_launch_agent="$launch_agents_dir/com.ben.winmgr.plist"
+legacy_socket_path="/tmp/winmgr-$(id -u).sock"
 
 wait_for_socket_absent() {
-  local attempts="$1"
-  local delay="$2"
+  local path="$1"
+  local attempts="$2"
+  local delay="$3"
   for ((i = 0; i < attempts; i++)); do
-    [ ! -S "$socket_path" ] && return 0
+    [ ! -S "$path" ] && return 0
     sleep "$delay"
   done
-  [ ! -S "$socket_path" ]
+  [ ! -S "$path" ]
 }
 
 graceful_quit_existing_app() {
@@ -85,7 +89,19 @@ graceful_quit_existing_app() {
   if [ -x "$ctl" ] && [ -S "$socket_path" ]; then
     echo "Requesting Narwhal quit before LaunchAgent bootout"
     "$ctl" quit >/dev/null 2>&1 || true
-    wait_for_socket_absent 50 0.1 || true
+    wait_for_socket_absent "$socket_path" 50 0.1 || true
+  fi
+}
+
+graceful_quit_legacy_app() {
+  local ctl="$legacy_installed_app/Contents/MacOS/winmgrctl"
+  if [ "$use_launchctl" != "true" ]; then
+    return 0
+  fi
+  if [ -x "$ctl" ] && [ -S "$legacy_socket_path" ]; then
+    echo "Requesting legacy WinMgr quit before LaunchAgent bootout"
+    "$ctl" quit >/dev/null 2>&1 || true
+    wait_for_socket_absent "$legacy_socket_path" 50 0.1 || true
   fi
 }
 
@@ -93,13 +109,18 @@ if [ "$use_launchctl" = "true" ] && [ -e "$launch_agent" ]; then
   graceful_quit_existing_app
   launchctl bootout "gui/$(id -u)" "$launch_agent" 2>/dev/null || true
 fi
+if [ "$use_launchctl" = "true" ] && [ -e "$legacy_launch_agent" ]; then
+  graceful_quit_legacy_app
+  launchctl bootout "gui/$(id -u)" "$legacy_launch_agent" 2>/dev/null || true
+fi
 
-rm -f "$launch_agent"
+rm -f "$launch_agent" "$legacy_launch_agent"
 if [ "$keep_app" != "true" ]; then
-  rm -rf "$installed_app"
+  rm -rf "$installed_app" "$legacy_installed_app"
 fi
 
 cat <<EOF
 Removed $launch_agent
+Removed legacy $legacy_launch_agent
 Removed app: $([ "$keep_app" = "true" ] && echo false || echo true)
 EOF

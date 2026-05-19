@@ -95,15 +95,19 @@ installed_app="$app_dir/Narwhal.app"
 launch_agent="$launch_agents_dir/com.ben.narwhal.plist"
 app_executable="$installed_app/Contents/MacOS/NarwhalApp"
 socket_path="/tmp/narwhal-$(id -u).sock"
+legacy_installed_app="$app_dir/WinMgr.app"
+legacy_launch_agent="$launch_agents_dir/com.ben.winmgr.plist"
+legacy_socket_path="/tmp/winmgr-$(id -u).sock"
 
 wait_for_socket_absent() {
-  local attempts="$1"
-  local delay="$2"
+  local path="$1"
+  local attempts="$2"
+  local delay="$3"
   for ((i = 0; i < attempts; i++)); do
-    [ ! -S "$socket_path" ] && return 0
+    [ ! -S "$path" ] && return 0
     sleep "$delay"
   done
-  [ ! -S "$socket_path" ]
+  [ ! -S "$path" ]
 }
 
 graceful_quit_existing_app() {
@@ -114,26 +118,49 @@ graceful_quit_existing_app() {
   if [ -x "$ctl" ] && [ -S "$socket_path" ]; then
     echo "Requesting Narwhal quit before LaunchAgent bootout"
     "$ctl" quit >/dev/null 2>&1 || true
-    wait_for_socket_absent 50 0.1 || true
+    wait_for_socket_absent "$socket_path" 50 0.1 || true
   fi
 }
 
-if [ "$replace_existing" != "true" ] && { [ -e "$installed_app" ] || [ -e "$launch_agent" ]; }; then
+graceful_quit_legacy_app() {
+  local ctl="$legacy_installed_app/Contents/MacOS/winmgrctl"
+  if [ "$use_launchctl" != "true" ]; then
+    return 0
+  fi
+  if [ -x "$ctl" ] && [ -S "$legacy_socket_path" ]; then
+    echo "Requesting legacy WinMgr quit before LaunchAgent bootout"
+    "$ctl" quit >/dev/null 2>&1 || true
+    wait_for_socket_absent "$legacy_socket_path" 50 0.1 || true
+  fi
+}
+
+if [ "$replace_existing" != "true" ] && {
+  [ -e "$installed_app" ] \
+    || [ -e "$launch_agent" ] \
+    || [ -e "$legacy_installed_app" ] \
+    || [ -e "$legacy_launch_agent" ]
+}; then
   echo "install target exists; rerun with --replace" >&2
   echo "  app: $installed_app" >&2
   echo "  plist: $launch_agent" >&2
+  echo "  legacy app: $legacy_installed_app" >&2
+  echo "  legacy plist: $legacy_launch_agent" >&2
   exit 1
 fi
 
 build_args=(--configuration "$configuration" --output "$package_dir" --replace)
 "$repo_root/scripts/build_app_bundle.sh" "${build_args[@]}"
 
-if [ -e "$installed_app" ] || [ -e "$launch_agent" ]; then
+if [ -e "$installed_app" ] || [ -e "$launch_agent" ] || [ -e "$legacy_installed_app" ] || [ -e "$legacy_launch_agent" ]; then
   graceful_quit_existing_app
+  graceful_quit_legacy_app
   if [ "$use_launchctl" = "true" ] && [ -e "$launch_agent" ]; then
     launchctl bootout "gui/$(id -u)" "$launch_agent" 2>/dev/null || true
   fi
-  rm -rf "$installed_app" "$launch_agent"
+  if [ "$use_launchctl" = "true" ] && [ -e "$legacy_launch_agent" ]; then
+    launchctl bootout "gui/$(id -u)" "$legacy_launch_agent" 2>/dev/null || true
+  fi
+  rm -rf "$installed_app" "$launch_agent" "$legacy_installed_app" "$legacy_launch_agent"
 fi
 
 mkdir -p "$app_dir" "$launch_agents_dir"
