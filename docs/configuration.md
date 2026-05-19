@@ -50,8 +50,7 @@ All top-level keys are required.
 
 Keys are lowercased during parsing. The current Carbon hotkey backend supports:
 
-- `h`, `j`, `k`, `l`
-- `n`, `p`, `r`, `u`, `i`, `z`
+- `a`, `c`, `e`, `f`, `h`, `i`, `j`, `k`, `l`, `m`, `n`, `p`, `r`, `s`, `u`, `z`
 - `/`
 - `return`
 - `space`
@@ -198,6 +197,14 @@ in the center lane.
 
 ```lua
 { type = "move_to_next_display" }
+```
+
+### `open_finder_window`
+
+Opens a new Finder window rooted at the current user's home folder.
+
+```lua
+{ type = "open_finder_window" }
 ```
 
 ### `toggle_pause`
@@ -407,6 +414,7 @@ return {
     { key = "a", modifiers = { "control", "option", "command" }, action = { type = "cascade" } },
     { key = "c", modifiers = { "control", "option", "command" }, action = { type = "center" } },
     { key = "e", modifiers = { "control", "option", "command" }, action = { type = "eject" } },
+    { key = "f", modifiers = { "control", "option", "command" }, action = { type = "open_finder_window" } },
     { key = "m", modifiers = { "control", "option", "command" }, action = { type = "maximize_reset" } },
     { key = "n", modifiers = { "control", "option", "command" }, action = { type = "move_to_next_display" } },
     { key = "s", modifiers = { "control", "option", "command" }, action = { type = "shuffle" } },

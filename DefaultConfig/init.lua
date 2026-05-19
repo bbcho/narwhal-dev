@@ -21,6 +21,7 @@ return {
     { key = "a", modifiers = { "control", "option", "command" }, action = { type = "cascade" } },
     { key = "c", modifiers = { "control", "option", "command" }, action = { type = "center" } },
     { key = "e", modifiers = { "control", "option", "command" }, action = { type = "eject" } },
+    { key = "f", modifiers = { "control", "option", "command" }, action = { type = "open_finder_window" } },
     { key = "m", modifiers = { "control", "option", "command" }, action = { type = "maximize_reset" } },
     { key = "n", modifiers = { "control", "option", "command" }, action = { type = "move_to_next_display" } },
     { key = "s", modifiers = { "control", "option", "command" }, action = { type = "shuffle" } },

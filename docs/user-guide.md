@@ -83,6 +83,7 @@ Default bindings:
 | `control-option-command-A` | Cascade reset windows into an offset stack. |
 | `control-option-command-C` | Place focused window in the center half. |
 | `control-option-command-E` | Pop focused window out of the tile layout. |
+| `control-option-command-F` | Open a new Finder window. |
 | `control-option-command-M` | Maximize focused window and reset tile memory. |
 | `control-option-command-N` | Move the focused window to the next display and tile it in the center. |
 | `control-option-command-S` | Shuffle reset resizable windows into random quarter-screen frames. |

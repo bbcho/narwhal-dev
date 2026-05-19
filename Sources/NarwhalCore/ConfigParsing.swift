@@ -93,6 +93,8 @@ private struct ConfigParser {
             return .command(.togglePause)
         case "reset_layout":
             return .command(.resetLayout)
+        case "open_finder_window":
+            return .openFinderWindow
         case "reload_config":
             return .reloadConfig
         case "show_commands":

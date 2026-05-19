@@ -1599,7 +1599,7 @@ private func commandOverlayCategory(for action: HotkeyAction) -> CommandOverlayC
         case .togglePause, .resetLayout:
             return .system
         }
-    case .reloadConfig, .showCommands:
+    case .openFinderWindow, .reloadConfig, .showCommands:
         return .system
     }
 }
@@ -1608,6 +1608,8 @@ private func commandOverlayDescription(for action: HotkeyAction) -> String {
     switch action {
     case .command(let template):
         return commandOverlayDescription(for: template)
+    case .openFinderWindow:
+        return "Open a Finder window rooted at the current user's home folder"
     case .reloadConfig:
         return "Reload config and rebind shortcuts"
     case .showCommands:
@@ -1619,6 +1621,8 @@ private func commandOverlayCommand(for action: HotkeyAction) -> String {
     switch action {
     case .command(let template):
         return commandOverlayCommand(for: template)
+    case .openFinderWindow:
+        return "Open Finder"
     case .reloadConfig:
         return "Reload config"
     case .showCommands:

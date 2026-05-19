@@ -69,6 +69,7 @@ Default hotkeys:
 - `control-option-command-A`: cascade reset windows into an offset stack.
 - `control-option-command-C`: place focused window in the center half.
 - `control-option-command-E`: pop focused window out of the tile layout.
+- `control-option-command-F`: open a new Finder window.
 - `control-option-command-M`: maximize focused window and reset tile memory.
 - `control-option-command-N`: move focused window to the next display.
 - `control-option-command-S`: shuffle reset resizable windows into random quarter-screen frames.

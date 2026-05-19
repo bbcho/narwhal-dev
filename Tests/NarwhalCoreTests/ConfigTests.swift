@@ -26,6 +26,7 @@ struct ConfigTests {
             HotkeyBinding(key: KeySpec(key: "a", modifiers: [.control, .option, .command]), action: .command(.cascade)),
             HotkeyBinding(key: KeySpec(key: "c", modifiers: [.control, .option, .command]), action: .command(.center)),
             HotkeyBinding(key: KeySpec(key: "e", modifiers: [.control, .option, .command]), action: .command(.eject)),
+            HotkeyBinding(key: KeySpec(key: "f", modifiers: [.control, .option, .command]), action: .openFinderWindow),
             HotkeyBinding(key: KeySpec(key: "m", modifiers: [.control, .option, .command]), action: .command(.maximizeReset)),
             HotkeyBinding(key: KeySpec(key: "n", modifiers: [.control, .option, .command]), action: .command(.moveToNextDisplay)),
             HotkeyBinding(key: KeySpec(key: "s", modifiers: [.control, .option, .command]), action: .command(.shuffle)),
@@ -72,6 +73,7 @@ struct ConfigTests {
         let customKeymap = [
             HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .shift]), action: .command(.push(.left))),
             HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .shift]), action: .command(.push(.right))),
+            HotkeyBinding(key: KeySpec(key: "f", modifiers: [.control, .shift]), action: .openFinderWindow),
             HotkeyBinding(key: KeySpec(key: "u", modifiers: [.control, .shift]), action: .command(.resizeSplit(.right, delta: 0.25))),
             HotkeyBinding(key: KeySpec(key: "/", modifiers: [.control, .shift]), action: .showCommands),
             HotkeyBinding(key: KeySpec(key: "r", modifiers: [.control, .shift]), action: .command(.balance)),
@@ -83,6 +85,7 @@ struct ConfigTests {
         root["keymap"] = .array([
             binding(key: "h", modifiers: ["control", "shift"], action: ["type": .string("push"), "direction": .string("left")]),
             binding(key: "l", modifiers: ["control", "shift"], action: ["type": .string("push"), "direction": .string("right")]),
+            binding(key: "f", modifiers: ["control", "shift"], action: ["type": .string("open_finder_window")]),
             binding(key: "u", modifiers: ["control", "shift"], action: ["type": .string("resize_split"), "direction": .string("right"), "delta": .number(0.25)]),
             binding(key: "/", modifiers: ["control", "shift"], action: ["type": .string("show_commands")]),
             binding(key: "r", modifiers: ["control", "shift"], action: ["type": .string("balance")]),
@@ -182,6 +185,31 @@ struct ConfigTests {
             .first { $0.contains("type = \"show_commands\"") }
 
         #expect(line.map(String.init) == #"    { key = "/", modifiers = { "control", "option" }, action = { type = "show_commands" } },"#)
+    }
+
+    @Test("Lua config renderer emits open Finder window actions exactly")
+    func luaConfigRendererEmitsOpenFinderWindowAction() throws {
+        let config = Config(
+            keymap: [
+                HotkeyBinding(
+                    key: KeySpec(key: "f", modifiers: [.control, .option, .command]),
+                    action: .openFinderWindow
+                )
+            ],
+            rules: [],
+            zones: [],
+            gaps: .init(inner: 0, outer: .init(top: 0, left: 0, bottom: 0, right: 0)),
+            border: .default,
+            hud: .default,
+            dragModifier: [.shift]
+        )
+
+        let rendered = DefaultConfigLua.render(config)
+        let line = rendered
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .first { $0.contains("type = \"open_finder_window\"") }
+
+        #expect(line.map(String.init) == #"    { key = "f", modifiers = { "control", "option", "command" }, action = { type = "open_finder_window" } },"#)
     }
 
     @Test("Lua config renderer emits tile-to-zone rules exactly")
@@ -408,6 +436,7 @@ struct ConfigTests {
                 binding(key: "a", modifiers: ["control", "option", "command"], action: ["type": .string("cascade")]),
                 binding(key: "c", modifiers: ["control", "option", "command"], action: ["type": .string("center")]),
                 binding(key: "e", modifiers: ["control", "option", "command"], action: ["type": .string("eject")]),
+                binding(key: "f", modifiers: ["control", "option", "command"], action: ["type": .string("open_finder_window")]),
                 binding(key: "m", modifiers: ["control", "option", "command"], action: ["type": .string("maximize_reset")]),
                 binding(key: "n", modifiers: ["control", "option", "command"], action: ["type": .string("move_to_next_display")]),
                 binding(key: "s", modifiers: ["control", "option", "command"], action: ["type": .string("shuffle")]),

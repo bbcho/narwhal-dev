@@ -50,6 +50,7 @@ public struct HotkeyBinding: Equatable, Sendable {
 
 public enum HotkeyAction: Equatable, Sendable {
     case command(CommandTemplate)
+    case openFinderWindow
     case reloadConfig
     case showCommands
 }
@@ -178,6 +179,7 @@ public enum DefaultKeymap {
         HotkeyBinding(key: KeySpec(key: "a", modifiers: [.control, .option, .command]), action: .command(.cascade)),
         HotkeyBinding(key: KeySpec(key: "c", modifiers: [.control, .option, .command]), action: .command(.center)),
         HotkeyBinding(key: KeySpec(key: "e", modifiers: [.control, .option, .command]), action: .command(.eject)),
+        HotkeyBinding(key: KeySpec(key: "f", modifiers: [.control, .option, .command]), action: .openFinderWindow),
         HotkeyBinding(key: KeySpec(key: "m", modifiers: [.control, .option, .command]), action: .command(.maximizeReset)),
         HotkeyBinding(key: KeySpec(key: "n", modifiers: [.control, .option, .command]), action: .command(.moveToNextDisplay)),
         HotkeyBinding(key: KeySpec(key: "s", modifiers: [.control, .option, .command]), action: .command(.shuffle)),
@@ -236,6 +238,8 @@ public enum DefaultConfigLua {
         switch action {
         case .command(let template):
             return renderTemplate(template)
+        case .openFinderWindow:
+            return "{ type = \"open_finder_window\" }"
         case .reloadConfig:
             return "{ type = \"reload_config\" }"
         case .showCommands:

@@ -771,6 +771,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await togglePause()
         case .command(.resetLayout):
             await performResetLayout(requiresConfirmation: true, logPrefix: "Reset", persistReason: "reset")
+        case .openFinderWindow:
+            performOpenFinderWindow()
         case .command(let template):
             reporter.error("Hotkey action not implemented in this build: \(describe(template))")
             showOperatorFeedback("Command unavailable: \(describe(template))", tone: .error)
@@ -794,7 +796,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .focusDirection, .focusCycle, .focusPrevious, .togglePause, .resetLayout:
                 return false
             }
-        case .reloadConfig, .showCommands:
+        case .openFinderWindow, .reloadConfig, .showCommands:
             return false
         }
     }
@@ -814,6 +816,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         default:
             return false
+        }
+    }
+
+    @MainActor
+    private func performOpenFinderWindow() {
+        do {
+            try FinderWindowOpener.openHomeWindow()
+            reporter.info("Opened Finder window")
+            showOperatorFeedback("Finder window opened", tone: .success, showsHUD: false)
+        } catch {
+            reporter.error("Open Finder window failed: \(String(describing: error))")
+            showOperatorFeedback("Open Finder failed", tone: .error)
         }
     }
 
@@ -2491,6 +2505,8 @@ private func describe(_ action: HotkeyAction) -> String {
     switch action {
     case .command(let template):
         return describe(template)
+    case .openFinderWindow:
+        return "open Finder window"
     case .reloadConfig:
         return "reload config"
     case .showCommands:
@@ -2560,6 +2576,27 @@ private func describe(_ template: CommandTemplate) -> String {
         return "toggle pause"
     case .resetLayout:
         return "resetLayout"
+    }
+}
+
+private enum FinderWindowOpenError: Error, CustomStringConvertible {
+    case fileViewerRejected(path: String)
+
+    var description: String {
+        switch self {
+        case .fileViewerRejected(let path):
+            return "Finder file viewer rejected path \(path)"
+        }
+    }
+}
+
+private enum FinderWindowOpener {
+    @MainActor
+    static func openHomeWindow() throws {
+        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+        guard NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: homePath) else {
+            throw FinderWindowOpenError.fileViewerRejected(path: homePath)
+        }
     }
 }
 

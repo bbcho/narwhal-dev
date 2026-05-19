@@ -176,6 +176,8 @@ private func carbonKeyCode(for key: String) -> UInt32? {
         return UInt32(kVK_ANSI_C)
     case "e":
         return UInt32(kVK_ANSI_E)
+    case "f":
+        return UInt32(kVK_ANSI_F)
     case "h":
         return UInt32(kVK_ANSI_H)
     case "j":
@@ -248,6 +250,8 @@ private func describe(_ action: HotkeyAction) -> String {
     switch action {
     case .command(let template):
         return describe(template)
+    case .openFinderWindow:
+        return "open Finder window"
     case .reloadConfig:
         return "reloadConfig"
     case .showCommands:
