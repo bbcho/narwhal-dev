@@ -3,9 +3,10 @@ import CoreGraphics
 public func pruneWorld(_ world: World, keepingLiveWindows liveWindowIDs: Set<WindowID>) -> World {
     let windows = world.windows.filter { liveWindowIDs.contains($0.key) }
     let windowDisplay = world.windowDisplay.filter { liveWindowIDs.contains($0.key) }
+    let windowSpace = world.windowSpace.filter { liveWindowIDs.contains($0.key) }
     let windowConstraints = world.windowConstraints.filter { liveWindowIDs.contains($0.key) }
     let pendingRules = world.pendingRules.filter { liveWindowIDs.contains($0.key) }
-    let spaces = world.spaces.mapValues { space in
+    let spaces = sanitizedSpaces(world.spaces.mapValues { space in
         let displays = space.displays.mapValues { displayState in
             DisplaySpaceState(
                 displayID: displayState.displayID,
@@ -15,14 +16,16 @@ public func pruneWorld(_ world: World, keepingLiveWindows liveWindowIDs: Set<Win
         }
         let focused = space.focused.flatMap { liveWindowIDs.contains($0) ? $0 : nil }
         return SpaceState(id: space.id, displays: displays, focused: focused)
-    }
+    })
 
     return World(
         displays: world.displays,
         activeSpace: world.activeSpace,
+        activeSpaceByDisplay: world.activeSpaceByDisplay,
         spaces: spaces,
         windows: windows,
         windowDisplay: windowDisplay,
+        windowSpace: windowSpace,
         windowConstraints: windowConstraints,
         pendingRules: pendingRules,
         config: world.config
@@ -30,41 +33,32 @@ public func pruneWorld(_ world: World, keepingLiveWindows liveWindowIDs: Set<Win
 }
 
 public func pruneActiveSpace(_ world: World, keepingLiveWindows liveWindowIDs: Set<WindowID>) -> World {
-    guard let activeSpaceID = world.activeSpace,
-          let activeSpace = world.spaces[activeSpaceID]
-    else { return world }
-
-    let removedActiveSpaceWindowIDs = windowIDs(in: activeSpace).subtracting(liveWindowIDs)
+    let removedActiveSpaceWindowIDs = activeSpaceWindowIDs(in: world).subtracting(liveWindowIDs)
     return removeWindowsFromActiveSpace(removedActiveSpaceWindowIDs, in: world)
 }
 
 public func removeWindowsFromActiveSpace(_ windowIDs: Set<WindowID>, in world: World) -> World {
-    guard !windowIDs.isEmpty,
-          let activeSpaceID = world.activeSpace,
-          let activeSpace = world.spaces[activeSpaceID]
-    else { return world }
+    guard !windowIDs.isEmpty else { return world }
 
     var spaces = world.spaces
-    spaces[activeSpaceID] = removingWindows(windowIDs, from: activeSpace)
+    for key in activeWorkspaceKeys(in: world) {
+        guard let space = spaces[key.spaceID] else { continue }
+        spaces[key.spaceID] = removingWindows(windowIDs, from: space)
+    }
     let removedUntrackedWindowIDs = windowIDs.subtracting(trackedWindowIDs(in: spaces))
 
     return World(
         displays: world.displays,
         activeSpace: world.activeSpace,
-        spaces: spaces,
+        activeSpaceByDisplay: world.activeSpaceByDisplay,
+        spaces: sanitizedSpaces(spaces),
         windows: world.windows.filter { !removedUntrackedWindowIDs.contains($0.key) },
         windowDisplay: world.windowDisplay.filter { !removedUntrackedWindowIDs.contains($0.key) },
+        windowSpace: world.windowSpace.filter { !removedUntrackedWindowIDs.contains($0.key) },
         windowConstraints: world.windowConstraints.filter { !removedUntrackedWindowIDs.contains($0.key) },
         pendingRules: world.pendingRules.filter { !removedUntrackedWindowIDs.contains($0.key) },
         config: world.config
     )
-}
-
-public func activeSpaceWindowIDs(in world: World) -> Set<WindowID> {
-    guard let activeSpaceID = world.activeSpace,
-          let activeSpace = world.spaces[activeSpaceID]
-    else { return [] }
-    return windowIDs(in: activeSpace)
 }
 
 public func reconcileEnvironment(_ snapshot: EnvironmentSnapshot, in world: World) -> World {
@@ -75,9 +69,11 @@ public func reconcileEnvironment(_ snapshot: EnvironmentSnapshot, in world: Worl
         return World(
             displays: snapshot.displays,
             activeSpace: snapshot.activeSpace,
+            activeSpaceByDisplay: snapshot.activeSpaceByDisplay,
             spaces: world.spaces,
             windows: world.windows,
             windowDisplay: world.windowDisplay,
+            windowSpace: world.windowSpace.merging(snapshot.windowSpace) { _, live in live },
             windowConstraints: world.windowConstraints,
             pendingRules: world.pendingRules,
             config: world.config
@@ -110,17 +106,21 @@ public func environmentSnapshotPreservesSpaceLayouts(_ snapshot: EnvironmentSnap
     }
 
     let liveWindowIDs = Set(snapshot.axSnapshot.windows.map(\.id))
-    let activeSpaceChanged = world.activeSpace != nil && snapshot.activeSpace != world.activeSpace
+    let activeSpaceChanged = !world.activeSpaceByDisplay.isEmpty
+        ? snapshot.activeSpaceByDisplay != world.activeSpaceByDisplay
+        : world.activeSpace != nil && snapshot.activeSpace != world.activeSpace
     return snapshot.preserveSpaceLayouts
         || activeSpaceChanged
         || containsTrackedInactiveSpaceWindows(
             liveWindowIDs,
-            activeSpace: snapshot.activeSpace,
+            activeSpaces: Set(snapshot.activeSpaceByDisplay.values),
+            fallbackActiveSpace: snapshot.activeSpace,
             spaces: world.spaces
         )
         || containsBulkUntrackedWindowExpansion(
             liveWindowIDs,
-            activeSpace: snapshot.activeSpace,
+            activeSpaces: Set(snapshot.activeSpaceByDisplay.values),
+            fallbackActiveSpace: snapshot.activeSpace,
             spaces: world.spaces
         )
 }
@@ -132,6 +132,9 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
     let liveWindowIDs = Set(liveWindows.keys)
     let previouslyTrackedWindowIDs = trackedWindowIDs(in: world.spaces)
     let liveWindowDisplay = displayOwnership(for: liveWindows.values, displays: snapshot.displays)
+    let activeSpaceByDisplay = normalizedActiveSpaceByDisplay(in: snapshot)
+    let activeSpaceIDs = Set(activeSpaceByDisplay.values)
+    let mergedWindowSpace = world.windowSpace.merging(snapshot.windowSpace) { _, live in live }
     if environmentSnapshotPreservesSpaceLayouts(snapshot, in: world) {
         var windows = world.windows
         windows.merge(liveWindows) { _, live in live }
@@ -142,16 +145,18 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
         return World(
             displays: snapshot.displays,
             activeSpace: snapshot.activeSpace,
-            spaces: world.spaces,
+            activeSpaceByDisplay: activeSpaceByDisplay,
+            spaces: sanitizedSpaces(world.spaces),
             windows: windows,
             windowDisplay: windowDisplay,
+            windowSpace: mergedWindowSpace,
             windowConstraints: world.windowConstraints,
             pendingRules: world.pendingRules,
             config: world.config
         )
     }
 
-    guard let activeSpace = snapshot.activeSpace else {
+    guard !activeSpaceByDisplay.isEmpty else {
         var windows = world.windows
         windows.merge(liveWindows) { _, live in live }
 
@@ -161,9 +166,11 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
         let reconciled = World(
             displays: snapshot.displays,
             activeSpace: nil,
-            spaces: world.spaces,
+            activeSpaceByDisplay: [:],
+            spaces: sanitizedSpaces(world.spaces),
             windows: windows,
             windowDisplay: windowDisplay,
+            windowSpace: mergedWindowSpace,
             windowConstraints: world.windowConstraints,
             pendingRules: world.pendingRules,
             config: world.config
@@ -175,8 +182,13 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
         )
     }
 
-    let previousActiveSpace = world.spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
-    let removedActiveSpaceWindowIDs = windowIDs(in: previousActiveSpace).subtracting(liveWindowIDs)
+    let removedActiveSpaceWindowIDs = removedWindowIDsFromActiveWorkspaces(
+        activeSpaceByDisplay: activeSpaceByDisplay,
+        liveWindowIDs: liveWindowIDs,
+        liveWindowDisplay: liveWindowDisplay,
+        windowSpace: mergedWindowSpace,
+        spaces: world.spaces
+    )
 
     var windows = world.windows.filter { !removedActiveSpaceWindowIDs.contains($0.key) }
     windows.merge(liveWindows) { _, live in live }
@@ -184,32 +196,72 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
     var windowDisplay = world.windowDisplay.filter { !removedActiveSpaceWindowIDs.contains($0.key) }
     windowDisplay.merge(liveWindowDisplay) { _, live in live }
 
-    var spaces = world.spaces
-    for (spaceID, space) in spaces where spaceID != activeSpace {
-        spaces[spaceID] = removingWindows(liveWindowIDs, from: space)
+    var windowSpace = mergedWindowSpace.filter { !removedActiveSpaceWindowIDs.contains($0.key) }
+    for (windowID, displayID) in liveWindowDisplay {
+        if let spaceID = snapshot.windowSpace[windowID] {
+            windowSpace[windowID] = spaceID
+        } else if windowSpace[windowID] == nil,
+                  let spaceID = activeSpaceByDisplay[displayID] {
+            windowSpace[windowID] = spaceID
+        }
     }
-    let previousSpace = spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
-    var displayStates = previousSpace.displays
-    for displayID in snapshot.displays.keys {
+
+    var spaces = world.spaces
+    let liveIDsForActiveSpaces = liveWindowIDs.filter { windowID in
+        guard let displayID = liveWindowDisplay[windowID] else { return true }
+        let liveSpace = mergedWindowSpace[windowID] ?? activeSpaceByDisplay[displayID]
+        return liveSpace.map { activeSpaceIDs.contains($0) } ?? true
+    }
+    for (spaceID, space) in spaces where !activeSpaceIDs.contains(spaceID) {
+        spaces[spaceID] = removingWindows(liveIDsForActiveSpaces, from: space)
+    }
+
+    let liveIDsByActiveSpace = activeSpaceByDisplay.reduce(into: [SpaceID: Set<WindowID>]()) { result, pair in
+        let key = WorkspaceKey(displayID: pair.key, spaceID: pair.value)
+        result[pair.value, default: []].formUnion(liveWindowIDsForWorkspace(
+            key,
+            liveWindowIDs: liveWindowIDs,
+            liveWindowDisplay: liveWindowDisplay,
+            windowSpace: mergedWindowSpace
+        ))
+    }
+
+    for (displayID, activeSpace) in activeSpaceByDisplay {
+        let previousSpace = spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
+        var displayStates = previousSpace.displays
         let previous = displayStates[displayID] ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
-        let tree = pruneTree(previous.tree, keeping: liveWindowIDs)
+        let liveIDs = liveWindowIDsForWorkspace(
+            WorkspaceKey(displayID: displayID, spaceID: activeSpace),
+            liveWindowIDs: liveWindowIDs,
+            liveWindowDisplay: liveWindowDisplay,
+            windowSpace: mergedWindowSpace
+        )
+        let tree = pruneTree(previous.tree, keeping: liveIDs)
         let tiled = Set(occupiedWindows(in: tree))
         let floating = liveWindowDisplay
-            .filter { $0.value == displayID && !tiled.contains($0.key) }
+            .filter { windowID, ownedDisplayID in
+                ownedDisplayID == displayID
+                    && liveIDs.contains(windowID)
+                    && !tiled.contains(windowID)
+            }
             .map(\.key)
             .sorted { $0.raw < $1.raw }
         displayStates[displayID] = DisplaySpaceState(displayID: displayID, tree: tree, floating: floating)
-    }
 
-    let focused = previousSpace.focused.flatMap { liveWindowIDs.contains($0) ? $0 : nil }
-    spaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: focused)
+        let focused = previousSpace.focused.flatMap {
+            liveIDsByActiveSpace[activeSpace, default: []].contains($0) ? $0 : nil
+        }
+        spaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: focused)
+    }
 
     let reconciled = World(
         displays: snapshot.displays,
-        activeSpace: activeSpace,
-        spaces: spaces,
+        activeSpace: snapshot.activeSpace,
+        activeSpaceByDisplay: activeSpaceByDisplay,
+        spaces: sanitizedSpaces(spaces),
         windows: windows,
         windowDisplay: windowDisplay,
+        windowSpace: windowSpace,
         windowConstraints: world.windowConstraints.filter { !removedActiveSpaceWindowIDs.contains($0.key) },
         pendingRules: world.pendingRules.filter { !removedActiveSpaceWindowIDs.contains($0.key) },
         config: world.config
@@ -223,12 +275,14 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
 
 private func containsTrackedInactiveSpaceWindows(
     _ liveWindowIDs: Set<WindowID>,
-    activeSpace: SpaceID?,
+    activeSpaces: Set<SpaceID>,
+    fallbackActiveSpace: SpaceID?,
     spaces: [SpaceID: SpaceState]
 ) -> Bool {
-    guard let activeSpace else { return false }
+    let activeSpaces = activeSpaces.isEmpty ? Set(fallbackActiveSpace.map { [$0] } ?? []) : activeSpaces
+    guard !activeSpaces.isEmpty else { return false }
     let inactiveWindowIDs = spaces.reduce(into: Set<WindowID>()) { result, pair in
-        guard pair.key != activeSpace else { return }
+        guard !activeSpaces.contains(pair.key) else { return }
         result.formUnion(windowIDs(in: pair.value))
     }
     return !liveWindowIDs.isDisjoint(with: inactiveWindowIDs)
@@ -236,14 +290,16 @@ private func containsTrackedInactiveSpaceWindows(
 
 private func containsBulkUntrackedWindowExpansion(
     _ liveWindowIDs: Set<WindowID>,
-    activeSpace: SpaceID?,
+    activeSpaces: Set<SpaceID>,
+    fallbackActiveSpace: SpaceID?,
     spaces: [SpaceID: SpaceState]
 ) -> Bool {
-    guard let activeSpace,
-          let activeSpaceState = spaces[activeSpace]
-    else { return false }
-
-    let activeWindowIDs = windowIDs(in: activeSpaceState)
+    let activeSpaces = activeSpaces.isEmpty ? Set(fallbackActiveSpace.map { [$0] } ?? []) : activeSpaces
+    guard !activeSpaces.isEmpty else { return false }
+    let activeWindowIDs = activeSpaces.reduce(into: Set<WindowID>()) { result, spaceID in
+        guard let space = spaces[spaceID] else { return }
+        result.formUnion(windowIDs(in: space))
+    }
     guard !activeWindowIDs.isEmpty else { return false }
 
     let trackedWindowIDs = trackedWindowIDs(in: spaces)
@@ -254,9 +310,44 @@ private func containsBulkUntrackedWindowExpansion(
         && liveWindowIDs.count >= activeWindowIDs.count * 2
 }
 
-func trackedWindowIDs(in spaces: [SpaceID: SpaceState]) -> Set<WindowID> {
-    spaces.values.reduce(into: Set<WindowID>()) { result, space in
-        result.formUnion(windowIDs(in: space))
+private func normalizedActiveSpaceByDisplay(in snapshot: EnvironmentSnapshot) -> [DisplayID: SpaceID] {
+    if !snapshot.activeSpaceByDisplay.isEmpty {
+        return snapshot.activeSpaceByDisplay
+    }
+    guard let activeSpace = snapshot.activeSpace else { return [:] }
+    return Dictionary(uniqueKeysWithValues: snapshot.displays.keys.map { ($0, activeSpace) })
+}
+
+private func removedWindowIDsFromActiveWorkspaces(
+    activeSpaceByDisplay: [DisplayID: SpaceID],
+    liveWindowIDs: Set<WindowID>,
+    liveWindowDisplay: [WindowID: DisplayID],
+    windowSpace: [WindowID: SpaceID],
+    spaces: [SpaceID: SpaceState]
+) -> Set<WindowID> {
+    activeSpaceByDisplay.reduce(into: Set<WindowID>()) { removed, pair in
+        let key = WorkspaceKey(displayID: pair.key, spaceID: pair.value)
+        guard let displayState = spaces[key.spaceID]?.displays[key.displayID] else { return }
+        let liveIDs = liveWindowIDsForWorkspace(
+            key,
+            liveWindowIDs: liveWindowIDs,
+            liveWindowDisplay: liveWindowDisplay,
+            windowSpace: windowSpace
+        )
+        removed.formUnion(windowIDs(in: displayState).subtracting(liveIDs))
+    }
+}
+
+private func liveWindowIDsForWorkspace(
+    _ key: WorkspaceKey,
+    liveWindowIDs: Set<WindowID>,
+    liveWindowDisplay: [WindowID: DisplayID],
+    windowSpace: [WindowID: SpaceID]
+) -> Set<WindowID> {
+    return liveWindowIDs.filter { windowID in
+        guard liveWindowDisplay[windowID] == key.displayID else { return false }
+        guard let spaceID = windowSpace[windowID] else { return true }
+        return spaceID == key.spaceID
     }
 }
 
@@ -272,13 +363,6 @@ private func applyOpenRulesForNewWindows(
             guard let metadata = liveWindows[windowID] else { return current }
             return worldByOpeningWindow(metadata, in: current)
         }
-}
-
-private func windowIDs(in space: SpaceState) -> Set<WindowID> {
-    space.displays.values.reduce(into: Set<WindowID>()) { result, displayState in
-        result.formUnion(occupiedWindows(in: displayState.tree))
-        result.formUnion(displayState.floating)
-    }
 }
 
 private func removingWindows(_ windowIDs: Set<WindowID>, from space: SpaceState) -> SpaceState {
@@ -323,19 +407,29 @@ private func worldByTrackingOpenedWindow(
         pendingRules.removeValue(forKey: metadata.id)
     }
 
+    let targetActiveSpace = displayID.flatMap { activeSpaceID(for: $0, in: world) } ?? world.activeSpace
+    var windowSpace = world.windowSpace
+    if let targetActiveSpace {
+        windowSpace[metadata.id] = targetActiveSpace
+    } else {
+        windowSpace.removeValue(forKey: metadata.id)
+    }
+
     let spaces = spacesByMovingFloatingWindowIfNeeded(
         metadata.id,
         displayID: displayID,
         spaces: world.spaces,
-        activeSpace: world.activeSpace
+        activeSpace: targetActiveSpace
     )
 
     return World(
         displays: world.displays,
         activeSpace: world.activeSpace,
-        spaces: spaces,
+        activeSpaceByDisplay: world.activeSpaceByDisplay,
+        spaces: sanitizedSpaces(spaces),
         windows: windows,
         windowDisplay: windowDisplay,
+        windowSpace: windowSpace,
         windowConstraints: world.windowConstraints,
         pendingRules: pendingRules,
         config: world.config

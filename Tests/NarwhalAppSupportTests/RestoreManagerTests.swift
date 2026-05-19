@@ -88,7 +88,7 @@ struct RestoreManagerTests {
         #expect(FileManager.default.fileExists(atPath: paths.file.path))
         #expect(try manager.load() == stored)
         let savedJSON = try String(contentsOf: paths.file, encoding: .utf8)
-        #expect(savedJSON.contains(#""schemaVersion" : 1"#))
+        #expect(savedJSON.contains(#""schemaVersion" : \#(StoredWorld.currentSchemaVersion)"#))
         #expect(savedJSON.contains(#""displayFingerprint" : "main-display""#))
     }
 

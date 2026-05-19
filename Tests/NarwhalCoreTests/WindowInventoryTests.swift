@@ -155,6 +155,47 @@ struct WindowInventoryTests {
         #expect(poll.suppressedSpaceReplacement)
     }
 
+    @Test("Frame inventory reports non-focused window resize and move")
+    func frameInventoryReportsNonFocusedWindowGeometryChanges() {
+        let first = metadata(WindowID(raw: 10))
+        let second = metadata(WindowID(raw: 20))
+        let previous = WindowFrameInventoryState(framesByWindowID: [
+            first.id: first.frame,
+            second.id: second.frame
+        ])
+        let movedFirst = WindowMetadata(
+            id: first.id,
+            bundleID: first.bundleID,
+            title: first.title,
+            role: first.role,
+            pid: first.pid,
+            frame: first.frame.offsetBy(dx: 20, dy: 0),
+            isResizable: true,
+            isMinimized: false
+        )
+        let resizedSecond = WindowMetadata(
+            id: second.id,
+            bundleID: second.bundleID,
+            title: second.title,
+            role: second.role,
+            pid: second.pid,
+            frame: CGRect(x: second.frame.minX, y: second.frame.minY, width: 150, height: 125),
+            isResizable: true,
+            isMinimized: false
+        )
+
+        let poll = pollWindowFrameInventory(previous: previous, current: [resizedSecond, movedFirst], tolerance: 1)
+
+        #expect(poll.events == [
+            .windowMoved(first.id, movedFirst.frame),
+            .windowResized(second.id, resizedSecond.frame.size)
+        ])
+        #expect(poll.state.framesByWindowID == [
+            first.id: movedFirst.frame,
+            second.id: resizedSecond.frame
+        ])
+    }
+
     private func metadata(_ id: WindowID) -> WindowMetadata {
         WindowMetadata(
             id: id,

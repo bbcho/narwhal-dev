@@ -17,6 +17,7 @@ final class AXObserverService {
     private var workspaceObserver: NSObjectProtocol?
     private var focusedGeometryState = FocusedWindowGeometryState.empty
     private var windowInventoryState: WindowInventoryState?
+    private var windowFrameInventoryState: WindowFrameInventoryState?
     private var windowInventorySpaceID: SpaceID?
 
     init(
@@ -63,6 +64,7 @@ final class AXObserverService {
         settleTimers.forEach { $0.invalidate() }
         settleTimers.removeAll()
         windowInventoryState = nil
+        windowFrameInventoryState = nil
         windowInventorySpaceID = nil
         if let workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
@@ -75,6 +77,7 @@ final class AXObserverService {
         settleTimers.removeAll()
         focusedGeometryState = .empty
         windowInventoryState = nil
+        windowFrameInventoryState = nil
         windowInventorySpaceID = nil
         spaceChanged()
         reporter.info("Active Space changed; focus border hidden pending focused-window refresh")
@@ -126,6 +129,9 @@ final class AXObserverService {
         windowInventoryState = WindowInventoryState(
             visibleWindowIDs: Set(snapshot.windows.map(\.id))
         )
+        windowFrameInventoryState = WindowFrameInventoryState(
+            framesByWindowID: Dictionary(uniqueKeysWithValues: snapshot.windows.map { ($0.id, $0.frame) })
+        )
         windowInventorySpaceID = activeSpaceID()
     }
 
@@ -137,6 +143,9 @@ final class AXObserverService {
         guard let previous = windowInventoryState else {
             windowInventoryState = WindowInventoryState(
                 visibleWindowIDs: Set(snapshot.windows.map(\.id))
+            )
+            windowFrameInventoryState = WindowFrameInventoryState(
+                framesByWindowID: Dictionary(uniqueKeysWithValues: snapshot.windows.map { ($0.id, $0.frame) })
             )
             windowInventorySpaceID = currentSpaceID
             return
@@ -154,11 +163,28 @@ final class AXObserverService {
         )
         windowInventoryState = poll.state
         if poll.suppressedSpaceReplacement {
+            windowFrameInventoryState = WindowFrameInventoryState(
+                framesByWindowID: Dictionary(uniqueKeysWithValues: snapshot.windows.map { ($0.id, $0.frame) })
+            )
             reporter.info("Suppressed likely Space replacement inventory diff")
             activeSpaceChanged()
             return
         }
         for event in poll.events {
+            emit(event, nil)
+        }
+
+        let framePoll = pollWindowFrameInventory(
+            previous: windowFrameInventoryState ?? .empty,
+            current: snapshot.windows,
+            tolerance: Self.frameTolerance
+        )
+        windowFrameInventoryState = framePoll.state
+        for event in framePoll.events {
+            guard !echoSuppressor.isExpectedEcho(event) else {
+                reporter.info("Suppressed expected AX echo for frame inventory event")
+                continue
+            }
             emit(event, nil)
         }
     }

@@ -7,7 +7,7 @@ public func layout(spaceState: SpaceState, displayID: DisplayID, frame: CGRect, 
 
     let usableFrame = applyOuterGaps(gaps.outer, to: frame)
     let tiled = framesByWindow(in: displayState.tree, frame: usableFrame, innerGap: gaps.inner)
-    return Layout(tiled: tiled, floatingZOrder: displayState.floating, hidden: [])
+    return Layout(tiled: tiled, floatingZOrder: sanitizedFloatingIDs(in: displayState), hidden: [])
 }
 
 public func diff(old: Layout, new: Layout) -> LayoutDelta {
@@ -33,18 +33,21 @@ public func frameWriteOrder(for layout: Layout, focused focusedWindowID: WindowI
 }
 
 public func flattenedLayout(of world: World) -> Result<Layout, UnsatisfiableLayout> {
-    guard let activeSpace = world.activeSpace, let space = world.spaces[activeSpace] else {
+    let workspaceKeys = activeWorkspaceKeys(in: world)
+    guard !workspaceKeys.isEmpty else {
         return .success(Layout(tiled: [:], floatingZOrder: [], hidden: []))
     }
 
     var tiled: [WindowID: CGRect] = [:]
     var floating: [WindowID] = []
-    for displayID in space.displays.keys.sorted(by: { $0.raw < $1.raw }) {
-        guard let display = world.displays[displayID] else { continue }
+    for key in workspaceKeys {
+        guard let display = world.displays[key.displayID],
+              let space = world.spaces[key.spaceID]
+        else { continue }
         let displayLayout: Layout
         switch solveLayout(
             spaceState: space,
-            displayID: displayID,
+            displayID: key.displayID,
             frame: display.visibleFrame,
             gaps: world.config.gaps,
             constraints: world.windowConstraints

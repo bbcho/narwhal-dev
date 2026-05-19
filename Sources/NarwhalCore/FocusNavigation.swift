@@ -47,21 +47,26 @@ public func focusCycleTarget(
     from focused: WindowID?,
     direction: FocusCycleDirection
 ) -> WindowID? {
+    focusCycleCandidates(windows: windows, from: focused, direction: direction).first
+}
+
+public func focusCycleCandidates(
+    windows: [WindowMetadata],
+    from focused: WindowID?,
+    direction: FocusCycleDirection
+) -> [WindowID] {
     let ordered = windows
         .filter { !$0.isMinimized }
         .sorted(by: focusCycleSort)
         .map(\.id)
-    guard !ordered.isEmpty else { return nil }
-    guard let focused, let currentIndex = ordered.firstIndex(of: focused) else {
-        return direction == .next ? ordered.first : ordered.last
+    guard !ordered.isEmpty else { return [] }
+
+    let traversal = direction == .next ? ordered : Array(ordered.reversed())
+    guard let focused, let currentIndex = traversal.firstIndex(of: focused) else {
+        return Array(traversal)
     }
 
-    switch direction {
-    case .previous:
-        return ordered[(currentIndex - 1 + ordered.count) % ordered.count]
-    case .next:
-        return ordered[(currentIndex + 1) % ordered.count]
-    }
+    return Array(traversal.dropFirst(currentIndex + 1)) + Array(traversal.prefix(currentIndex + 1))
 }
 
 private struct FocusCandidate {

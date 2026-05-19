@@ -145,6 +145,176 @@ struct ApplyCommandTests {
         #expect(next.spaces[inactiveSpace]?.focused == inactiveFloating)
     }
 
+    @Test("Focus cycle uses window Space ownership when stale floating memory contains another Space")
+    func focusCycleUsesWindowSpaceOwnershipOverStaleFloatingMemory() throws {
+        let display = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let inactiveSpace = SpaceID(raw: 2)
+        let activeTiled = WindowID(raw: 10)
+        let activeFloating = WindowID(raw: 11)
+        let inactiveFloating = WindowID(raw: 20)
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0)],
+            activeSpace: activeSpace,
+            activeSpaceByDisplay: [display: activeSpace],
+            spaces: [
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [
+                        display: DisplaySpaceState(
+                            displayID: display,
+                            tree: pushIntoTree(activeTiled, .left, .void),
+                            floating: [activeFloating, inactiveFloating]
+                        )
+                    ],
+                    focused: activeTiled
+                ),
+                inactiveSpace: SpaceState(
+                    id: inactiveSpace,
+                    displays: [
+                        display: DisplaySpaceState(displayID: display, tree: .void, floating: [inactiveFloating])
+                    ],
+                    focused: inactiveFloating
+                )
+            ],
+            windows: [
+                activeTiled: metadata(activeTiled, x: 0, y: 0),
+                activeFloating: metadata(activeFloating, x: 300, y: 0),
+                inactiveFloating: metadata(inactiveFloating, x: 100, y: 0)
+            ],
+            windowDisplay: [
+                activeTiled: display,
+                activeFloating: display,
+                inactiveFloating: display
+            ],
+            windowSpace: [
+                activeTiled: activeSpace,
+                activeFloating: activeSpace,
+                inactiveFloating: inactiveSpace
+            ],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.focusCycle(.next), to: world) else {
+            Issue.record("Expected focusCycle to succeed")
+            return
+        }
+
+        #expect(next.spaces[activeSpace]?.focused == activeFloating)
+        #expect(next.spaces[inactiveSpace]?.focused == inactiveFloating)
+    }
+
+    @Test("Focus uses canonical window Space over active display fallback")
+    func focusUsesCanonicalWindowSpaceOverActiveDisplayFallback() throws {
+        let display = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let inactiveSpace = SpaceID(raw: 2)
+        let activeFloating = WindowID(raw: 11)
+        let inactiveFloating = WindowID(raw: 20)
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0)],
+            activeSpace: activeSpace,
+            activeSpaceByDisplay: [display: activeSpace],
+            spaces: [
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [
+                        display: DisplaySpaceState(displayID: display, tree: .void, floating: [activeFloating, inactiveFloating])
+                    ],
+                    focused: activeFloating
+                ),
+                inactiveSpace: SpaceState(
+                    id: inactiveSpace,
+                    displays: [
+                        display: DisplaySpaceState(displayID: display, tree: .void, floating: [inactiveFloating])
+                    ],
+                    focused: nil
+                )
+            ],
+            windows: [
+                activeFloating: metadata(activeFloating, x: 0, y: 0),
+                inactiveFloating: metadata(inactiveFloating, x: 300, y: 0)
+            ],
+            windowDisplay: [
+                activeFloating: display,
+                inactiveFloating: display
+            ],
+            windowSpace: [
+                activeFloating: activeSpace,
+                inactiveFloating: inactiveSpace
+            ],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.focus(inactiveFloating), to: world) else {
+            Issue.record("Expected focus to succeed")
+            return
+        }
+
+        #expect(next.spaces[activeSpace]?.focused == activeFloating)
+        #expect(next.spaces[inactiveSpace]?.focused == inactiveFloating)
+    }
+
+    @Test("External frame updates preserve inactive Space ownership")
+    func externalFrameUpdatesPreserveInactiveSpaceOwnership() throws {
+        let display = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let inactiveSpace = SpaceID(raw: 2)
+        let activeWindow = WindowID(raw: 11)
+        let inactiveWindow = WindowID(raw: 20)
+        let inactiveTree = pushIntoTree(inactiveWindow, .left, .void)
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0)],
+            activeSpace: activeSpace,
+            activeSpaceByDisplay: [display: activeSpace],
+            spaces: [
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [
+                        display: DisplaySpaceState(displayID: display, tree: .void, floating: [activeWindow])
+                    ],
+                    focused: activeWindow
+                ),
+                inactiveSpace: SpaceState(
+                    id: inactiveSpace,
+                    displays: [
+                        display: DisplaySpaceState(displayID: display, tree: inactiveTree, floating: [])
+                    ],
+                    focused: inactiveWindow
+                )
+            ],
+            windows: [
+                activeWindow: metadata(activeWindow, x: 100, y: 0),
+                inactiveWindow: metadata(inactiveWindow, x: 300, y: 0)
+            ],
+            windowDisplay: [
+                activeWindow: display,
+                inactiveWindow: display
+            ],
+            windowSpace: [
+                activeWindow: activeSpace,
+                inactiveWindow: inactiveSpace
+            ],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        let movedFrame = CGRect(x: 500, y: 40, width: 100, height: 100)
+        guard case .success(let next) = apply(.windowMovedExternally(inactiveWindow, movedFrame), to: world) else {
+            Issue.record("Expected external move to succeed")
+            return
+        }
+
+        #expect(next.windowSpace[inactiveWindow] == inactiveSpace)
+        #expect(next.spaces[inactiveSpace]?.displays[display]?.tree == inactiveTree)
+        #expect(next.windows[inactiveWindow]?.frame == movedFrame)
+    }
+
     @Test("Focus cycle fails instead of crossing Spaces when active Space has no floating windows")
     func focusCycleFailsInsteadOfCrossingSpacesWhenActiveSpaceHasNoFloatingWindows() throws {
         let display = DisplayID(raw: 1)

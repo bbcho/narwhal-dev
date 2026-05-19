@@ -67,11 +67,17 @@ actor WorldActor {
             liveWindows: snapshot.axSnapshot.windows,
             displays: snapshot.displays,
             activeSpace: snapshot.activeSpace,
+            spaceTopology: SpaceTopology(
+                activeSpaceByDisplay: snapshot.activeSpaceByDisplay,
+                windowSpace: snapshot.windowSpace,
+                quality: snapshot.topologyQuality
+            ),
             config: world.config
         )
-        guard let activeSpace = world.activeSpace, let space = world.spaces[activeSpace] else { return 0 }
-        return space.displays.values.reduce(0) { total, state in
-            total + occupiedWindows(in: state.tree).count
+        return world.spaces.values.reduce(0) { total, space in
+            total + space.displays.values.reduce(0) { displayTotal, state in
+                displayTotal + occupiedWindows(in: state.tree).count
+            }
         }
     }
 
@@ -111,7 +117,7 @@ actor WorldActor {
         displayID: DisplayID,
         displays: [DisplayID: DisplayInfo]
     ) -> Result<Void, CommandError> {
-        guard let activeSpace = world.activeSpace else {
+        guard let activeSpace = activeSpaceID(for: displayID, in: world) else {
             return .failure(.activeSpaceUnavailable)
         }
 
@@ -121,17 +127,33 @@ actor WorldActor {
         var windowDisplay = world.windowDisplay
         windowDisplay[metadata.id] = displayID
 
+        var windowSpace = world.windowSpace
+        windowSpace[metadata.id] = activeSpace
+
         var spaces = world.spaces
-        if spaces[activeSpace] == nil {
-            spaces[activeSpace] = SpaceState(id: activeSpace, displays: [:], focused: nil)
+        let space = spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
+        var displayStates = space.displays
+        let existing = displayStates[displayID] ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
+        if !occupiedWindows(in: existing.tree).contains(metadata.id),
+           !existing.floating.contains(metadata.id) {
+            displayStates[displayID] = DisplaySpaceState(
+                displayID: displayID,
+                tree: existing.tree,
+                floating: existing.floating + [metadata.id]
+            )
+        } else {
+            displayStates[displayID] = sanitizedDisplayState(existing)
         }
+        spaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: space.focused)
 
         world = World(
             displays: displays,
-            activeSpace: activeSpace,
-            spaces: spaces,
+            activeSpace: world.activeSpace ?? activeSpace,
+            activeSpaceByDisplay: world.activeSpaceByDisplay,
+            spaces: sanitizedSpaces(spaces),
             windows: windows,
             windowDisplay: windowDisplay,
+            windowSpace: windowSpace,
             windowConstraints: world.windowConstraints,
             pendingRules: world.pendingRules,
             config: world.config
@@ -397,15 +419,8 @@ actor WorldActor {
     }
 
     func planFocusCycle(from focusedWindowID: WindowID?, direction: FocusCycleDirection) -> Result<FocusPlanResult, CommandError> {
-        let currentLayout: Layout
-        switch flattenedLayout(of: world) {
-        case .success(let layout):
-            currentLayout = layout
-        case .failure:
-            currentLayout = Layout(tiled: [:], floatingZOrder: [], hidden: [])
-        }
         guard let targetWindowID = focusCycleTarget(
-            windows: currentLayout.floatingZOrder.compactMap { world.windows[$0] },
+            windows: focusCycleWindows(in: world, focusedWindowID: focusedWindowID),
             from: focusedWindowID,
             direction: direction
         ) else {
@@ -422,6 +437,35 @@ actor WorldActor {
             targetFrame = target.frame
         }
         return .success(FocusPlanResult(window: target, frame: targetFrame))
+    }
+
+    func planFocusCycleCandidates(
+        from focusedWindowID: WindowID?,
+        direction: FocusCycleDirection
+    ) -> Result<[FocusPlanResult], CommandError> {
+        let candidateIDs = focusCycleCandidates(
+            windows: focusCycleWindows(in: world, focusedWindowID: focusedWindowID),
+            from: focusedWindowID,
+            direction: direction
+        )
+        guard !candidateIDs.isEmpty else {
+            return .failure(.windowNotFound(focusedWindowID ?? WindowID(raw: 0)))
+        }
+        let layout: Layout?
+        switch flattenedLayout(of: world) {
+        case .success(let value):
+            layout = value
+        case .failure:
+            layout = nil
+        }
+        let candidates = candidateIDs.compactMap { windowID -> FocusPlanResult? in
+            guard let target = world.windows[windowID] else { return nil }
+            return FocusPlanResult(window: target, frame: layout?.tiled[windowID] ?? target.frame)
+        }
+        guard !candidates.isEmpty else {
+            return .failure(.windowNotFound(focusedWindowID ?? WindowID(raw: 0)))
+        }
+        return .success(candidates)
     }
 
     private func activeLayoutWindows(in layout: Layout) -> [WindowMetadata] {
@@ -526,9 +570,11 @@ actor WorldActor {
         return World(
             displays: base.displays,
             activeSpace: base.activeSpace,
+            activeSpaceByDisplay: base.activeSpaceByDisplay,
             spaces: base.spaces,
             windows: windows,
             windowDisplay: base.windowDisplay,
+            windowSpace: base.windowSpace,
             windowConstraints: base.windowConstraints,
             pendingRules: base.pendingRules,
             config: base.config
@@ -557,16 +603,18 @@ actor WorldActor {
 
 private extension World {
     func settingFocus(_ windowID: WindowID) -> World {
-        guard let activeSpace else { return self }
+        guard let key = workspaceKey(forWindow: windowID, in: self) else { return self }
         var spaces = spaces
-        let space = spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
-        spaces[activeSpace] = SpaceState(id: space.id, displays: space.displays, focused: windowID)
+        let space = spaces[key.spaceID] ?? SpaceState(id: key.spaceID, displays: [:], focused: nil)
+        spaces[key.spaceID] = SpaceState(id: space.id, displays: space.displays, focused: windowID)
         return World(
             displays: displays,
             activeSpace: activeSpace,
+            activeSpaceByDisplay: activeSpaceByDisplay,
             spaces: spaces,
             windows: windows,
             windowDisplay: windowDisplay,
+            windowSpace: windowSpace,
             windowConstraints: windowConstraints,
             pendingRules: pendingRules,
             config: config
@@ -581,9 +629,11 @@ private extension World {
         return World(
             displays: displays,
             activeSpace: activeSpace,
+            activeSpaceByDisplay: activeSpaceByDisplay,
             spaces: spaces,
             windows: windows,
             windowDisplay: windowDisplay,
+            windowSpace: windowSpace,
             windowConstraints: windowConstraints,
             pendingRules: pendingRules,
             config: config

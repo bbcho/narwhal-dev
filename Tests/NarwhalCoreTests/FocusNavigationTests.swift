@@ -94,6 +94,24 @@ struct FocusNavigationTests {
         #expect(focusCycleTarget(windows: windows, from: topLeft.id, direction: .previous) == bottomLeft.id)
     }
 
+    @Test("Focus cycle candidates keep walking after the first target")
+    func focusCycleCandidatesKeepWalkingAfterFirstTarget() {
+        let topLeft = metadata(id: 1, x: 0, y: 0, title: "A")
+        let topRight = metadata(id: 2, x: 300, y: 0, title: "B")
+        let bottomLeft = metadata(id: 3, x: 0, y: 300, title: "C")
+
+        #expect(focusCycleCandidates(
+            windows: [bottomLeft, topRight, topLeft],
+            from: topLeft.id,
+            direction: .next
+        ) == [topRight.id, bottomLeft.id, topLeft.id])
+        #expect(focusCycleCandidates(
+            windows: [bottomLeft, topRight, topLeft],
+            from: topLeft.id,
+            direction: .previous
+        ) == [bottomLeft.id, topRight.id, topLeft.id])
+    }
+
     private func metadata(id: CGWindowID, x: CGFloat, y: CGFloat, title: String) -> WindowMetadata {
         WindowMetadata(
             id: WindowID(raw: id),

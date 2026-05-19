@@ -1,3 +1,5 @@
+import CoreGraphics
+
 public struct WindowInventoryState: Equatable, Sendable {
     public let visibleWindowIDs: Set<WindowID>
 
@@ -6,6 +8,26 @@ public struct WindowInventoryState: Equatable, Sendable {
     }
 
     public static let empty = WindowInventoryState(visibleWindowIDs: [])
+}
+
+public struct WindowFrameInventoryState: Equatable, Sendable {
+    public let framesByWindowID: [WindowID: CGRect]
+
+    public init(framesByWindowID: [WindowID: CGRect]) {
+        self.framesByWindowID = framesByWindowID
+    }
+
+    public static let empty = WindowFrameInventoryState(framesByWindowID: [:])
+}
+
+public struct WindowFrameInventoryPoll: Equatable, Sendable {
+    public let state: WindowFrameInventoryState
+    public let events: [AXEvent]
+
+    public init(state: WindowFrameInventoryState, events: [AXEvent]) {
+        self.state = state
+        self.events = events
+    }
 }
 
 public struct WindowInventoryPoll: Equatable, Sendable {
@@ -81,4 +103,43 @@ public func pollWindowInventorySuppressingLikelySpaceReplacement(
         events: [],
         suppressedSpaceReplacement: true
     )
+}
+
+public func pollWindowFrameInventory(
+    previous: WindowFrameInventoryState,
+    current: [WindowMetadata],
+    tolerance: CGFloat = 1
+) -> WindowFrameInventoryPoll {
+    let currentFrames = current.reduce(into: [WindowID: CGRect]()) { result, metadata in
+        result[metadata.id] = metadata.frame
+    }
+    let currentIDs = Set(currentFrames.keys)
+    let previousIDs = Set(previous.framesByWindowID.keys)
+    let sharedIDs = currentIDs.intersection(previousIDs).sorted { $0.raw < $1.raw }
+    let events = sharedIDs.compactMap { windowID -> AXEvent? in
+        guard let oldFrame = previous.framesByWindowID[windowID],
+              let newFrame = currentFrames[windowID],
+              !framesEqual(oldFrame, newFrame, tolerance: tolerance)
+        else { return nil }
+
+        if sizesEqual(oldFrame.size, newFrame.size, tolerance: tolerance) {
+            return .windowMoved(windowID, newFrame)
+        }
+        return .windowResized(windowID, newFrame.size)
+    }
+    return WindowFrameInventoryPoll(
+        state: WindowFrameInventoryState(framesByWindowID: currentFrames),
+        events: events
+    )
+}
+
+private func framesEqual(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {
+    abs(lhs.origin.x - rhs.origin.x) <= tolerance
+        && abs(lhs.origin.y - rhs.origin.y) <= tolerance
+        && sizesEqual(lhs.size, rhs.size, tolerance: tolerance)
+}
+
+private func sizesEqual(_ lhs: CGSize, _ rhs: CGSize, tolerance: CGFloat) -> Bool {
+    abs(lhs.width - rhs.width) <= tolerance
+        && abs(lhs.height - rhs.height) <= tolerance
 }

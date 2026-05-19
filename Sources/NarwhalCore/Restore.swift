@@ -128,6 +128,16 @@ public struct StoredSpace: Equatable, Codable, Sendable {
     }
 }
 
+public struct StoredWorkspace: Equatable, Codable, Sendable {
+    public let spaceID: SpaceID
+    public let space: StoredSpace
+
+    public init(spaceID: SpaceID, space: StoredSpace) {
+        self.spaceID = spaceID
+        self.space = space
+    }
+}
+
 public struct StoredPendingRule: Equatable, Codable, Sendable {
     public let window: StoredWindowRef
     public let action: StoredRuleAction
@@ -146,22 +156,34 @@ public enum StoredRuleAction: Equatable, Codable, Sendable {
 }
 
 public struct StoredWorld: Equatable, Codable, Sendable {
-    public static let currentSchemaVersion = 1
-    public static let empty = StoredWorld(schemaVersion: currentSchemaVersion, activeSpace: nil, pendingRules: [])
+    public static let currentSchemaVersion = 2
+    public static let empty = StoredWorld(
+        schemaVersion: currentSchemaVersion,
+        activeSpace: nil,
+        workspaces: [],
+        pendingRules: []
+    )
 
     public let schemaVersion: Int
     public let activeSpace: StoredSpace?
+    public let workspaces: [StoredWorkspace]?
     public let pendingRules: [StoredPendingRule]
 
-    public init(schemaVersion: Int, activeSpace: StoredSpace?, pendingRules: [StoredPendingRule]) {
+    public init(
+        schemaVersion: Int,
+        activeSpace: StoredSpace?,
+        workspaces: [StoredWorkspace]? = nil,
+        pendingRules: [StoredPendingRule]
+    ) {
         self.schemaVersion = schemaVersion
         self.activeSpace = activeSpace
+        self.workspaces = workspaces
         self.pendingRules = pendingRules
     }
 }
 
 public func validateStoredWorld(_ stored: StoredWorld) -> Result<StoredWorld, RestoreError> {
-    guard stored.schemaVersion == StoredWorld.currentSchemaVersion else {
+    guard (1...StoredWorld.currentSchemaVersion).contains(stored.schemaVersion) else {
         return .failure(.invalidStoredWorld("unsupported schemaVersion \(stored.schemaVersion)"))
     }
 
@@ -178,29 +200,14 @@ public func validateStoredWorld(_ stored: StoredWorld) -> Result<StoredWorld, Re
 }
 
 public func storedWorld(from world: World) -> StoredWorld {
-    guard let activeSpaceID = world.activeSpace,
-          let activeSpace = world.spaces[activeSpaceID]
-    else {
+    guard !world.spaces.isEmpty else {
         return .empty
     }
 
     let refByWindowID = storedRefsByWindowID(for: world.windows)
-    let layouts = activeSpace.displays.compactMap { displayID, displayState -> StoredDisplayLayout? in
-        guard let display = world.displays[displayID] else { return nil }
-        return StoredDisplayLayout(
-            displaySlot: display.slot,
-            displayFingerprint: display.fingerprint,
-            tree: storedNode(from: displayState.tree, refs: refByWindowID),
-            floating: displayState.floating.compactMap { refByWindowID[$0] }
-        )
-    }.sorted { lhs, rhs in
-        if lhs.displaySlot == rhs.displaySlot {
-            return (lhs.displayFingerprint ?? "") < (rhs.displayFingerprint ?? "")
-        }
-        return lhs.displaySlot < rhs.displaySlot
+    let storedSpacesByID = world.spaces.mapValues { space in
+        storedSpace(from: space, world: world, refs: refByWindowID)
     }
-
-    let focused = activeSpace.focused.flatMap { refByWindowID[$0] }
     let pendingRules = world.pendingRules.compactMap { windowID, action -> StoredPendingRule? in
         guard let ref = refByWindowID[windowID] else { return nil }
         return StoredPendingRule(window: ref, action: storedRuleAction(from: action))
@@ -210,9 +217,34 @@ public func storedWorld(from world: World) -> StoredWorld {
 
     return StoredWorld(
         schemaVersion: StoredWorld.currentSchemaVersion,
-        activeSpace: StoredSpace(layouts: layouts, focused: focused),
+        activeSpace: world.activeSpace.flatMap { storedSpacesByID[$0] },
+        workspaces: storedSpacesByID
+            .map { StoredWorkspace(spaceID: $0.key, space: $0.value) }
+            .sorted { $0.spaceID.raw < $1.spaceID.raw },
         pendingRules: pendingRules
     )
+}
+
+private func storedSpace(
+    from space: SpaceState,
+    world: World,
+    refs refByWindowID: [WindowID: StoredWindowRef]
+) -> StoredSpace {
+    let layouts = space.displays.compactMap { displayID, displayState -> StoredDisplayLayout? in
+        guard let display = world.displays[displayID] else { return nil }
+        return StoredDisplayLayout(
+            displaySlot: display.slot,
+            displayFingerprint: display.fingerprint,
+            tree: storedNode(from: displayState.tree, refs: refByWindowID),
+            floating: sanitizedFloatingIDs(in: displayState).compactMap { refByWindowID[$0] }
+        )
+    }.sorted { lhs, rhs in
+        if lhs.displaySlot == rhs.displaySlot {
+            return (lhs.displayFingerprint ?? "") < (rhs.displayFingerprint ?? "")
+        }
+        return lhs.displaySlot < rhs.displaySlot
+    }
+    return StoredSpace(layouts: layouts, focused: space.focused.flatMap { refByWindowID[$0] })
 }
 
 public func restoreWorld(
@@ -220,18 +252,30 @@ public func restoreWorld(
     liveWindows: [WindowMetadata],
     displays: [DisplayID: DisplayInfo],
     activeSpace: SpaceID?,
+    spaceTopology: SpaceTopology? = nil,
     config: Config
 ) -> World {
     let windows = liveWindows.reduce(into: [:]) { result, metadata in
         result[metadata.id] = metadata
     }
+    let activeSpaceByDisplay: [DisplayID: SpaceID]
+    if let topologyActiveSpaces = spaceTopology?.activeSpaceByDisplay, !topologyActiveSpaces.isEmpty {
+        activeSpaceByDisplay = topologyActiveSpaces
+    } else if let activeSpace {
+        activeSpaceByDisplay = Dictionary(uniqueKeysWithValues: displays.keys.map { ($0, activeSpace) })
+    } else {
+        activeSpaceByDisplay = [:]
+    }
+    let liveWindowSpace = spaceTopology?.windowSpace ?? [:]
     guard let activeSpace else {
         return World(
             displays: displays,
             activeSpace: nil,
+            activeSpaceByDisplay: activeSpaceByDisplay,
             spaces: [:],
             windows: windows,
             windowDisplay: displayOwnership(for: windows.values, displays: displays),
+            windowSpace: liveWindowSpace,
             windowConstraints: [:],
             pendingRules: [:],
             config: config
@@ -240,18 +284,38 @@ public func restoreWorld(
 
     let stored = validateStoredWorld(stored).successValue ?? .empty
     var matcher = RestoreMatcher(liveWindows: Array(windows.values))
-    var displayStates: [DisplayID: DisplaySpaceState] = [:]
+    let storedSpaces: [(SpaceID, StoredSpace)]
+    if let workspaces = stored.workspaces, !workspaces.isEmpty {
+        storedSpaces = workspaces.map { ($0.spaceID, $0.space) }
+    } else {
+        storedSpaces = stored.activeSpace.map { [(activeSpace, $0)] } ?? []
+    }
+    var spaces: [SpaceID: SpaceState] = [:]
     var restoredDisplayByWindow: [WindowID: DisplayID] = [:]
+    var restoredSpaceByWindow: [WindowID: SpaceID] = [:]
 
-    for layout in stored.activeSpace?.layouts ?? [] {
-        guard let displayID = matchDisplay(for: layout, displays: displays) else { continue }
-        let tree = restoreNode(layout.tree, matcher: &matcher, displayID: displayID, restoredDisplayByWindow: &restoredDisplayByWindow)
-        let floating = layout.floating.compactMap { ref -> WindowID? in
-            guard let windowID = matcher.take(ref) else { return nil }
-            restoredDisplayByWindow[windowID] = displayID
-            return windowID
+    for (spaceID, storedSpace) in storedSpaces {
+        var displayStates: [DisplayID: DisplaySpaceState] = [:]
+        for layout in storedSpace.layouts {
+            guard let displayID = matchDisplay(for: layout, displays: displays) else { continue }
+            let tree = restoreNode(
+                layout.tree,
+                matcher: &matcher,
+                displayID: displayID,
+                spaceID: spaceID,
+                restoredDisplayByWindow: &restoredDisplayByWindow,
+                restoredSpaceByWindow: &restoredSpaceByWindow
+            )
+            let floating = layout.floating.compactMap { ref -> WindowID? in
+                guard let windowID = matcher.take(ref) else { return nil }
+                restoredDisplayByWindow[windowID] = displayID
+                restoredSpaceByWindow[windowID] = spaceID
+                return windowID
+            }
+            displayStates[displayID] = DisplaySpaceState(displayID: displayID, tree: tree, floating: floating)
         }
-        displayStates[displayID] = DisplaySpaceState(displayID: displayID, tree: tree, floating: floating)
+        let focused = storedSpace.focused.flatMap { matcher.lookup($0) }
+        spaces[spaceID] = SpaceState(id: spaceID, displays: displayStates, focused: focused)
     }
 
     var windowDisplay = displayOwnership(for: windows.values, displays: displays)
@@ -259,27 +323,45 @@ public func restoreWorld(
         windowDisplay[windowID] = displayID
     }
 
-    for displayID in displays.keys {
-        let existing = displayStates[displayID] ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
-        let alreadyAssigned = Set(occupiedWindows(in: existing.tree)).union(existing.floating)
-        let floating = existing.floating + windowDisplay
-            .filter { windowID, ownedDisplayID in
-                ownedDisplayID == displayID && !alreadyAssigned.contains(windowID)
-            }
-            .map(\.key)
-            .sorted { $0.raw < $1.raw }
-        displayStates[displayID] = DisplaySpaceState(displayID: displayID, tree: existing.tree, floating: floating)
+    var windowSpace = liveWindowSpace
+    for (windowID, spaceID) in restoredSpaceByWindow {
+        windowSpace[windowID] = spaceID
+    }
+    for (windowID, displayID) in windowDisplay where windowSpace[windowID] == nil {
+        windowSpace[windowID] = activeSpaceByDisplay[displayID] ?? activeSpace
     }
 
-    let focused = stored.activeSpace?.focused.flatMap { matcher.lookup($0) }
+    let activeFallbackSpaces = Set(activeSpaceByDisplay.values).union([activeSpace])
+    for spaceID in activeFallbackSpaces where spaces[spaceID] == nil {
+        spaces[spaceID] = SpaceState(id: spaceID, displays: [:], focused: nil)
+    }
+    for spaceID in spaces.keys.sorted(by: { $0.raw < $1.raw }) {
+        guard let space = spaces[spaceID] else { continue }
+        var displayStates = space.displays
+        for displayID in displays.keys {
+            let existing = displayStates[displayID] ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
+            let alreadyAssigned = Set(occupiedWindows(in: existing.tree)).union(existing.floating)
+            let floating = existing.floating + windowDisplay
+                .filter { windowID, ownedDisplayID in
+                    ownedDisplayID == displayID
+                        && windowSpace[windowID] == spaceID
+                        && !alreadyAssigned.contains(windowID)
+                }
+                .map(\.key)
+                .sorted { $0.raw < $1.raw }
+            displayStates[displayID] = DisplaySpaceState(displayID: displayID, tree: existing.tree, floating: floating)
+        }
+        spaces[spaceID] = SpaceState(id: space.id, displays: displayStates, focused: space.focused)
+    }
+
     return World(
         displays: displays,
         activeSpace: activeSpace,
-        spaces: [
-            activeSpace: SpaceState(id: activeSpace, displays: displayStates, focused: focused)
-        ],
+        activeSpaceByDisplay: activeSpaceByDisplay,
+        spaces: sanitizedSpaces(spaces),
         windows: windows,
         windowDisplay: windowDisplay,
+        windowSpace: windowSpace,
         windowConstraints: [:],
         pendingRules: restoredPendingRules(stored.pendingRules, matcher: matcher),
         config: config
@@ -295,6 +377,15 @@ private extension StoredWorld {
                 refs.append(contentsOf: layout.floating)
             }
             if let focused = activeSpace.focused {
+                refs.append(focused)
+            }
+        }
+        for workspace in workspaces ?? [] {
+            for layout in workspace.space.layouts {
+                refs.append(contentsOf: layout.tree.windowRefs)
+                refs.append(contentsOf: layout.floating)
+            }
+            if let focused = workspace.space.focused {
                 refs.append(focused)
             }
         }
@@ -391,7 +482,9 @@ private func restoreNode(
     _ node: StoredNode,
     matcher: inout RestoreMatcher,
     displayID: DisplayID,
-    restoredDisplayByWindow: inout [WindowID: DisplayID]
+    spaceID: SpaceID,
+    restoredDisplayByWindow: inout [WindowID: DisplayID],
+    restoredSpaceByWindow: inout [WindowID: SpaceID]
 ) -> Node {
     switch node {
     case .void:
@@ -399,6 +492,7 @@ private func restoreNode(
     case .leaf(let ref):
         guard let windowID = matcher.take(ref) else { return .void }
         restoredDisplayByWindow[windowID] = displayID
+        restoredSpaceByWindow[windowID] = spaceID
         return .leaf(windowID)
     case .split(let split):
         return .split(makeSplit(
@@ -410,7 +504,9 @@ private func restoreNode(
                         cell.node,
                         matcher: &matcher,
                         displayID: displayID,
-                        restoredDisplayByWindow: &restoredDisplayByWindow
+                        spaceID: spaceID,
+                        restoredDisplayByWindow: &restoredDisplayByWindow,
+                        restoredSpaceByWindow: &restoredSpaceByWindow
                     )
                 )
             }

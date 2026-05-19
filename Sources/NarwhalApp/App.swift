@@ -291,24 +291,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         preserveSpaceLayouts: Bool = false
     ) async -> EnvironmentRefreshResult {
         let displays = providedDisplays ?? displayClient.currentDisplays()
+        let axSnapshot = axClient.windowSnapshot()
+        let topology = spaceClient.spaceTopology(displays: displays, windows: axSnapshot.windows)
         let activeSpace: SpaceID?
         switch spaceClient.activeSpaceID() {
         case .success(let spaceID):
             activeSpace = spaceID
         case .failure(let error):
-            activeSpace = nil
-            reporter.error("Active Space refresh failed (\(reason)): \(error.description)")
+            activeSpace = topology.primaryActiveSpace
+            if activeSpace == nil {
+                reporter.error("Active Space refresh failed (\(reason)): \(error.description)")
+            }
         }
         let snapshot = EnvironmentSnapshot(
             activeSpace: activeSpace,
             displays: displays,
-            axSnapshot: axClient.windowSnapshot(),
+            axSnapshot: axSnapshot,
+            spaceTopology: topology,
             preserveSpaceLayouts: preserveSpaceLayouts
         )
         let result = await worldActor.refreshEnvironment(snapshot)
         let preserved = result.preservedSpaceLayouts ? " preservedSpaceLayouts=true" : ""
         reporter.info(
-            "Environment refreshed (\(reason)): activeSpace=\(result.activeSpace?.raw.description ?? "nil") displays=\(result.displayCount) windows=\(result.windowCount) quality=\(describe(result.quality))\(preserved)"
+            "Environment refreshed (\(reason)): activeSpace=\(result.activeSpace?.raw.description ?? "nil") displays=\(result.displayCount) windows=\(result.windowCount) quality=\(describe(result.quality)) topology=\(topology.quality.rawValue) spaceWindows=\(topology.windowSpace.count)\(preserved)"
         )
         updateOperatingStatus { status in
             status.activeSpace = result.activeSpace
@@ -935,9 +940,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await worldActor.recordExternalFocus(focusedWindowID)
         }
 
-        switch await worldActor.planFocusCycle(from: focusedWindowID, direction: direction) {
-        case .success(let result):
-            return await focusWindow(result, reason: "focus cycle \(direction.rawValue)")
+        switch await worldActor.planFocusCycleCandidates(from: focusedWindowID, direction: direction) {
+        case .success(let results):
+            for (index, result) in results.enumerated() {
+                if await focusWindow(
+                    result,
+                    reason: "focus cycle \(direction.rawValue)",
+                    suppressFailureFeedback: index < results.count - 1
+                ) {
+                    return true
+                }
+            }
+            reporter.error("Focus cycle \(direction.rawValue) exhausted \(results.count) candidate(s)")
+            showOperatorFeedback("Focus cycle failed", tone: .error)
+            return false
         case .failure(let error):
             reporter.error("Focus cycle \(direction.rawValue) rejected by core: \(error.message)")
             showOperatorFeedback("Focus cycle failed: \(error.message)", tone: .error)
@@ -983,7 +999,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func focusWindow(_ result: FocusPlanResult, reason: String) async -> Bool {
+    private func focusWindow(
+        _ result: FocusPlanResult,
+        reason: String,
+        suppressFailureFeedback: Bool = false
+    ) async -> Bool {
         switch axClient.focusWindow(result.window) {
         case .success:
             echoSuppressor.expectFocus(windowID: result.window.id)
@@ -1000,7 +1020,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await updateTiledBordersFromWorld()
                 reporter.info("Removed stale focus target \(result.window.id.description) from active Space after focus failure")
             }
-            showOperatorFeedback("\(reason) failed", tone: .error)
+            if !suppressFailureFeedback {
+                showOperatorFeedback("\(reason) failed", tone: .error)
+            }
             return false
         }
     }
@@ -1399,11 +1421,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
 
-        let snapshot: FocusedWindowSnapshot
-        switch axClient.focusedWindowSnapshot() {
-        case .success(let value):
-            snapshot = value
-        case .failure(let error):
+        guard let snapshot = focusedWindowSnapshotForLayoutOperation(operation) else {
+            let error: AXClientError
+            switch axClient.focusedWindowSnapshot() {
+            case .success:
+                error = .missingFocusedWindow
+            case .failure(let value):
+                error = value
+            }
             reporter.error("\(operation) failed reading focused window: \(error.description)")
             showOperatorFeedback("\(operation) failed: no focused window", tone: .error)
             return nil
@@ -1413,6 +1438,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reporter.info("\(operation) focused \(snapshot.logDescription)")
         logDisplays(displays)
         return FocusedLayoutContext(snapshot: snapshot, displays: displays)
+    }
+
+    @MainActor
+    private func focusedWindowSnapshotForLayoutOperation(_ operation: String) -> FocusedWindowSnapshot? {
+        for attempt in 0..<4 {
+            if case .success(let snapshot) = axClient.focusedWindowSnapshot() {
+                return snapshot
+            }
+            if attempt < 3 {
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.03))
+            }
+        }
+        return nil
     }
 
     @MainActor

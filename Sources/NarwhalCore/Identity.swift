@@ -26,6 +26,16 @@ public struct SpaceID: Hashable, Codable, Sendable {
     }
 }
 
+public struct WorkspaceKey: Hashable, Codable, Sendable {
+    public let displayID: DisplayID
+    public let spaceID: SpaceID
+
+    public init(displayID: DisplayID, spaceID: SpaceID) {
+        self.displayID = displayID
+        self.spaceID = spaceID
+    }
+}
+
 public struct BundleID: Hashable, Codable, Sendable {
     public let raw: String
 

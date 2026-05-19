@@ -199,6 +199,72 @@ struct RestoreTests {
         #expect(world.spaces[activeSpace]?.focused == nil)
     }
 
+    @Test("storedWorld and restoreWorld preserve every known Space layout")
+    func storedWorldAndRestoreWorldPreserveEveryKnownSpaceLayout() throws {
+        let display = DisplayID(raw: 7)
+        let firstSpace = SpaceID(raw: 101)
+        let secondSpace = SpaceID(raw: 202)
+        let first = WindowID(raw: 301)
+        let second = WindowID(raw: 302)
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0, width: 1200)],
+            activeSpace: secondSpace,
+            activeSpaceByDisplay: [display: secondSpace],
+            spaces: [
+                firstSpace: SpaceState(
+                    id: firstSpace,
+                    displays: [
+                        display: DisplaySpaceState(
+                            displayID: display,
+                            tree: pushIntoTree(first, .left, .void),
+                            floating: []
+                        )
+                    ],
+                    focused: first
+                ),
+                secondSpace: SpaceState(
+                    id: secondSpace,
+                    displays: [
+                        display: DisplaySpaceState(
+                            displayID: display,
+                            tree: pushIntoTree(second, .right, .void),
+                            floating: []
+                        )
+                    ],
+                    focused: second
+                )
+            ],
+            windows: [
+                first: metadata(first, title: "First", frame: CGRect(x: 0, y: 0, width: 400, height: 300)),
+                second: metadata(second, title: "Second", frame: CGRect(x: 500, y: 0, width: 400, height: 300))
+            ],
+            windowDisplay: [first: display, second: display],
+            windowSpace: [first: firstSpace, second: secondSpace],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        let stored = storedWorld(from: world)
+        let restored = restoreWorld(
+            from: stored,
+            liveWindows: Array(world.windows.values),
+            displays: world.displays,
+            activeSpace: secondSpace,
+            spaceTopology: SpaceTopology(
+                activeSpaceByDisplay: [display: secondSpace],
+                windowSpace: [first: firstSpace, second: secondSpace],
+                quality: .managedDisplaySpaces
+            ),
+            config: .default
+        )
+
+        #expect((stored.workspaces ?? []).map(\.spaceID).sorted { $0.raw < $1.raw } == [firstSpace, secondSpace])
+        #expect(restored.spaces[firstSpace]?.displays[display]?.tree == pushIntoTree(first, .left, .void))
+        #expect(restored.spaces[secondSpace]?.displays[display]?.tree == pushIntoTree(second, .right, .void))
+        #expect(restored.windowSpace == [first: firstSpace, second: secondSpace])
+    }
+
     @Test("StoredWorld JSON round-trips exactly")
     func storedWorldJSONRoundTripsExactly() throws {
         let ref = storedRef(title: "Window", occurrence: 0, frame: CGRect(x: 1, y: 2, width: 3, height: 4))
