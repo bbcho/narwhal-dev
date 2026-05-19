@@ -653,6 +653,234 @@ struct MVPLayoutTests {
         #expect(apply(.focus(window), to: noActiveSpace) == .failure(.activeSpaceUnavailable))
     }
 
+    @Test("Apply focusDirection selects the adjacent tiled window without changing layout state")
+    func applyFocusDirectionSelectsAdjacentTiledWindow() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let tree = pushIntoTree(second, .right, pushIntoTree(first, .left, .void))
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: tree, floating: [])],
+                    focused: first
+                )
+            ],
+            windows: [
+                first: metadata(for: first),
+                second: metadata(for: second)
+            ],
+            windowDisplay: [
+                first: display,
+                second: display
+            ],
+            windowConstraints: [second: WindowConstraints(minWidth: 500)],
+            pendingRules: [second: .forceFloat],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.focusDirection(.right), to: world) else {
+            Issue.record("Expected focusDirection to succeed")
+            return
+        }
+
+        #expect(next.spaces[space]?.focused == second)
+        #expect(next.spaces[space]?.displays == world.spaces[space]?.displays)
+        #expect(next.displays == world.displays)
+        #expect(next.windows == world.windows)
+        #expect(next.windowDisplay == world.windowDisplay)
+        #expect(next.windowConstraints == world.windowConstraints)
+        #expect(next.pendingRules == world.pendingRules)
+        #expect(next.config == world.config)
+    }
+
+    @Test("Apply focusDirection rejects missing focus and missing neighbors")
+    func applyFocusDirectionRejectsInvalidState() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 1)
+        let focusedWorld = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: .leaf(window), floating: [])],
+                    focused: window
+                )
+            ],
+            windows: [window: metadata(for: window)],
+            windowDisplay: [window: display],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+        let noFocusWorld = World(
+            displays: focusedWorld.displays,
+            activeSpace: focusedWorld.activeSpace,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: focusedWorld.spaces[space]?.displays ?? [:],
+                    focused: nil
+                )
+            ],
+            windows: focusedWorld.windows,
+            windowDisplay: focusedWorld.windowDisplay,
+            windowConstraints: focusedWorld.windowConstraints,
+            pendingRules: focusedWorld.pendingRules,
+            config: focusedWorld.config
+        )
+
+        #expect(apply(.focusDirection(.right), to: noFocusWorld) == .failure(.activeSpaceUnavailable))
+        #expect(apply(.focusDirection(.right), to: focusedWorld) == .failure(.noNeighbor(.right)))
+    }
+
+    @Test("Apply focusCycle follows observed window frame order without changing layout state")
+    func applyFocusCycleFollowsWindowFrameOrder() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let topLeft = WindowID(raw: 1)
+        let topRight = WindowID(raw: 2)
+        let bottomLeft = WindowID(raw: 3)
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: .void, floating: [topLeft, topRight, bottomLeft])],
+                    focused: topLeft
+                )
+            ],
+            windows: [
+                topLeft: metadata(for: topLeft, frame: CGRect(x: 0, y: 0, width: 100, height: 100)),
+                topRight: metadata(for: topRight, frame: CGRect(x: 300, y: 0, width: 100, height: 100)),
+                bottomLeft: metadata(for: bottomLeft, frame: CGRect(x: 0, y: 300, width: 100, height: 100))
+            ],
+            windowDisplay: [
+                topLeft: display,
+                topRight: display,
+                bottomLeft: display
+            ],
+            windowConstraints: [topRight: WindowConstraints(minWidth: 500)],
+            pendingRules: [bottomLeft: .forceFloat],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.focusCycle(.next), to: world) else {
+            Issue.record("Expected next focus cycle to succeed")
+            return
+        }
+        guard case .success(let previous) = apply(.focusCycle(.previous), to: world) else {
+            Issue.record("Expected previous focus cycle to succeed")
+            return
+        }
+
+        #expect(next.spaces[space]?.focused == topRight)
+        #expect(previous.spaces[space]?.focused == bottomLeft)
+        #expect(next.spaces[space]?.displays == world.spaces[space]?.displays)
+        #expect(next.displays == world.displays)
+        #expect(next.windows == world.windows)
+        #expect(next.windowDisplay == world.windowDisplay)
+        #expect(next.windowConstraints == world.windowConstraints)
+        #expect(next.pendingRules == world.pendingRules)
+        #expect(next.config == world.config)
+    }
+
+    @Test("External move updates frame and display ownership without changing layout state")
+    func externalMoveUpdatesFrameAndDisplayOwnershipOnly() throws {
+        let leftDisplay = DisplayID(raw: 1)
+        let rightDisplay = DisplayID(raw: 2)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 1)
+        let other = WindowID(raw: 2)
+        let tree = pushIntoTree(window, .left, .void)
+        let world = World(
+            displays: [
+                leftDisplay: self.display(leftDisplay, x: 0, width: 1200),
+                rightDisplay: self.display(rightDisplay, x: 1200, width: 1200)
+            ],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [leftDisplay: DisplaySpaceState(displayID: leftDisplay, tree: tree, floating: [other])],
+                    focused: other
+                )
+            ],
+            windows: [
+                window: metadata(for: window, frame: CGRect(x: 100, y: 100, width: 300, height: 250)),
+                other: metadata(for: other, frame: CGRect(x: 600, y: 200, width: 300, height: 250))
+            ],
+            windowDisplay: [
+                window: leftDisplay,
+                other: leftDisplay
+            ],
+            windowConstraints: [window: WindowConstraints(minWidth: 500)],
+            pendingRules: [other: .forceFloat],
+            config: .default
+        )
+        let movedFrame = CGRect(x: 1400, y: 80, width: 320, height: 280)
+
+        guard case .success(let next) = apply(.windowMovedExternally(window, movedFrame), to: world) else {
+            Issue.record("Expected external move to succeed")
+            return
+        }
+
+        #expect(next.windows[window]?.frame == movedFrame)
+        #expect(next.windows[other] == world.windows[other])
+        #expect(next.windowDisplay[window] == rightDisplay)
+        #expect(next.spaces == world.spaces)
+        #expect(next.displays == world.displays)
+        #expect(next.windowConstraints == world.windowConstraints)
+        #expect(next.pendingRules == world.pendingRules)
+        #expect(next.config == world.config)
+        #expect(apply(.windowMovedExternally(window, movedFrame), to: next) == .success(next))
+    }
+
+    @Test("External resize updates size while preserving origin and layout state")
+    func externalResizeUpdatesSizeOnly() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 1)
+        let originalFrame = CGRect(x: 100, y: 120, width: 300, height: 250)
+        let resizedFrame = CGRect(x: 100, y: 120, width: 640, height: 360)
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: .void, floating: [window])],
+                    focused: window
+                )
+            ],
+            windows: [window: metadata(for: window, frame: originalFrame)],
+            windowDisplay: [window: display],
+            windowConstraints: [window: WindowConstraints(minWidth: 500)],
+            pendingRules: [window: .forceFloat],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.windowResizedExternally(window, resizedFrame.size), to: world) else {
+            Issue.record("Expected external resize to succeed")
+            return
+        }
+
+        #expect(next.windows[window]?.frame == resizedFrame)
+        #expect(next.windowDisplay[window] == display)
+        #expect(next.spaces == world.spaces)
+        #expect(next.displays == world.displays)
+        #expect(next.windowConstraints == world.windowConstraints)
+        #expect(next.pendingRules == world.pendingRules)
+        #expect(next.config == world.config)
+    }
+
     @Test("Balance tree normalizes every split weight without changing slots")
     func balanceTreeNormalizesEverySplitWeight() throws {
         let first = WindowID(raw: 1)

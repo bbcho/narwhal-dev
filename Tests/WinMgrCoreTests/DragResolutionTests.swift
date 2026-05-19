@@ -190,9 +190,69 @@ struct DragResolutionTests {
         #expect(bottomRight == CGRect(x: 500, y: 400, width: 500, height: 400))
     }
 
-    @Test("Drop at unsupported subtree zone action fails explicitly")
-    func dropAtUnsupportedSubtreeZoneActionFailsExplicitly() {
-        let window = WindowID(raw: 23)
+    @Test("Drop at subtree zone centers the window inside the target subtree")
+    func dropAtSubtreeZoneCentersWindowInsideTargetSubtree() throws {
+        let first = WindowID(raw: 23)
+        let second = WindowID(raw: 24)
+        let dropped = WindowID(raw: 25)
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let config = Config(
+            keymap: [],
+            rules: [],
+            zones: [zone("subtree", x: 0, y: 0, w: 0.5, h: 0.5, action: .insertAtSubtree([0]))],
+            gaps: Gaps(inner: 0, outer: Insets(top: 0, left: 0, bottom: 0, right: 0)),
+            border: .default,
+            hud: .default,
+            dragModifier: [.shift]
+        )
+        let tree = pushIntoTree(second, .right, pushIntoTree(first, .left, .void))
+        let world = World(
+            displays: [display: displayInfo(display, x: 0, y: 0, width: 1000, height: 800)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: tree, floating: [dropped])],
+                    focused: first
+                )
+            ],
+            windows: [
+                first: metadata(for: first),
+                second: metadata(for: second),
+                dropped: metadata(for: dropped)
+            ],
+            windowDisplay: [
+                first: display,
+                second: display,
+                dropped: display
+            ],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: config
+        )
+
+        guard case .success(let next) = apply(.dropAtZone(dropped, display, ZoneID(raw: "subtree")), to: world) else {
+            Issue.record("Expected subtree-zone drop to succeed")
+            return
+        }
+
+        let nextTree = try #require(next.spaces[space]?.displays[display]?.tree)
+        #expect(slots(in: nextTree) == [
+            TreeSlot(path: [0, 0], occupancy: .empty),
+            TreeSlot(path: [0, 1, 0], occupancy: .occupied(first)),
+            TreeSlot(path: [0, 1, 1], occupancy: .occupied(dropped)),
+            TreeSlot(path: [0, 2], occupancy: .empty),
+            TreeSlot(path: [1], occupancy: .occupied(second))
+        ])
+        #expect(next.spaces[space]?.displays[display]?.floating == [])
+        #expect(next.spaces[space]?.focused == dropped)
+        #expect(next.windowDisplay[dropped] == display)
+    }
+
+    @Test("Drop at invalid subtree path fails explicitly")
+    func dropAtInvalidSubtreePathFailsExplicitly() {
+        let window = WindowID(raw: 26)
         let display = DisplayID(raw: 1)
         let config = Config(
             keymap: [],
@@ -214,7 +274,7 @@ struct DragResolutionTests {
 
         let result = apply(.dropAtZone(window, display, ZoneID(raw: "subtree")), to: world)
 
-        #expect(result == .failure(.configInvalid("zone action is not implemented in the current build: insertAtSubtree([0, 1])")))
+        #expect(result == .failure(.configInvalid("zone subtree path not found: [0, 1]")))
     }
 
     private func zone(
@@ -294,6 +354,19 @@ struct DragResolutionTests {
             frame: try #require(next.displays[display]?.visibleFrame),
             gaps: Gaps(inner: 0, outer: Insets(top: 0, left: 0, bottom: 0, right: 0))
         ).tiled[window]
+    }
+
+    private func metadata(for window: WindowID) -> WindowMetadata {
+        WindowMetadata(
+            id: window,
+            bundleID: BundleID(raw: "com.example"),
+            title: "Window \(window.raw)",
+            role: "AXWindow",
+            pid: 42,
+            frame: CGRect(x: 0, y: 0, width: 100, height: 100),
+            isResizable: true,
+            isMinimized: false
+        )
     }
 }
 

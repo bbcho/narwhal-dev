@@ -21,6 +21,11 @@ struct ConfigTests {
             HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .command]), action: .command(.push(.right))),
             HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .command]), action: .command(.push(.up))),
             HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .command]), action: .command(.push(.down))),
+            HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.left, delta: 0.25))),
+            HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.right, delta: 0.25))),
+            HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.up, delta: 0.25))),
+            HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.down, delta: 0.25))),
+            HotkeyBinding(key: KeySpec(key: "return", modifiers: [.control, .option, .command]), action: .command(.balance)),
             HotkeyBinding(key: KeySpec(key: "/", modifiers: [.control, .option]), action: .showCommands),
             HotkeyBinding(key: KeySpec(key: "delete", modifiers: [.control, .option]), action: .command(.resetLayout))
         ])
@@ -344,6 +349,11 @@ struct ConfigTests {
                 binding(key: "l", modifiers: ["control", "option", "command"], action: ["type": .string("push"), "direction": .string("right")]),
                 binding(key: "k", modifiers: ["control", "option", "command"], action: ["type": .string("push"), "direction": .string("up")]),
                 binding(key: "j", modifiers: ["control", "option", "command"], action: ["type": .string("push"), "direction": .string("down")]),
+                binding(key: "h", modifiers: ["control", "option", "shift", "command"], action: ["type": .string("resize_split"), "direction": .string("left"), "delta": .number(0.25)]),
+                binding(key: "l", modifiers: ["control", "option", "shift", "command"], action: ["type": .string("resize_split"), "direction": .string("right"), "delta": .number(0.25)]),
+                binding(key: "k", modifiers: ["control", "option", "shift", "command"], action: ["type": .string("resize_split"), "direction": .string("up"), "delta": .number(0.25)]),
+                binding(key: "j", modifiers: ["control", "option", "shift", "command"], action: ["type": .string("resize_split"), "direction": .string("down"), "delta": .number(0.25)]),
+                binding(key: "return", modifiers: ["control", "option", "command"], action: ["type": .string("balance")]),
                 binding(key: "/", modifiers: ["control", "option"], action: ["type": .string("show_commands")]),
                 binding(key: "delete", modifiers: ["control", "option"], action: ["type": .string("reset_layout")])
             ]),

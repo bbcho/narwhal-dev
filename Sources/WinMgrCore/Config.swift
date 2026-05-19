@@ -164,6 +164,11 @@ public enum DefaultKeymap {
         HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .command]), action: .command(.push(.right))),
         HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .command]), action: .command(.push(.up))),
         HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .command]), action: .command(.push(.down))),
+        HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.left, delta: 0.25))),
+        HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.right, delta: 0.25))),
+        HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.up, delta: 0.25))),
+        HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.down, delta: 0.25))),
+        HotkeyBinding(key: KeySpec(key: "return", modifiers: [.control, .option, .command]), action: .command(.balance)),
         HotkeyBinding(key: KeySpec(key: "/", modifiers: [.control, .option]), action: .showCommands),
         HotkeyBinding(key: KeySpec(key: "delete", modifiers: [.control, .option]), action: .command(.resetLayout))
     ]

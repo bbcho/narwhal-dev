@@ -230,7 +230,7 @@ private func resolvedDisplayID(
         .first {
         return preferredDisplay.id
     }
-    return displayContaining(frame: metadata.frame, displays: displays)
+    return displayContainingFrame(metadata.frame, displays: displays)
 }
 
 private func displayOwnership(
@@ -238,12 +238,12 @@ private func displayOwnership(
     displays: [DisplayID: DisplayInfo]
 ) -> [WindowID: DisplayID] {
     windows.reduce(into: [:]) { result, metadata in
-        guard let displayID = displayContaining(frame: metadata.frame, displays: displays) else { return }
+        guard let displayID = displayContainingFrame(metadata.frame, displays: displays) else { return }
         result[metadata.id] = displayID
     }
 }
 
-private func displayContaining(frame: CGRect, displays: [DisplayID: DisplayInfo]) -> DisplayID? {
+func displayContainingFrame(_ frame: CGRect, displays: [DisplayID: DisplayInfo]) -> DisplayID? {
     if let byIntersection = displays.max(by: { lhs, rhs in
         lhs.value.visibleFrame.intersection(frame).area < rhs.value.visibleFrame.intersection(frame).area
     }), byIntersection.value.visibleFrame.intersection(frame).area > 0 {

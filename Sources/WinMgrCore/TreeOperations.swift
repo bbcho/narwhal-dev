@@ -96,6 +96,10 @@ public enum TreeResizeError: Error, Equatable, Sendable {
     case nonPositiveWeight
 }
 
+public enum TreeSubtreeInsertError: Error, Equatable, Sendable {
+    case pathNotFound(NodePath)
+}
+
 public func resizeSplitInTree(
     _ window: WindowID,
     _ direction: Direction,
@@ -118,6 +122,15 @@ public func resizeSplitInTree(
     )
 }
 
+public func insertIntoSubtree(
+    _ window: WindowID,
+    path: NodePath,
+    _ node: Node
+) -> Result<Node, TreeSubtreeInsertError> {
+    let treeWithoutWindow = clearWindowPreservingZones(window, from: node)
+    return insertIntoSubtreeAfterClearing(window, path: path, fullPath: path, treeWithoutWindow)
+}
+
 private func clearWindowPreservingZones(_ window: WindowID, from node: Node) -> Node {
     switch node {
     case .void:
@@ -129,6 +142,35 @@ private func clearWindowPreservingZones(_ window: WindowID, from node: Node) -> 
             makeCell(weight: cell.weight, node: clearWindowPreservingZones(window, from: cell.node))
         }
         return .split(makeSplit(axis: split.axis, cells: cells))
+    }
+}
+
+private func insertIntoSubtreeAfterClearing(
+    _ window: WindowID,
+    path: NodePath,
+    fullPath: NodePath,
+    _ node: Node
+) -> Result<Node, TreeSubtreeInsertError> {
+    guard let nextIndex = path.first else {
+        return .success(insertAtCenter(window, node))
+    }
+    guard case .split(let split) = node, split.cells.indices.contains(nextIndex) else {
+        return .failure(.pathNotFound(fullPath))
+    }
+
+    switch insertIntoSubtreeAfterClearing(
+        window,
+        path: Array(path.dropFirst()),
+        fullPath: fullPath,
+        split.cells[nextIndex].node
+    ) {
+    case .success(let child):
+        var cells = split.cells
+        let old = cells[nextIndex]
+        cells[nextIndex] = makeCell(weight: old.weight, node: child)
+        return .success(.split(makeSplit(axis: split.axis, cells: cells)))
+    case .failure(let error):
+        return .failure(error)
     }
 }
 

@@ -8,10 +8,10 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
         return applyCenter(windowID, to: world)
     case .eject(let windowID):
         return applyEject(windowID, to: world)
-    case .focusDirection:
-        return commandNotImplemented(command)
-    case .focusCycle:
-        return commandNotImplemented(command)
+    case .focusDirection(let direction):
+        return applyFocusDirection(direction, to: world)
+    case .focusCycle(let direction):
+        return applyFocusCycle(direction, to: world)
     case .focus(let windowID):
         return applyFocus(windowID, to: world)
     case .swapInTree(let windowID, let direction):
@@ -34,10 +34,10 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
         return .success(worldByOpeningWindow(metadata, in: world))
     case .windowClosed(let windowID):
         return .success(worldByClosingWindow(windowID, in: world))
-    case .windowMovedExternally:
-        return commandNotImplemented(command)
-    case .windowResizedExternally:
-        return commandNotImplemented(command)
+    case .windowMovedExternally(let windowID, let frame):
+        return applyExternalMove(windowID, frame: frame, to: world)
+    case .windowResizedExternally(let windowID, let size):
+        return applyExternalResize(windowID, size: size, to: world)
     case .environmentChanged(let snapshot):
         return .success(reconcileEnvironment(snapshot, in: world))
     case .startupConverge:
@@ -47,14 +47,10 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
     }
 }
 
-private func commandNotImplemented(_ command: Command) -> Result<World, CommandError> {
-    .failure(.configInvalid("command not implemented in current core: \(String(describing: command))"))
-}
-
 private func applyPush(_ windowID: WindowID, direction: Direction, to world: World) -> Result<World, CommandError> {
     switch retileTarget(windowID, displayID: nil, in: world) {
     case .success(let target):
-        return .success(worldByRetiling(target, insertion: .edge(direction), in: world))
+        return worldByRetiling(target, insertion: .edge(direction), in: world)
     case .failure(let error):
         return .failure(error)
     }
@@ -78,20 +74,20 @@ private func applyDropAtZone(
     }
     switch zone.action {
     case .insertAsHalf(let direction):
-        return .success(worldByRetiling(target, insertion: .edge(direction), in: world))
+        return worldByRetiling(target, insertion: .edge(direction), in: world)
     case .insertAsQuarter(let corner):
-        return .success(worldByRetiling(target, insertion: .quarter(corner), in: world))
+        return worldByRetiling(target, insertion: .quarter(corner), in: world)
     case .insertAsCenter:
-        return .success(worldByRetiling(target, insertion: .center, in: world))
-    case .insertAtSubtree:
-        return .failure(.configInvalid("zone action is not implemented in the current build: \(String(describing: zone.action))"))
+        return worldByRetiling(target, insertion: .center, in: world)
+    case .insertAtSubtree(let path):
+        return worldByRetiling(target, insertion: .subtree(path), in: world)
     }
 }
 
 private func applyCenter(_ windowID: WindowID, to world: World) -> Result<World, CommandError> {
     switch retileTarget(windowID, displayID: nil, in: world) {
     case .success(let target):
-        return .success(worldByRetiling(target, insertion: .center, in: world))
+        return worldByRetiling(target, insertion: .center, in: world)
     case .failure(let error):
         return .failure(error)
     }
@@ -152,7 +148,7 @@ private func applyToggleFloat(_ windowID: WindowID, to world: World) -> Result<W
 
     switch retileTarget(windowID, displayID: nil, in: world) {
     case .success(let target):
-        return .success(worldByRetiling(target, insertion: .center, in: world))
+        return worldByRetiling(target, insertion: .center, in: world)
     case .failure(let error):
         return .failure(error)
     }
@@ -180,6 +176,44 @@ private func applyFocus(_ windowID: WindowID, to world: World) -> Result<World, 
         pendingRules: world.pendingRules,
         config: world.config
     ))
+}
+
+private func applyFocusDirection(_ direction: Direction, to world: World) -> Result<World, CommandError> {
+    guard let activeSpace = world.activeSpace,
+          let focusedWindowID = world.spaces[activeSpace]?.focused
+    else {
+        return .failure(.activeSpaceUnavailable)
+    }
+    guard world.windows[focusedWindowID] != nil else {
+        return .failure(.windowNotFound(focusedWindowID))
+    }
+
+    let currentLayout: Layout
+    switch flattenedLayout(of: world) {
+    case .success(let layout):
+        currentLayout = layout
+    case .failure(let unsatisfiable):
+        return .failure(.layoutUnsatisfiable(unsatisfiable))
+    }
+    guard let targetWindowID = focusTarget(in: currentLayout, from: focusedWindowID, direction: direction) else {
+        return .failure(.noNeighbor(direction))
+    }
+    return applyFocus(targetWindowID, to: world)
+}
+
+private func applyFocusCycle(_ direction: FocusCycleDirection, to world: World) -> Result<World, CommandError> {
+    guard let activeSpace = world.activeSpace else {
+        return .failure(.activeSpaceUnavailable)
+    }
+    let focusedWindowID = world.spaces[activeSpace]?.focused
+    guard let targetWindowID = focusCycleTarget(
+        windows: Array(world.windows.values),
+        from: focusedWindowID,
+        direction: direction
+    ) else {
+        return .failure(.windowNotFound(focusedWindowID ?? WindowID(raw: 0)))
+    }
+    return applyFocus(targetWindowID, to: world)
 }
 
 private func applySwap(_ windowID: WindowID, direction: Direction, to world: World) -> Result<World, CommandError> {
@@ -350,15 +384,19 @@ private enum RetileInsertion {
     case edge(Direction)
     case quarter(Corner)
     case center
+    case subtree(NodePath)
 
-    func insert(_ windowID: WindowID, into tree: Node) -> Node {
+    func insert(_ windowID: WindowID, into tree: Node) -> Result<Node, CommandError> {
         switch self {
         case .edge(let direction):
-            return pushIntoTree(windowID, direction, tree)
+            return .success(pushIntoTree(windowID, direction, tree))
         case .quarter(let corner):
-            return quarterIntoTree(windowID, corner, tree)
+            return .success(quarterIntoTree(windowID, corner, tree))
         case .center:
-            return centerIntoTree(windowID, tree)
+            return .success(centerIntoTree(windowID, tree))
+        case .subtree(let path):
+            return insertIntoSubtree(windowID, path: path, tree)
+                .mapError(commandError(from:))
         }
     }
 }
@@ -387,7 +425,7 @@ private func retileTarget(
     return .success(RetileTarget(windowID: windowID, displayID: displayID, activeSpace: activeSpace))
 }
 
-private func worldByRetiling(_ target: RetileTarget, insertion: RetileInsertion, in world: World) -> World {
+private func worldByRetiling(_ target: RetileTarget, insertion: RetileInsertion, in world: World) -> Result<World, CommandError> {
     let currentSpace = world.spaces[target.activeSpace] ?? SpaceState(id: target.activeSpace, displays: [:], focused: nil)
     var displayStates = currentSpace.displays.mapValues { displayState in
         DisplaySpaceState(
@@ -401,9 +439,16 @@ private func worldByRetiling(_ target: RetileTarget, insertion: RetileInsertion,
         tree: .void,
         floating: []
     )
+    let targetTree: Node
+    switch insertion.insert(target.windowID, into: targetDisplayState.tree) {
+    case .success(let tree):
+        targetTree = tree
+    case .failure(let error):
+        return .failure(error)
+    }
     displayStates[target.displayID] = DisplaySpaceState(
         displayID: target.displayID,
-        tree: insertion.insert(target.windowID, into: targetDisplayState.tree),
+        tree: targetTree,
         floating: targetDisplayState.floating.filter { $0 != target.windowID }
     )
 
@@ -413,7 +458,7 @@ private func worldByRetiling(_ target: RetileTarget, insertion: RetileInsertion,
     var windowDisplay = world.windowDisplay
     windowDisplay[target.windowID] = target.displayID
 
-    return World(
+    return .success(World(
         displays: world.displays,
         activeSpace: target.activeSpace,
         spaces: spaces,
@@ -422,7 +467,14 @@ private func worldByRetiling(_ target: RetileTarget, insertion: RetileInsertion,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config
-    )
+    ))
+}
+
+private func commandError(from error: TreeSubtreeInsertError) -> CommandError {
+    switch error {
+    case .pathNotFound(let path):
+        return .configInvalid("zone subtree path not found: \(path)")
+    }
 }
 
 public func resetTilingState(in world: World) -> World {
@@ -481,6 +533,54 @@ private func applyExternalFocus(_ windowID: WindowID, to world: World) -> Result
         spaces: spaces,
         windows: world.windows,
         windowDisplay: world.windowDisplay,
+        windowConstraints: world.windowConstraints,
+        pendingRules: world.pendingRules,
+        config: world.config
+    ))
+}
+
+private func applyExternalMove(_ windowID: WindowID, frame: CGRect, to world: World) -> Result<World, CommandError> {
+    applyExternalFrameUpdate(windowID, frame: frame, to: world)
+}
+
+private func applyExternalResize(_ windowID: WindowID, size: CGSize, to world: World) -> Result<World, CommandError> {
+    guard let metadata = world.windows[windowID] else {
+        return .failure(.windowNotFound(windowID))
+    }
+    let frame = CGRect(origin: metadata.frame.origin, size: size)
+    return applyExternalFrameUpdate(windowID, frame: frame, to: world)
+}
+
+private func applyExternalFrameUpdate(_ windowID: WindowID, frame: CGRect, to world: World) -> Result<World, CommandError> {
+    guard let metadata = world.windows[windowID] else {
+        return .failure(.windowNotFound(windowID))
+    }
+
+    var windows = world.windows
+    windows[windowID] = WindowMetadata(
+        id: metadata.id,
+        bundleID: metadata.bundleID,
+        title: metadata.title,
+        role: metadata.role,
+        pid: metadata.pid,
+        frame: frame,
+        isResizable: metadata.isResizable,
+        isMinimized: metadata.isMinimized
+    )
+
+    var windowDisplay = world.windowDisplay
+    if let displayID = displayContainingFrame(frame, displays: world.displays) {
+        windowDisplay[windowID] = displayID
+    } else {
+        windowDisplay.removeValue(forKey: windowID)
+    }
+
+    return .success(World(
+        displays: world.displays,
+        activeSpace: world.activeSpace,
+        spaces: world.spaces,
+        windows: windows,
+        windowDisplay: windowDisplay,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config

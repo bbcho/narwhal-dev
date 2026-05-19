@@ -70,11 +70,12 @@ final class Overlay {
     }
 
     private func showCommandOverlay(bindings: [HotkeyBinding]) {
-        let metrics = CommandOverlayMetrics(bindings: bindings)
+        let sections = commandOverlaySections(for: bindings)
+        let metrics = CommandOverlayMetrics(sections: sections)
         let frame = commandOverlayFrame(on: commandOverlayScreen(), contentSize: metrics.contentSize)
         let window = commandWindow ?? makeCommandWindow(frame: frame)
         window.contentView = CommandOverlayView(
-            bindings: bindings,
+            sections: sections,
             keyColumnWidth: metrics.keyColumnWidth,
             rowsHeight: metrics.rowsHeight
         )
@@ -167,14 +168,14 @@ private final class CommandOverlayView: NSView {
     private weak var scrollView: NSScrollView?
     private weak var rowsDocumentView: NSView?
 
-    init(bindings: [HotkeyBinding], keyColumnWidth: CGFloat, rowsHeight: CGFloat) {
+    init(sections: [CommandOverlaySection], keyColumnWidth: CGFloat, rowsHeight: CGFloat) {
         self.rowsHeight = rowsHeight
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.withAlphaComponent(0.78).cgColor
         layer?.cornerRadius = 16
         layer?.masksToBounds = true
-        build(bindings: bindings, keyColumnWidth: keyColumnWidth)
+        build(sections: sections, keyColumnWidth: keyColumnWidth)
     }
 
     required init?(coder: NSCoder) {
@@ -187,26 +188,26 @@ private final class CommandOverlayView: NSView {
         rowsDocumentView.setFrameSize(NSSize(width: scrollView.contentView.bounds.width, height: rowsHeight))
     }
 
-    private func build(bindings: [HotkeyBinding], keyColumnWidth: CGFloat) {
+    private func build(sections: [CommandOverlaySection], keyColumnWidth: CGFloat) {
         let title = NSTextField(labelWithString: "WinMgr Commands")
         title.font = CommandOverlayLayout.titleFont
         title.textColor = .white
 
-        let subtitle = NSTextField(labelWithString: "Press the shortcut again to hide this overlay.")
+        let subtitle = NSTextField(labelWithString: "Active shortcuts grouped by what they do.")
         subtitle.font = CommandOverlayLayout.subtitleFont
         subtitle.textColor = NSColor.white.withAlphaComponent(0.72)
 
-        let rows = bindings.map { binding in
-            CommandRowView(key: describe(binding.key), action: describe(binding.action), keyColumnWidth: keyColumnWidth)
+        let sectionViews = sections.map { section in
+            CommandSectionView(section: section, keyColumnWidth: keyColumnWidth)
         }
-        let rowStack = NSStackView(views: rows)
-        rowStack.translatesAutoresizingMaskIntoConstraints = false
-        rowStack.orientation = .vertical
-        rowStack.alignment = .leading
-        rowStack.spacing = CommandOverlayLayout.rowSpacing
+        let sectionStack = NSStackView(views: sectionViews)
+        sectionStack.translatesAutoresizingMaskIntoConstraints = false
+        sectionStack.orientation = .vertical
+        sectionStack.alignment = .leading
+        sectionStack.spacing = CommandOverlayLayout.sectionSpacing
 
         let documentView = FlippedDocumentView(frame: CGRect(x: 0, y: 0, width: 1, height: rowsHeight))
-        documentView.addSubview(rowStack)
+        documentView.addSubview(sectionStack)
 
         let scrollView = NSScrollView()
         scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -232,11 +233,53 @@ private final class CommandOverlayView: NSView {
             stack.topAnchor.constraint(equalTo: topAnchor, constant: CommandOverlayLayout.topPadding),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -CommandOverlayLayout.bottomPadding),
             scrollView.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            rowStack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor),
-            rowStack.trailingAnchor.constraint(equalTo: documentView.trailingAnchor),
-            rowStack.topAnchor.constraint(equalTo: documentView.topAnchor),
-            rowStack.bottomAnchor.constraint(equalTo: documentView.bottomAnchor)
+            sectionStack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor),
+            sectionStack.trailingAnchor.constraint(equalTo: documentView.trailingAnchor),
+            sectionStack.topAnchor.constraint(equalTo: documentView.topAnchor),
+            sectionStack.bottomAnchor.constraint(equalTo: documentView.bottomAnchor)
         ])
+    }
+}
+
+@MainActor
+private final class CommandSectionView: NSView {
+    init(section: CommandOverlaySection, keyColumnWidth: CGFloat) {
+        super.init(frame: .zero)
+
+        let header = NSTextField(labelWithString: section.title)
+        header.font = CommandOverlayLayout.sectionFont
+        header.textColor = NSColor.white.withAlphaComponent(0.58)
+        header.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let rows = section.rows.map { row in
+            CommandRowView(key: row.key, action: row.action, keyColumnWidth: keyColumnWidth)
+        }
+        let rowStack = NSStackView(views: rows)
+        rowStack.translatesAutoresizingMaskIntoConstraints = false
+        rowStack.orientation = .vertical
+        rowStack.alignment = .leading
+        rowStack.spacing = CommandOverlayLayout.rowSpacing
+
+        let stack = NSStackView(views: [header, rowStack])
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = CommandOverlayLayout.sectionHeaderSpacing
+        addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            rowStack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            rowStack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            heightAnchor.constraint(equalToConstant: CommandOverlayLayout.sectionHeight(rowCount: section.rows.count))
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        nil
     }
 }
 
@@ -288,26 +331,35 @@ private struct CommandOverlayMetrics {
     let keyColumnWidth: CGFloat
     let rowsHeight: CGFloat
 
-    init(bindings: [HotkeyBinding]) {
-        let keyTexts = bindings.map { describe($0.key) }
-        let actionTexts = bindings.map { describe($0.action) }
+    init(sections: [CommandOverlaySection]) {
+        let rows = sections.flatMap(\.rows)
+        let keyTexts = rows.map(\.key)
+        let actionTexts = rows.map(\.action)
         let measuredKeyWidth = keyTexts.map {
             CommandOverlayLayout.measure($0, font: CommandOverlayLayout.keyFont).width
         }.max() ?? 0
         let measuredActionWidth = actionTexts.map {
             CommandOverlayLayout.measure($0, font: CommandOverlayLayout.actionFont).width
         }.max() ?? 0
+        let measuredSectionWidth = sections.map {
+            CommandOverlayLayout.measure($0.title, font: CommandOverlayLayout.sectionFont).width
+        }.max() ?? 0
 
         keyColumnWidth = ceil(max(CommandOverlayLayout.minimumKeyColumnWidth, measuredKeyWidth))
-        rowsHeight = CommandOverlayLayout.rowsHeight(count: bindings.count)
+        rowsHeight = CommandOverlayLayout.sectionsHeight(sections)
 
         let titleWidth = CommandOverlayLayout.measure("WinMgr Commands", font: CommandOverlayLayout.titleFont).width
         let subtitleWidth = CommandOverlayLayout.measure(
-            "Press the shortcut again to hide this overlay.",
+            "Active shortcuts grouped by what they do.",
             font: CommandOverlayLayout.subtitleFont
         ).width
         let commandWidth = keyColumnWidth + CommandOverlayLayout.rowGap + ceil(measuredActionWidth)
-        let contentWidth = CommandOverlayLayout.horizontalPadding * 2 + max(titleWidth, subtitleWidth, commandWidth)
+        let contentWidth = CommandOverlayLayout.horizontalPadding * 2 + max(
+            titleWidth,
+            subtitleWidth,
+            measuredSectionWidth,
+            commandWidth
+        )
         let contentHeight = CommandOverlayLayout.topPadding
             + CommandOverlayLayout.lineHeight(font: CommandOverlayLayout.titleFont)
             + CommandOverlayLayout.stackSpacing
@@ -326,18 +378,34 @@ private enum CommandOverlayLayout {
     static let topPadding: CGFloat = 28
     static let bottomPadding: CGFloat = 28
     static let stackSpacing: CGFloat = 16
+    static let sectionSpacing: CGFloat = 18
+    static let sectionHeaderSpacing: CGFloat = 8
     static let rowSpacing: CGFloat = 8
     static let rowGap: CGFloat = 18
     static let rowHeight: CGFloat = 22
+    static let sectionHeaderHeight: CGFloat = 16
     static let minimumKeyColumnWidth: CGFloat = 120
     static let titleFont = NSFont.systemFont(ofSize: 24, weight: .semibold)
     static let subtitleFont = NSFont.systemFont(ofSize: 13, weight: .regular)
+    static let sectionFont = NSFont.systemFont(ofSize: 11, weight: .semibold)
     static let keyFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .semibold)
     static let actionFont = NSFont.systemFont(ofSize: 15, weight: .regular)
 
     static func rowsHeight(count: Int) -> CGFloat {
         guard count > 0 else { return 0 }
         return CGFloat(count) * rowHeight + CGFloat(count - 1) * rowSpacing
+    }
+
+    static func sectionHeight(rowCount: Int) -> CGFloat {
+        sectionHeaderHeight + sectionHeaderSpacing + rowsHeight(count: rowCount)
+    }
+
+    static func sectionsHeight(_ sections: [CommandOverlaySection]) -> CGFloat {
+        guard !sections.isEmpty else { return 0 }
+        let sectionHeights = sections.reduce(CGFloat(0)) { total, section in
+            total + sectionHeight(rowCount: section.rows.count)
+        }
+        return sectionHeights + CGFloat(sections.count - 1) * sectionSpacing
     }
 
     static func measure(_ text: String, font: NSFont) -> CGSize {
@@ -414,39 +482,176 @@ private func describe(_ key: KeySpec) -> String {
 }
 
 private func describe(_ action: HotkeyAction) -> String {
-    switch action {
-    case .command(let template):
-        return describe(template)
-    case .reloadConfig:
-        return "Reload config"
-    case .showCommands:
-        return "Show commands"
-    }
+    commandOverlayDescription(for: action)
 }
 
 private func describe(_ template: CommandTemplate) -> String {
+    commandOverlayDescription(for: .command(template))
+}
+
+private struct CommandOverlaySection {
+    let title: String
+    let rows: [CommandOverlayRow]
+}
+
+private struct CommandOverlayRow {
+    let key: String
+    let action: String
+}
+
+private enum CommandOverlayCategory: CaseIterable {
+    case movement
+    case placement
+    case arrangement
+    case system
+
+    var title: String {
+        switch self {
+        case .movement:
+            return "Movement"
+        case .placement:
+            return "Window Placement"
+        case .arrangement:
+            return "Layout Arrangement"
+        case .system:
+            return "System"
+        }
+    }
+}
+
+private func commandOverlaySections(for bindings: [HotkeyBinding]) -> [CommandOverlaySection] {
+    var rowsByCategory: [CommandOverlayCategory: [CommandOverlayRow]] = [:]
+    for binding in bindings {
+        let category = commandOverlayCategory(for: binding.action)
+        rowsByCategory[category, default: []].append(CommandOverlayRow(
+            key: describe(binding.key),
+            action: commandOverlayDescription(for: binding.action)
+        ))
+    }
+
+    let sections = CommandOverlayCategory.allCases.compactMap { category -> CommandOverlaySection? in
+        guard let rows = rowsByCategory[category], !rows.isEmpty else { return nil }
+        return CommandOverlaySection(title: category.title, rows: rows)
+    }
+    if !sections.isEmpty {
+        return sections
+    }
+    return [
+        CommandOverlaySection(
+            title: "System",
+            rows: [CommandOverlayRow(key: "", action: "No active command shortcuts in the current config")]
+        )
+    ]
+}
+
+private func commandOverlayCategory(for action: HotkeyAction) -> CommandOverlayCategory {
+    switch action {
+    case .command(let template):
+        switch template {
+        case .focusDirection, .focusCycle:
+            return .movement
+        case .push, .center, .eject, .toggleFloat:
+            return .placement
+        case .swap, .resizeSplit, .balance:
+            return .arrangement
+        case .resetLayout:
+            return .system
+        }
+    case .reloadConfig, .showCommands:
+        return .system
+    }
+}
+
+private func commandOverlayDescription(for action: HotkeyAction) -> String {
+    switch action {
+    case .command(let template):
+        return commandOverlayDescription(for: template)
+    case .reloadConfig:
+        return "Reload config and rebind shortcuts"
+    case .showCommands:
+        return "Show or hide this command overlay"
+    }
+}
+
+private func commandOverlayDescription(for template: CommandTemplate) -> String {
     switch template {
     case .push(let direction):
-        return "Push focused window \(direction.rawValue)"
+        return "Tile focused window into the \(edgeName(direction)) lane"
     case .center:
-        return "Center focused window"
+        return "Tile focused window into the center lane"
     case .eject:
-        return "Float focused tiled window"
+        return "Remove focused tiled window from the layout and leave it floating"
     case .swap(let direction):
-        return "Swap focused window \(direction.rawValue)"
+        return "Swap focused tiled window with the nearest tiled neighbor \(neighborName(direction))"
     case .resizeSplit(let direction, let delta):
-        return "Resize split \(direction.rawValue) by \(delta)"
+        return resizeDescription(direction: direction, delta: delta)
     case .focusDirection(let direction):
-        return "Focus window \(direction.rawValue)"
+        return "Move focus to the nearest tiled window \(neighborName(direction))"
     case .focusCycle(let direction):
-        return "Focus \(direction.rawValue) visible window"
+        return "Focus the \(direction.rawValue) visible window in screen order"
     case .toggleFloat:
-        return "Toggle focused window floating"
+        return "If tiled, float focused window; if floating, tile it in the center"
     case .balance:
-        return "Balance active Space"
+        return "Reset active Space split weights to equal sizes"
     case .resetLayout:
-        return "Reset layout memory"
+        return "Clear tiling state, floating order, focus memory, and constraints"
     }
+}
+
+private func edgeName(_ direction: Direction) -> String {
+    switch direction {
+    case .left:
+        return "left edge"
+    case .right:
+        return "right edge"
+    case .up:
+        return "top edge"
+    case .down:
+        return "bottom edge"
+    }
+}
+
+private func neighborName(_ direction: Direction) -> String {
+    switch direction {
+    case .left:
+        return "to the left"
+    case .right:
+        return "to the right"
+    case .up:
+        return "above"
+    case .down:
+        return "below"
+    }
+}
+
+private func resizeDescription(direction: Direction, delta: Double) -> String {
+    let amount = formatDelta(abs(delta))
+    if delta < 0 {
+        return "Shrink focused tile away from the \(resizeNeighborName(direction)) by \(amount)"
+    }
+    return "Grow focused tile toward the \(resizeNeighborName(direction)) by \(amount)"
+}
+
+private func resizeNeighborName(_ direction: Direction) -> String {
+    switch direction {
+    case .left:
+        return "left neighbor"
+    case .right:
+        return "right neighbor"
+    case .up:
+        return "upper neighbor"
+    case .down:
+        return "lower neighbor"
+    }
+}
+
+private func formatDelta(_ delta: Double) -> String {
+    if delta.rounded() == delta {
+        return String(format: "%.0f", delta)
+    }
+    return String(format: "%.2f", delta)
+        .trimmingCharacters(in: CharacterSet(charactersIn: "0"))
+        .trimmingCharacters(in: CharacterSet(charactersIn: "."))
 }
 
 private extension NSColor {
