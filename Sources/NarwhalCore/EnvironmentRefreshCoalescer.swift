@@ -3,6 +3,7 @@ public enum EnvironmentRefreshReason: Equatable, CustomStringConvertible, Sendab
     case windowClosed(WindowID)
     case displayChanged
     case spaceSettled
+    case spaceTransitionEnded
 
     public var description: String {
         switch self {
@@ -14,6 +15,8 @@ public enum EnvironmentRefreshReason: Equatable, CustomStringConvertible, Sendab
             return "display changed"
         case .spaceSettled:
             return "space settled"
+        case .spaceTransitionEnded:
+            return "space transition ended"
         }
     }
 }
@@ -139,4 +142,31 @@ public func completeEnvironmentRefresh(
         state: EnvironmentRefreshCoalescerState(nextGeneration: state.nextGeneration, pending: nil),
         decision: .cleared(pending)
     )
+}
+
+public func shouldPreserveSpaceLayouts(
+    for reasons: [EnvironmentRefreshReason],
+    duringSpaceTransition: Bool
+) -> Bool {
+    if reasons.contains(.spaceTransitionEnded) {
+        return duringSpaceTransition
+    }
+    return duringSpaceTransition || reasons.contains(.spaceSettled)
+}
+
+public func shouldPersistRestoreAfterEnvironmentRefresh(
+    reasons: [EnvironmentRefreshReason],
+    preservedSpaceLayouts: Bool = false
+) -> Bool {
+    guard !preservedSpaceLayouts else { return false }
+    if reasons.contains(.spaceTransitionEnded) {
+        return true
+    }
+    return !reasons.contains(.spaceSettled)
+}
+
+public func shouldApplyPendingTileRulesAfterEnvironmentRefresh(
+    preservedSpaceLayouts: Bool
+) -> Bool {
+    !preservedSpaceLayouts
 }

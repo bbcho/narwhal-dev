@@ -151,11 +151,18 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     public let activeSpace: SpaceID?
     public let displays: [DisplayID: DisplayInfo]
     public let axSnapshot: AXWindowSnapshot
+    public let preserveSpaceLayouts: Bool
 
-    public init(activeSpace: SpaceID?, displays: [DisplayID: DisplayInfo], axSnapshot: AXWindowSnapshot) {
+    public init(
+        activeSpace: SpaceID?,
+        displays: [DisplayID: DisplayInfo],
+        axSnapshot: AXWindowSnapshot,
+        preserveSpaceLayouts: Bool = false
+    ) {
         self.activeSpace = activeSpace
         self.displays = displays
         self.axSnapshot = axSnapshot
+        self.preserveSpaceLayouts = preserveSpaceLayouts
     }
 }
 

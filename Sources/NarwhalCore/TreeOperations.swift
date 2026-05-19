@@ -433,6 +433,10 @@ private func insertIntoVerticalRowRealm(_ window: WindowID, _ direction: Directi
 }
 
 private func insertIntoHorizontalRow(_ window: WindowID, _ node: Node) -> Node {
+    guard !isUnoccupiedSubtree(node) else {
+        return .leaf(window)
+    }
+
     switch node {
     case .void:
         return .leaf(window)
@@ -468,6 +472,10 @@ private func centerLaneIndex(in cells: inout [Cell]) -> Int {
 }
 
 private func insertIntoLane(_ window: WindowID, _ direction: Direction, _ node: Node, nextAxis: Axis) -> Node {
+    guard !isUnoccupiedSubtree(node) else {
+        return .leaf(window)
+    }
+
     switch node {
     case .void:
         return .leaf(window)
@@ -482,6 +490,17 @@ private func insertIntoLane(_ window: WindowID, _ direction: Direction, _ node: 
             node: insertIntoLane(window, direction, target.node, nextAxis: split.axis.toggled)
         )
         return .split(makeSplit(axis: split.axis, cells: cells))
+    }
+}
+
+private func isUnoccupiedSubtree(_ node: Node) -> Bool {
+    switch node {
+    case .void:
+        return true
+    case .leaf:
+        return false
+    case .split(let split):
+        return split.cells.allSatisfy { isUnoccupiedSubtree($0.node) }
     }
 }
 

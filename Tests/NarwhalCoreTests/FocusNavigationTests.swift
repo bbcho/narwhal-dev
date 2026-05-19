@@ -59,6 +59,16 @@ struct FocusNavigationTests {
         #expect(focusTarget(in: layout, from: b, direction: .right) == nil)
     }
 
+    @Test("Directional focus can use observed window frames outside the tiled layout")
+    func focusUsesObservedFramesOutsideTiledLayout() {
+        let a = metadata(id: 1, x: 0, y: 0, title: "A")
+        let b = metadata(id: 2, x: 300, y: 0, title: "B")
+        let c = metadata(id: 3, x: 0, y: 300, title: "C")
+
+        #expect(focusTarget(windows: [c, b, a], from: a.id, direction: .right) == b.id)
+        #expect(focusTarget(windows: [c, b, a], from: a.id, direction: .down) == c.id)
+    }
+
     @Test("Focus cycling walks visible windows by frame order and wraps")
     func focusCycleWalksVisibleWindowsByFrameOrder() {
         let topLeft = metadata(id: 1, x: 0, y: 0, title: "A")

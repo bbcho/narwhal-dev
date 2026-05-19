@@ -102,8 +102,14 @@ private func applyEject(_ windowID: WindowID, to world: World) -> Result<World, 
     guard let activeSpace = world.activeSpace, let space = world.spaces[activeSpace] else {
         return .failure(.activeSpaceUnavailable)
     }
-    guard let displayID = tiledDisplay(containing: windowID, in: space) else {
-        return .failure(.windowIsFloating(windowID))
+    let displayID = tiledDisplay(containing: windowID, in: space)
+        ?? floatingDisplay(containing: windowID, in: space)
+        ?? world.windowDisplay[windowID]
+    guard let displayID else {
+        return .failure(.displayNotFound(DisplayID(raw: 0)))
+    }
+    guard world.displays[displayID] != nil else {
+        return .failure(.displayNotFound(displayID))
     }
 
     var displayStates = space.displays.mapValues { displayState in
@@ -220,7 +226,9 @@ private func applyFocusDirection(_ direction: Direction, to world: World) -> Res
     case .failure(let unsatisfiable):
         return .failure(.layoutUnsatisfiable(unsatisfiable))
     }
-    guard let targetWindowID = focusTarget(in: currentLayout, from: focusedWindowID, direction: direction) else {
+    let targetWindowID = focusTarget(in: currentLayout, from: focusedWindowID, direction: direction)
+        ?? focusTarget(windows: Array(world.windows.values), from: focusedWindowID, direction: direction)
+    guard let targetWindowID else {
         return .failure(.noNeighbor(direction))
     }
     return applyFocus(targetWindowID, to: world)
@@ -415,6 +423,16 @@ private func tiledDisplay(containing windowID: WindowID, in space: SpaceState) -
     for displayID in space.displays.keys.sorted(by: { $0.raw < $1.raw }) {
         guard let displayState = space.displays[displayID],
               occupiedWindows(in: displayState.tree).contains(windowID)
+        else { continue }
+        return displayID
+    }
+    return nil
+}
+
+private func floatingDisplay(containing windowID: WindowID, in space: SpaceState) -> DisplayID? {
+    for displayID in space.displays.keys.sorted(by: { $0.raw < $1.raw }) {
+        guard let displayState = space.displays[displayID],
+              displayState.floating.contains(windowID)
         else { continue }
         return displayID
     }

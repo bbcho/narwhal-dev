@@ -38,6 +38,7 @@ private enum ServiceStartupRequestError: Error, CustomStringConvertible {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let instance = AppDelegate()
     private static let environmentRefreshCoalescingDelay: TimeInterval = 0.10
+    private static let activeSpaceTransitionPreserveDuration: TimeInterval = 1.25
     private static let restoreSaveDebounceInterval: TimeInterval = 0.25
 
     private let axClient = AXClient()
@@ -61,6 +62,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var environmentRefreshCoalescer = EnvironmentRefreshCoalescerState.empty
     private var environmentRefreshCoalescingTimer: Timer?
     private var environmentRefreshCoalescingTimerGeneration: UInt64?
+    private var spaceSettledRefreshTimers: [Timer] = []
+    private var spaceTransitionPreserveTimer: Timer?
+    private var isPreservingSpaceTransitionLayouts = false
     private var runningServices: RunningServices?
     private var servicesStarted = false
     private var isPaused = false
@@ -70,6 +74,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         app.setActivationPolicy(.accessory)
         if ProcessInfo.processInfo.arguments.contains("--verify-command-overlay-layout") {
             let result = CommandOverlayVerification.verifyDefaultTwoColumnLayout()
+            print(result.message)
+            Darwin.exit(result.passed ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.arguments.contains("--verify-focus-border-radius") {
+            let result = FocusBorderVerification.verifyPerWindowCornerRadii()
+            print(result.message)
+            Darwin.exit(result.passed ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.arguments.contains("--verify-menubar-icon") {
+            let result = MenubarIconVerification.verifyStatusItemUsesToolbarIcon()
             print(result.message)
             Darwin.exit(result.passed ? 0 : 1)
         }
@@ -166,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environmentRefreshCoalescingTimer?.invalidate()
         environmentRefreshCoalescingTimer = nil
         environmentRefreshCoalescingTimerGeneration = nil
+        cancelSpaceTransitionTimers()
         runningServices?.stopAll()
         runningServices = nil
         servicesStarted = false
@@ -253,15 +268,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if snapshot.isFullscreen {
             overlay.updateFocusBorder(.hide)
         } else {
-            overlay.updateFocusBorder(.show(snapshot.id, snapshot.frame))
+            overlay.updateFocusBorder(.show(snapshot.focusBorderTarget))
         }
+    }
+
+    private func focusBorderTarget(
+        windowID: WindowID,
+        frame: CGRect,
+        windows: [WindowID: WindowMetadata]
+    ) -> FocusBorderTarget {
+        guard let window = windows[windowID] else {
+            return FocusBorderTarget(windowID: windowID, frame: frame, traits: .standard)
+        }
+        return FocusBorderTarget(window: window, frame: frame)
     }
 
     @discardableResult
     @MainActor
     private func refreshEnvironment(
         reason: String,
-        displays providedDisplays: [DisplayID: DisplayInfo]? = nil
+        displays providedDisplays: [DisplayID: DisplayInfo]? = nil,
+        preserveSpaceLayouts: Bool = false
     ) async -> EnvironmentRefreshResult {
         let displays = providedDisplays ?? displayClient.currentDisplays()
         let activeSpace: SpaceID?
@@ -275,7 +302,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let snapshot = EnvironmentSnapshot(
             activeSpace: activeSpace,
             displays: displays,
-            axSnapshot: axClient.windowSnapshot()
+            axSnapshot: axClient.windowSnapshot(),
+            preserveSpaceLayouts: preserveSpaceLayouts
         )
         let result = await worldActor.refreshEnvironment(snapshot)
         reporter.info(
@@ -287,7 +315,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             status.windowCount = result.windowCount
             status.snapshotQuality = result.quality
         }
+        await updateTiledBordersFromWorld()
         return result
+    }
+
+    @MainActor
+    private func updateTiledBordersFromWorld() async {
+        switch await worldActor.tiledBorderTargets() {
+        case .success(let targets):
+            overlay.updateTiledBorders(targets)
+        case .failure(let error):
+            reporter.error("Tiled border refresh failed: \(error.message)")
+            overlay.updateTiledBorders([])
+        }
     }
 
     @discardableResult
@@ -550,9 +590,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             axClient: axClient,
             echoSuppressor: echoSuppressor,
             reporter: reporter,
+            activeSpaceID: { [weak self] in
+                guard let self else { return nil }
+                guard case .success(let spaceID) = self.spaceClient.activeSpaceID() else { return nil }
+                return spaceID
+            },
             spaceChanged: { [weak self] in
-                self?.overlay.updateFocusBorder(.hide)
-                self?.scheduleCoalescedEnvironmentRefresh(.spaceSettled)
+                self?.activeSpaceChanged()
             }
         ) { [weak self] event, snapshot in
             Task { @MainActor in
@@ -562,6 +606,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         service.start()
         axObserverService = service
         return { [weak self, service] in
+            self?.cancelSpaceTransitionTimers()
             service.stop()
             if self?.axObserverService === service {
                 self?.axObserverService = nil
@@ -576,6 +621,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let service = DisplayObserverService(reporter: reporter) { [weak self] in
             self?.overlay.updateFocusBorder(.hide)
+            self?.overlay.updateTiledBorders([])
             self?.scheduleCoalescedEnvironmentRefresh(.displayChanged)
         }
         service.start()
@@ -786,6 +832,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         await worldActor.resetLayoutMemory()
         reporter.info("\(logPrefix) layout memory: cleared BSP trees, floating lists, focus, pending rules, and observed window minimums")
         overlay.updateFocusBorder(.hide)
+        overlay.updateTiledBorders([])
         updateOperatingStatus { $0.focusedWindowID = nil }
         showOperatorFeedback("Layout memory reset", tone: .warning)
         await persistRestore(reason: persistReason)
@@ -835,6 +882,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .success(let result):
             return await focusWindow(result, reason: "focus \(direction.rawValue)")
         case .failure(let error):
+            if case .noNeighbor = error {
+                reporter.info("Focus \(direction.rawValue) has no neighboring window")
+                showOperatorFeedback("No window \(direction.rawValue)", tone: .info, showsHUD: false)
+                return false
+            }
             reporter.error("Focus \(direction.rawValue) rejected by core: \(error.message)")
             showOperatorFeedback("Focus failed: \(error.message)", tone: .error)
             return false
@@ -922,7 +974,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             echoSuppressor.expectFocus(windowID: result.window.id)
             await worldActor.recordExternalFocus(result.window.id)
             updateOperatingStatus { $0.focusedWindowID = result.window.id }
-            overlay.updateFocusBorder(.show(result.window.id, result.frame))
+            overlay.updateFocusBorder(.show(FocusBorderTarget(window: result.window, frame: result.frame)))
             reporter.info("\(reason) completed target=\(result.window.id.description)")
             showOperatorFeedback("\(reason) -> \(result.window.id.description)", tone: .success, showsHUD: false)
             return true
@@ -1613,10 +1665,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if applyResult.succeeded {
             await worldActor.commit(result, appliedFrames: applyResult.applied)
             reporter.info("\(operation) completed")
+            await updateTiledBordersFromWorld()
             if let focusedWindowID = result.focusedWindowID,
                let frame = applyResult.applied[focusedWindowID] ?? result.desiredLayout.layout.tiled[focusedWindowID] {
                 if showFocusBorder {
-                    overlay.updateFocusBorder(.show(focusedWindowID, frame))
+                    let target = focusBorderTarget(windowID: focusedWindowID, frame: frame, windows: result.windows)
+                    overlay.updateFocusBorder(.show(target))
                 } else {
                     overlay.suppressFocusBorder(for: focusedWindowID, frame: frame)
                 }
@@ -1690,6 +1744,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             let restoredCount = await worldActor.restore(stored, from: snapshot)
             reporter.info("Restore state loaded from \(restorePersistence.url.path); restored tiled windows=\(restoredCount)")
+            await updateTiledBordersFromWorld()
             return true
         } catch {
             reporter.error("Restore state failed: \(String(describing: error))")
@@ -1708,6 +1763,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if applyResult.succeeded {
                 await worldActor.commit(result, appliedFrames: applyResult.applied)
                 reporter.info("Startup restore convergence completed")
+                await updateTiledBordersFromWorld()
                 await persistRestore(reason: "startup")
                 return
             }
@@ -1775,12 +1831,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 updateFocusBorder(for: snapshot)
             }
         case .windowMoved, .windowResized:
+            await worldActor.recordExternalGeometry(event)
             if let snapshot {
                 updateFocusBorder(for: snapshot)
             }
+            await updateTiledBordersFromWorld()
         case .windowOpened(let metadata):
             scheduleCoalescedEnvironmentRefresh(.windowOpened(metadata.id))
         case .windowClosed(let windowID):
+            overlay.hideFocusBorder(ifVisibleFor: windowID)
+            overlay.hideTiledBorder(ifVisibleFor: windowID)
+            if operatingStatus.focusedWindowID == windowID {
+                updateOperatingStatus { $0.focusedWindowID = nil }
+            }
             scheduleCoalescedEnvironmentRefresh(.windowClosed(windowID))
         }
     }
@@ -1803,6 +1866,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    private func activeSpaceChanged() {
+        cancelSpaceTransitionTimers()
+        isPreservingSpaceTransitionLayouts = true
+        overlay.updateFocusBorder(.hide)
+        overlay.updateTiledBorders([])
+        scheduleCoalescedEnvironmentRefresh(.spaceSettled)
+        scheduleDelayedSpaceSettledRefresh(after: 0.35)
+        scheduleDelayedSpaceSettledRefresh(after: 0.80)
+        scheduleSpaceTransitionPreserveEnd(after: Self.activeSpaceTransitionPreserveDuration)
+    }
+
+    @MainActor
+    private func scheduleDelayedSpaceSettledRefresh(after delay: TimeInterval) {
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] timer in
+            Task { @MainActor in
+                self?.spaceSettledRefreshTimers.removeAll { $0 === timer }
+                self?.scheduleCoalescedEnvironmentRefresh(.spaceSettled)
+            }
+        }
+        spaceSettledRefreshTimers.append(timer)
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    @MainActor
+    private func scheduleSpaceTransitionPreserveEnd(after delay: TimeInterval) {
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] timer in
+            Task { @MainActor in
+                guard self?.spaceTransitionPreserveTimer === timer else { return }
+                self?.spaceTransitionPreserveTimer = nil
+                self?.isPreservingSpaceTransitionLayouts = false
+                self?.scheduleCoalescedEnvironmentRefresh(.spaceTransitionEnded)
+            }
+        }
+        spaceTransitionPreserveTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    @MainActor
+    private func cancelSpaceTransitionTimers() {
+        spaceSettledRefreshTimers.forEach { $0.invalidate() }
+        spaceSettledRefreshTimers.removeAll()
+        spaceTransitionPreserveTimer?.invalidate()
+        spaceTransitionPreserveTimer = nil
+        isPreservingSpaceTransitionLayouts = false
+    }
+
+    @MainActor
     private func runCoalescedEnvironmentRefresh(generation: UInt64) async {
         if environmentRefreshCoalescingTimerGeneration == generation {
             environmentRefreshCoalescingTimer?.invalidate()
@@ -1814,7 +1924,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environmentRefreshCoalescer = fired.state
         guard case .run(let request) = fired.decision else { return }
 
-        let environment = await refreshEnvironment(reason: "coalesced \(request.description)")
+        let preserveSpaceLayouts = shouldPreserveSpaceLayouts(
+            for: request.reasons,
+            duringSpaceTransition: isPreservingSpaceTransitionLayouts
+        )
+        let environment = await refreshEnvironment(
+            reason: "coalesced \(request.description)",
+            preserveSpaceLayouts: preserveSpaceLayouts
+        )
         let completed: Bool
         if case .complete = environment.quality {
             completed = true
@@ -1830,10 +1947,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environmentRefreshCoalescer = completion.state
         switch completion.decision {
         case .cleared(let completedRequest):
-            if completed {
+            if completed && shouldApplyPendingTileRulesAfterEnvironmentRefresh(
+                preservedSpaceLayouts: preserveSpaceLayouts
+            ) {
                 await applyPendingTileRules(reason: "coalesced \(completedRequest.description)")
             }
-            await persistRestore(reason: "coalesced \(completedRequest.description)")
+            if shouldPersistRestoreAfterEnvironmentRefresh(
+                reasons: completedRequest.reasons,
+                preservedSpaceLayouts: preserveSpaceLayouts
+            ) {
+                await persistRestore(reason: "coalesced \(completedRequest.description)")
+            }
         case .retained(let pending):
             reporter.info("Coalesced environment refresh retained pending generation \(pending.generation) after incomplete AX snapshot")
         case .stale, .idle:

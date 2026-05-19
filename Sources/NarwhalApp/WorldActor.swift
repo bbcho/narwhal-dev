@@ -78,6 +78,16 @@ actor WorldActor {
         world = next
     }
 
+    func recordExternalGeometry(_ event: AXEvent) {
+        switch event {
+        case .windowMoved, .windowResized:
+            guard case .success(let next) = apply(event.toCommand(), to: world) else { return }
+            world = next
+        case .windowOpened, .windowClosed, .windowFocused:
+            return
+        }
+    }
+
     func reloadConfig(_ config: Config) {
         guard case .success(let next) = apply(.reloadConfig(config), to: world) else { return }
         world = next
@@ -216,12 +226,13 @@ actor WorldActor {
     }
 
     func planPendingTileRules() -> Result<CommandPlanResult?, CommandError> {
-        let pending = world.pendingRules
-            .compactMap { windowID, action -> (WindowID, ZoneID)? in
-                guard case .tileToZone(let zoneID) = action else { return nil }
-                return (windowID, zoneID)
-            }
-            .sorted { $0.0.raw < $1.0.raw }
+        let pending: [(WindowID, ZoneID)]
+        switch pendingTileRuleApplications(in: world) {
+        case .success(let value):
+            pending = value
+        case .failure(let unsatisfiable):
+            return .failure(.layoutUnsatisfiable(unsatisfiable))
+        }
         guard !pending.isEmpty else { return .success(nil) }
 
         var plannedWorld = world
@@ -362,7 +373,9 @@ actor WorldActor {
         case .failure(let unsatisfiable):
             return .failure(.layoutUnsatisfiable(unsatisfiable))
         }
-        guard let targetWindowID = focusTarget(in: currentLayout, from: focusedWindowID, direction: direction) else {
+        let targetWindowID = focusTarget(in: currentLayout, from: focusedWindowID, direction: direction)
+            ?? focusTarget(windows: Array(world.windows.values), from: focusedWindowID, direction: direction)
+        guard let targetWindowID else {
             return .failure(.noNeighbor(direction))
         }
         guard let target = world.windows[targetWindowID] else {
@@ -421,6 +434,15 @@ actor WorldActor {
             targetFrame = target.frame
         }
         return .success(FocusPlanResult(window: target, frame: targetFrame))
+    }
+
+    func tiledBorderTargets() -> Result<[FocusBorderTarget], CommandError> {
+        switch NarwhalCore.tiledBorderTargets(of: world) {
+        case .success(let targets):
+            return .success(targets)
+        case .failure(let unsatisfiable):
+            return .failure(.layoutUnsatisfiable(unsatisfiable))
+        }
     }
 
     func recordObservedConstraints(_ observations: [WindowID: WindowConstraints]) {

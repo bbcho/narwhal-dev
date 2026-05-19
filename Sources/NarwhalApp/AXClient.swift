@@ -10,6 +10,7 @@ struct FocusedWindowSnapshot: Equatable, Sendable {
     let processID: pid_t
     let title: String
     let role: String
+    let subrole: String
     let frame: CGRect
     let isResizable: Bool
     let isMinimized: Bool
@@ -28,8 +29,21 @@ struct FocusedWindowSnapshot: Equatable, Sendable {
         )
     }
 
+    var focusBorderTarget: FocusBorderTarget {
+        FocusBorderTarget(
+            windowID: id,
+            frame: frame,
+            traits: FocusBorderWindowTraits(
+                role: role,
+                subrole: subrole,
+                isResizable: isResizable,
+                isFullscreen: isFullscreen
+            )
+        )
+    }
+
     var logDescription: String {
-        "id=\(id.description) pid=\(processID) bundle=\(bundleID.raw) title=\"\(title)\" role=\(role) frame=\(frame.debugDescription) fullscreen=\(isFullscreen)"
+        "id=\(id.description) pid=\(processID) bundle=\(bundleID.raw) title=\"\(title)\" role=\(role) subrole=\(subrole) frame=\(frame.debugDescription) fullscreen=\(isFullscreen)"
     }
 }
 
@@ -186,6 +200,7 @@ struct AXClient {
         case .success(let frame):
             let title = stringAttribute(focusedWindow, kAXTitleAttribute)
             let role = stringAttribute(focusedWindow, kAXRoleAttribute)
+            let subrole = stringAttribute(focusedWindow, kAXSubroleAttribute)
             guard let id = matchedWindowID(processID: pid, title: title, frame: frame) else {
                 return .failure(.focusedWindowUnmatchedToCGWindow)
             }
@@ -199,6 +214,7 @@ struct AXClient {
                 processID: pid,
                 title: title,
                 role: role,
+                subrole: subrole,
                 frame: frame,
                 isResizable: isResizable(focusedWindow),
                 isMinimized: isMinimized,

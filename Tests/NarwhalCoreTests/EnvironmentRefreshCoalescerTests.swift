@@ -102,5 +102,58 @@ struct EnvironmentRefreshCoalescerTests {
 
         #expect(CoalescedEnvironmentRefresh(generation: 1, reasons: [.displayChanged]).description == "display changed")
         #expect(request.description == "4 coalesced events: window opened w1, window closed w2, display changed, space settled")
+        #expect(CoalescedEnvironmentRefresh(
+            generation: 2,
+            reasons: [.spaceTransitionEnded]
+        ).description == "space transition ended")
+    }
+
+    @Test("Space transition preservation covers inventory-only refreshes")
+    func spaceTransitionPreservationCoversInventoryOnlyRefreshes() {
+        #expect(shouldPreserveSpaceLayouts(
+            for: [.windowClosed(WindowID(raw: 44)), .windowOpened(WindowID(raw: 45))],
+            duringSpaceTransition: true
+        ))
+        #expect(shouldPreserveSpaceLayouts(
+            for: [.windowClosed(WindowID(raw: 44)), .spaceSettled],
+            duringSpaceTransition: false
+        ))
+        #expect(!shouldPreserveSpaceLayouts(
+            for: [.windowClosed(WindowID(raw: 44)), .windowOpened(WindowID(raw: 45))],
+            duringSpaceTransition: false
+        ))
+        #expect(!shouldPreserveSpaceLayouts(
+            for: [.spaceSettled, .spaceTransitionEnded],
+            duringSpaceTransition: false
+        ))
+    }
+
+    @Test("Space-settle refreshes do not persist restore state")
+    func spaceSettleRefreshesDoNotPersistRestoreState() {
+        #expect(shouldPersistRestoreAfterEnvironmentRefresh(reasons: [.windowClosed(WindowID(raw: 44))]))
+        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(reasons: [.spaceSettled]))
+        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(reasons: [
+            .windowClosed(WindowID(raw: 44)),
+            .spaceSettled
+        ]))
+        #expect(shouldPersistRestoreAfterEnvironmentRefresh(reasons: [.spaceTransitionEnded]))
+        #expect(shouldPersistRestoreAfterEnvironmentRefresh(reasons: [
+            .spaceSettled,
+            .spaceTransitionEnded
+        ]))
+        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(
+            reasons: [.spaceSettled, .spaceTransitionEnded],
+            preservedSpaceLayouts: true
+        ))
+        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(
+            reasons: [.windowClosed(WindowID(raw: 44))],
+            preservedSpaceLayouts: true
+        ))
+    }
+
+    @Test("Preserved refreshes defer pending tile rule application")
+    func preservedRefreshesDeferPendingTileRuleApplication() {
+        #expect(shouldApplyPendingTileRulesAfterEnvironmentRefresh(preservedSpaceLayouts: false))
+        #expect(!shouldApplyPendingTileRulesAfterEnvironmentRefresh(preservedSpaceLayouts: true))
     }
 }

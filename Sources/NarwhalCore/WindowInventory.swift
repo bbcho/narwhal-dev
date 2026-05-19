@@ -11,10 +11,16 @@ public struct WindowInventoryState: Equatable, Sendable {
 public struct WindowInventoryPoll: Equatable, Sendable {
     public let state: WindowInventoryState
     public let events: [AXEvent]
+    public let suppressedSpaceReplacement: Bool
 
-    public init(state: WindowInventoryState, events: [AXEvent]) {
+    public init(
+        state: WindowInventoryState,
+        events: [AXEvent],
+        suppressedSpaceReplacement: Bool = false
+    ) {
         self.state = state
         self.events = events
+        self.suppressedSpaceReplacement = suppressedSpaceReplacement
     }
 }
 
@@ -36,5 +42,35 @@ public func pollWindowInventory(
     return WindowInventoryPoll(
         state: WindowInventoryState(visibleWindowIDs: currentIDs),
         events: opened + closed
+    )
+}
+
+public func pollWindowInventorySuppressingLikelySpaceReplacement(
+    previous: WindowInventoryState,
+    current: [WindowMetadata]
+) -> WindowInventoryPoll {
+    let poll = pollWindowInventory(previous: previous, current: current)
+    let currentIDs = poll.state.visibleWindowIDs
+    let openedCount = currentIDs.subtracting(previous.visibleWindowIDs).count
+    let closedCount = previous.visibleWindowIDs.subtracting(currentIDs).count
+    let previousCount = previous.visibleWindowIDs.count
+    let currentCount = currentIDs.count
+    let isLikelySpaceReplacement = openedCount > 0
+        && closedCount > 0
+    let isLikelyTransientFullDisappearance = closedCount == previous.visibleWindowIDs.count
+        && !previous.visibleWindowIDs.isEmpty
+        && currentIDs.isEmpty
+    let isLikelyBulkDisappearance = openedCount == 0
+        && closedCount > 0
+        && previousCount >= 3
+        && currentCount * 2 <= previousCount
+
+    guard isLikelySpaceReplacement || isLikelyTransientFullDisappearance || isLikelyBulkDisappearance else {
+        return poll
+    }
+    return WindowInventoryPoll(
+        state: poll.state,
+        events: [],
+        suppressedSpaceReplacement: true
     )
 }

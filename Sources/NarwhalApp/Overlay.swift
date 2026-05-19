@@ -17,10 +17,14 @@ enum CommandOverlayScrollDirection {
 
 @MainActor
 final class Overlay {
+    private static let tiledBorderConfig = BorderConfig(width: 2, colorHex: "#30D158")
+
     private var borderConfig: BorderConfig
     private var hudConfig: HUDConfig
     private var borderWindow: NSWindow?
     private var borderView: BorderView?
+    private var tiledBorderWindows: [WindowID: NSWindow] = [:]
+    private var tiledBorderViews: [WindowID: BorderView] = [:]
     private var commandWindow: NSWindow?
     private var hudWindow: NSWindow?
     private var hudHideTask: Task<Void, Never>?
@@ -42,8 +46,8 @@ final class Overlay {
 
     func updateFocusBorder(_ effect: FocusBorderEffect) {
         switch effect {
-        case .show(let windowID, let frame):
-            showFocusBorder(windowID: windowID, frame: frame)
+        case .show(let target):
+            showFocusBorder(target)
         case .hide:
             hideFocusBorder()
         }
@@ -54,8 +58,55 @@ final class Overlay {
         hideFocusBorder()
     }
 
+    func updateTiledBorders(_ targets: [FocusBorderTarget]) {
+        let nextIDs = Set(targets.map(\.windowID))
+        for windowID in tiledBorderWindows.keys where !nextIDs.contains(windowID) {
+            hideTiledBorder(windowID)
+        }
+
+        for target in targets.sorted(by: { $0.windowID.raw < $1.windowID.raw }) {
+            showTiledBorder(target)
+        }
+        if borderWindow?.isVisible == true {
+            borderWindow?.orderFrontRegardless()
+        }
+    }
+
+    func hideTiledBorder(ifVisibleFor windowID: WindowID) {
+        hideTiledBorder(windowID)
+    }
+
+    func hideFocusBorder(ifVisibleFor windowID: WindowID) {
+        if focusBorderSuppression?.windowID == windowID {
+            focusBorderSuppression = nil
+        }
+        guard visibleWindowID == windowID else { return }
+        hideFocusBorder()
+    }
+
+    func debugFocusBorderWindowID() -> WindowID? {
+        visibleWindowID
+    }
+
+    func debugFocusBorderIsVisible() -> Bool {
+        borderWindow?.isVisible == true
+    }
+
+    func debugTiledBorderWindowIDs() -> [WindowID] {
+        tiledBorderWindows.keys.sorted { $0.raw < $1.raw }
+    }
+
+    func debugVisibleTiledBorderCount() -> Int {
+        tiledBorderWindows.values.filter(\.isVisible).count
+    }
+
+    func debugTiledBorderFrame(for windowID: WindowID) -> CGRect? {
+        tiledBorderWindows[windowID]?.frame
+    }
+
     func stop() {
         hideFocusBorder()
+        updateTiledBorders([])
         hideCommandOverlay()
         hideHUD()
         hideDragPreview()
@@ -117,28 +168,54 @@ final class Overlay {
         dragPreviewWindow?.orderOut(nil)
     }
 
-    private func showFocusBorder(windowID: WindowID, frame: CGRect) {
+    private func showFocusBorder(_ target: FocusBorderTarget) {
         guard borderConfig.width > 0 else {
             hideFocusBorder()
             return
         }
-        guard !shouldSuppressFocusBorder(windowID: windowID, frame: frame) else {
+        guard !shouldSuppressFocusBorder(windowID: target.windowID, frame: target.frame) else {
             hideFocusBorder()
             return
         }
 
-        let appKitFrame = appKitFrame(forAXFrame: frame).insetBy(dx: -borderConfig.width / 2, dy: -borderConfig.width / 2)
+        let appKitFrame = appKitFrame(forAXFrame: target.frame).insetBy(dx: -borderConfig.width / 2, dy: -borderConfig.width / 2)
         let window = borderWindow ?? makeBorderWindow(frame: appKitFrame)
-        let view = borderView ?? BorderView(border: borderConfig)
+        let view = borderView ?? BorderView(border: borderConfig, cornerRadius: target.cornerRadius)
         if borderView == nil {
             window.contentView = view
             borderView = view
         }
-        view.update(border: borderConfig)
+        view.update(border: borderConfig, cornerRadius: target.cornerRadius)
         window.setFrame(appKitFrame, display: true)
         window.orderFrontRegardless()
         borderWindow = window
-        visibleWindowID = windowID
+        visibleWindowID = target.windowID
+    }
+
+    private func showTiledBorder(_ target: FocusBorderTarget) {
+        let config = Self.tiledBorderConfig
+        guard config.width > 0 else {
+            hideTiledBorder(target.windowID)
+            return
+        }
+
+        let appKitFrame = appKitFrame(forAXFrame: target.frame).insetBy(dx: -config.width / 2, dy: -config.width / 2)
+        let window = tiledBorderWindows[target.windowID] ?? makeBorderWindow(frame: appKitFrame)
+        let view = tiledBorderViews[target.windowID] ?? BorderView(border: config, cornerRadius: target.cornerRadius)
+        if tiledBorderViews[target.windowID] == nil {
+            window.contentView = view
+            tiledBorderViews[target.windowID] = view
+        }
+        view.update(border: config, cornerRadius: target.cornerRadius)
+        window.setFrame(appKitFrame, display: true)
+        window.orderFrontRegardless()
+        tiledBorderWindows[target.windowID] = window
+    }
+
+    private func hideTiledBorder(_ windowID: WindowID) {
+        tiledBorderWindows[windowID]?.orderOut(nil)
+        tiledBorderWindows.removeValue(forKey: windowID)
+        tiledBorderViews.removeValue(forKey: windowID)
     }
 
     private func hideFocusBorder() {
@@ -1072,14 +1149,217 @@ enum CommandOverlayVerification {
 }
 
 @MainActor
-private final class BorderView: NSView {
-    private static let macWindowCornerRadius: CGFloat = 20
+enum FocusBorderVerification {
+    static func verifyPerWindowCornerRadii() -> (passed: Bool, message: String) {
+        let standardFrame = CGRect(x: 120, y: 90, width: 900, height: 640)
+        let dialogFrame = CGRect(x: 200, y: 180, width: 460, height: 260)
+        let utilityFrame = CGRect(x: 220, y: 210, width: 260, height: 160)
+        let tinyFrame = CGRect(x: 20, y: 20, width: 24, height: 18)
 
+        let standardRadius = focusBorderCornerRadius(frame: standardFrame, traits: .standard)
+        let dialogRadius = focusBorderCornerRadius(
+            frame: dialogFrame,
+            traits: FocusBorderWindowTraits(
+                role: "AXWindow",
+                subrole: "AXDialog",
+                isResizable: false,
+                isFullscreen: false
+            )
+        )
+        let utilityRadius = focusBorderCornerRadius(
+            frame: utilityFrame,
+            traits: FocusBorderWindowTraits(
+                role: "AXWindow",
+                subrole: "AXFloatingWindow",
+                isResizable: false,
+                isFullscreen: false
+            )
+        )
+        let fullscreenRadius = focusBorderCornerRadius(
+            frame: standardFrame,
+            traits: FocusBorderWindowTraits(
+                role: "AXWindow",
+                subrole: "AXStandardWindow",
+                isResizable: true,
+                isFullscreen: true
+            )
+        )
+        let tinyRadius = focusBorderCornerRadius(frame: tinyFrame, traits: .standard)
+
+        guard standardRadius == 15 else {
+            return (false, "expected standard focus radius 15, got \(standardRadius)")
+        }
+        guard dialogRadius < standardRadius, utilityRadius < dialogRadius else {
+            return (
+                false,
+                "expected descending per-window radii, got standard=\(standardRadius) dialog=\(dialogRadius) utility=\(utilityRadius)"
+            )
+        }
+        guard fullscreenRadius == 0 else {
+            return (false, "expected fullscreen focus radius 0, got \(fullscreenRadius)")
+        }
+        guard tinyRadius <= Double(min(tinyFrame.width, tinyFrame.height)) / 2 else {
+            return (false, "tiny focus radius exceeds half of the frame: radius=\(tinyRadius) frame=\(tinyFrame.debugDescription)")
+        }
+
+        let border = BorderConfig(width: 2, colorHex: "#4DA3FF")
+        let view = BorderView(border: border, cornerRadius: standardRadius)
+        let viewFrame = CGRect(origin: .zero, size: CGSize(width: standardFrame.width + border.width, height: standardFrame.height + border.width))
+        view.frame = viewFrame
+        view.layoutSubtreeIfNeeded()
+
+        guard let standardSnapshot = view.debugGeometrySnapshot() else {
+            return (false, "focus border view did not produce geometry")
+        }
+        guard standardSnapshot.renderedCornerRadius == standardRadius else {
+            return (
+                false,
+                "rendered standard focus radius mismatch: requested=\(standardRadius) rendered=\(standardSnapshot.renderedCornerRadius)"
+            )
+        }
+        guard standardSnapshot.pathBoundingBox.matches(standardSnapshot.strokeRect, tolerance: 1) else {
+            return (
+                false,
+                "focus border path does not match stroke rect: path=\(standardSnapshot.pathBoundingBox.debugDescription) rect=\(standardSnapshot.strokeRect.debugDescription)"
+            )
+        }
+
+        view.update(border: border, cornerRadius: utilityRadius)
+        view.layoutSubtreeIfNeeded()
+        guard let utilitySnapshot = view.debugGeometrySnapshot(),
+              utilitySnapshot.renderedCornerRadius == utilityRadius else {
+            return (false, "focus border view did not update to utility radius \(utilityRadius)")
+        }
+
+        let overlay = Overlay(border: border, hud: Config.default.hud)
+        let visibleWindow = WindowID(raw: 901)
+        let otherWindow = WindowID(raw: 902)
+        overlay.updateFocusBorder(.show(FocusBorderTarget(
+            windowID: visibleWindow,
+            frame: standardFrame,
+            cornerRadius: standardRadius
+        )))
+        guard overlay.debugFocusBorderWindowID() == visibleWindow,
+              overlay.debugFocusBorderIsVisible() else {
+            overlay.stop()
+            return (false, "focus border overlay did not show for \(visibleWindow.description)")
+        }
+
+        overlay.hideFocusBorder(ifVisibleFor: otherWindow)
+        guard overlay.debugFocusBorderWindowID() == visibleWindow,
+              overlay.debugFocusBorderIsVisible() else {
+            overlay.stop()
+            return (false, "focus border overlay hid for unrelated closed window \(otherWindow.description)")
+        }
+
+        overlay.hideFocusBorder(ifVisibleFor: visibleWindow)
+        guard overlay.debugFocusBorderWindowID() == nil,
+              !overlay.debugFocusBorderIsVisible() else {
+            overlay.stop()
+            return (false, "focus border overlay stayed visible after closing \(visibleWindow.description)")
+        }
+        overlay.stop()
+
+        let tiledOverlay = Overlay(border: border, hud: Config.default.hud)
+        let firstTiled = WindowID(raw: 911)
+        let secondTiled = WindowID(raw: 912)
+        tiledOverlay.updateTiledBorders([
+            FocusBorderTarget(
+                windowID: firstTiled,
+                frame: CGRect(x: 10, y: 10, width: 420, height: 320),
+                cornerRadius: standardRadius
+            ),
+            FocusBorderTarget(
+                windowID: secondTiled,
+                frame: CGRect(x: 460, y: 10, width: 420, height: 320),
+                cornerRadius: dialogRadius
+            )
+        ])
+        guard tiledOverlay.debugTiledBorderWindowIDs() == [firstTiled, secondTiled],
+              tiledOverlay.debugVisibleTiledBorderCount() == 2 else {
+            tiledOverlay.stop()
+            return (false, "tiled border overlay did not show both tiled windows")
+        }
+
+        let updatedSecondFrame = CGRect(x: 500, y: 30, width: 520, height: 280)
+        tiledOverlay.updateTiledBorders([
+            FocusBorderTarget(
+                windowID: firstTiled,
+                frame: CGRect(x: 10, y: 10, width: 420, height: 320),
+                cornerRadius: standardRadius
+            ),
+            FocusBorderTarget(
+                windowID: secondTiled,
+                frame: updatedSecondFrame,
+                cornerRadius: dialogRadius
+            )
+        ])
+        guard let renderedSecondFrame = tiledOverlay.debugTiledBorderFrame(for: secondTiled),
+              renderedSecondFrame.width == updatedSecondFrame.width + 2,
+              renderedSecondFrame.height == updatedSecondFrame.height + 2 else {
+            tiledOverlay.stop()
+            return (false, "tiled border overlay did not resize an existing tiled border")
+        }
+
+        tiledOverlay.hideTiledBorder(ifVisibleFor: firstTiled)
+        guard tiledOverlay.debugTiledBorderWindowIDs() == [secondTiled],
+              tiledOverlay.debugVisibleTiledBorderCount() == 1 else {
+            tiledOverlay.stop()
+            return (false, "tiled border overlay did not hide closed tiled window \(firstTiled.description)")
+        }
+
+        tiledOverlay.updateTiledBorders([])
+        guard tiledOverlay.debugTiledBorderWindowIDs().isEmpty,
+              tiledOverlay.debugVisibleTiledBorderCount() == 0 else {
+            tiledOverlay.stop()
+            return (false, "tiled border overlay did not clear all tiled borders")
+        }
+
+        tiledOverlay.updateTiledBorders([
+            FocusBorderTarget(
+                windowID: firstTiled,
+                frame: CGRect(x: 10, y: 10, width: 420, height: 320),
+                cornerRadius: standardRadius
+            ),
+            FocusBorderTarget(
+                windowID: secondTiled,
+                frame: CGRect(x: 460, y: 10, width: 420, height: 320),
+                cornerRadius: dialogRadius
+            )
+        ])
+        guard tiledOverlay.debugTiledBorderWindowIDs() == [firstTiled, secondTiled],
+              tiledOverlay.debugVisibleTiledBorderCount() == 2 else {
+            tiledOverlay.stop()
+            return (false, "tiled border overlay did not show tiled windows after a clear")
+        }
+        tiledOverlay.stop()
+
+        return (
+            true,
+            "focus/tiled borders verified: focus standard=\(standardRadius) dialog=\(dialogRadius) utility=\(utilityRadius) tiny=\(tinyRadius) path=\(standardSnapshot.pathBoundingBox.debugDescription)"
+        )
+    }
+}
+
+@MainActor
+private struct FocusBorderDebugGeometrySnapshot {
+    let strokeRect: CGRect
+    let requestedCornerRadius: Double
+    let renderedCornerRadius: Double
+    let pathBoundingBox: CGRect
+}
+
+@MainActor
+private final class BorderView: NSView {
     private let shapeLayer = CAShapeLayer()
     private var border: BorderConfig
+    private var cornerRadius: Double
+    private var strokeRect: CGRect = .zero
+    private var renderedCornerRadius: Double = 0
 
-    init(border: BorderConfig) {
+    init(border: BorderConfig, cornerRadius: Double) {
         self.border = border
+        self.cornerRadius = max(0, cornerRadius)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
@@ -1099,22 +1379,37 @@ private final class BorderView: NSView {
         updatePath()
     }
 
-    func update(border: BorderConfig) {
+    func update(border: BorderConfig, cornerRadius: Double? = nil) {
         self.border = border
+        if let cornerRadius {
+            self.cornerRadius = max(0, cornerRadius)
+        }
         shapeLayer.strokeColor = NSColor(hexRGB: border.colorHex)?.cgColor ?? NSColor.systemBlue.cgColor
         shapeLayer.lineWidth = border.width
         shapeLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         updatePath()
     }
 
+    func debugGeometrySnapshot() -> FocusBorderDebugGeometrySnapshot? {
+        layoutSubtreeIfNeeded()
+        guard let path = shapeLayer.path else {
+            return nil
+        }
+        return FocusBorderDebugGeometrySnapshot(
+            strokeRect: strokeRect,
+            requestedCornerRadius: cornerRadius,
+            renderedCornerRadius: renderedCornerRadius,
+            pathBoundingBox: path.boundingBox
+        )
+    }
+
     private func updatePath() {
         shapeLayer.frame = bounds
         let strokeInset = border.width / 2
         let rect = bounds.insetBy(dx: strokeInset, dy: strokeInset)
-        let radius = min(
-            Self.macWindowCornerRadius + strokeInset,
-            min(rect.width, rect.height) / 2
-        )
+        let radius = min(cornerRadius, max(0, Double(min(rect.width, rect.height)) / 2))
+        strokeRect = rect
+        renderedCornerRadius = radius
         shapeLayer.path = CGPath(
             roundedRect: rect,
             cornerWidth: radius,

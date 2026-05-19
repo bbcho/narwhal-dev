@@ -33,6 +33,108 @@ struct WindowInventoryTests {
         ])
     }
 
+    @Test("Likely Space replacement diff becomes a baseline update instead of close-open events")
+    func likelySpaceReplacementDiffBecomesBaselineUpdate() {
+        let previous = WindowInventoryState(visibleWindowIDs: [
+            WindowID(raw: 10),
+            WindowID(raw: 11),
+            WindowID(raw: 12)
+        ])
+        let current = [
+            metadata(WindowID(raw: 20)),
+            metadata(WindowID(raw: 21)),
+            metadata(WindowID(raw: 22))
+        ]
+
+        let poll = pollWindowInventorySuppressingLikelySpaceReplacement(
+            previous: previous,
+            current: current
+        )
+
+        #expect(poll.state == WindowInventoryState(visibleWindowIDs: [
+            WindowID(raw: 20),
+            WindowID(raw: 21),
+            WindowID(raw: 22)
+        ]))
+        #expect(poll.events == [])
+        #expect(poll.suppressedSpaceReplacement)
+    }
+
+    @Test("Single open or close remains an inventory event")
+    func singleOpenOrCloseRemainsInventoryEvent() {
+        let staying = metadata(WindowID(raw: 3))
+        let opened = metadata(WindowID(raw: 2))
+        let previous = WindowInventoryState(visibleWindowIDs: [staying.id])
+
+        let poll = pollWindowInventorySuppressingLikelySpaceReplacement(
+            previous: previous,
+            current: [staying, opened]
+        )
+
+        #expect(poll.events == [.windowOpened(opened)])
+        #expect(!poll.suppressedSpaceReplacement)
+
+        let singleClose = pollWindowInventorySuppressingLikelySpaceReplacement(
+            previous: WindowInventoryState(visibleWindowIDs: [staying.id, WindowID(raw: 9)]),
+            current: [staying]
+        )
+        #expect(singleClose.events == [.windowClosed(WindowID(raw: 9))])
+        #expect(!singleClose.suppressedSpaceReplacement)
+    }
+
+    @Test("Mixed open-close inventory with overlap is still treated as Space replacement")
+    func mixedOpenCloseInventoryWithOverlapIsSpaceReplacement() {
+        let sticky = metadata(WindowID(raw: 1))
+        let opened = metadata(WindowID(raw: 2))
+        let previous = WindowInventoryState(visibleWindowIDs: [sticky.id, WindowID(raw: 3)])
+
+        let poll = pollWindowInventorySuppressingLikelySpaceReplacement(
+            previous: previous,
+            current: [sticky, opened]
+        )
+
+        #expect(poll.state == WindowInventoryState(visibleWindowIDs: [sticky.id, opened.id]))
+        #expect(poll.events == [])
+        #expect(poll.suppressedSpaceReplacement)
+    }
+
+    @Test("Bulk close-only inventory collapse is treated as Space replacement")
+    func bulkCloseOnlyInventoryCollapseIsSpaceReplacement() {
+        let sticky = metadata(WindowID(raw: 1))
+        let previous = WindowInventoryState(visibleWindowIDs: [
+            sticky.id,
+            WindowID(raw: 2),
+            WindowID(raw: 3),
+            WindowID(raw: 4)
+        ])
+
+        let poll = pollWindowInventorySuppressingLikelySpaceReplacement(
+            previous: previous,
+            current: [sticky]
+        )
+
+        #expect(poll.state == WindowInventoryState(visibleWindowIDs: [sticky.id]))
+        #expect(poll.events == [])
+        #expect(poll.suppressedSpaceReplacement)
+    }
+
+    @Test("Full disappearance inventory snapshot is treated as transient Space replacement")
+    func fullDisappearanceInventorySnapshotIsTransientSpaceReplacement() {
+        let previous = WindowInventoryState(visibleWindowIDs: [
+            WindowID(raw: 10),
+            WindowID(raw: 11)
+        ])
+
+        let poll = pollWindowInventorySuppressingLikelySpaceReplacement(
+            previous: previous,
+            current: []
+        )
+
+        #expect(poll.state == WindowInventoryState(visibleWindowIDs: []))
+        #expect(poll.events == [])
+        #expect(poll.suppressedSpaceReplacement)
+    }
+
     private func metadata(_ id: WindowID) -> WindowMetadata {
         WindowMetadata(
             id: id,

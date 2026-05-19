@@ -36,6 +36,7 @@ final class Menubar {
     private var reload: (() -> Void)?
     private var reset: (() -> Void)?
     private var quit: (() -> Void)?
+    private let statusIcon = NarwhalIconResources.statusItemIcon()
 
     func start(reload: @escaping () -> Void, reset: @escaping () -> Void, quit: @escaping () -> Void) {
         guard statusItem == nil else { return }
@@ -45,7 +46,7 @@ final class Menubar {
         self.quit = quit
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "WM"
+        configureStatusButton(item.button)
 
         let menu = NSMenu()
         [
@@ -92,7 +93,19 @@ final class Menubar {
         scopeMenuItem.title = scopeDescription
         focusMenuItem.title = focusDescription
         lastCommandMenuItem.title = "Last: \(truncate(operatingStatus.lastCommand ?? "none", maxLength: 72))"
-        statusItem?.button?.title = operatingStatus.paused ? "WM-" : (needsAttention ? "WM!" : "WM")
+        statusItem?.button?.contentTintColor = operatingStatus.paused ? .systemOrange : (needsAttention ? .systemRed : nil)
+    }
+
+    func debugStatusButtonSnapshot() -> MenubarStatusButtonSnapshot? {
+        guard let button = statusItem?.button else { return nil }
+        return MenubarStatusButtonSnapshot(
+            hasImage: button.image != nil,
+            imageName: button.image?.name(),
+            isTemplate: button.image?.isTemplate ?? false,
+            imageSize: button.image?.size ?? .zero,
+            title: button.title,
+            imagePosition: button.imagePosition
+        )
     }
 
     func stop() {
@@ -108,6 +121,14 @@ final class Menubar {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         return item
+    }
+
+    private func configureStatusButton(_ button: NSStatusBarButton?) {
+        guard let button else { return }
+        button.title = ""
+        button.image = statusIcon
+        button.imagePosition = .imageOnly
+        button.toolTip = "Narwhal"
     }
 
     private var needsAttention: Bool {
@@ -158,6 +179,83 @@ final class Menubar {
     @objc
     private func quitApp() {
         quit?()
+    }
+}
+
+struct MenubarStatusButtonSnapshot {
+    let hasImage: Bool
+    let imageName: String?
+    let isTemplate: Bool
+    let imageSize: NSSize
+    let title: String
+    let imagePosition: NSControl.ImagePosition
+}
+
+@MainActor
+enum MenubarIconVerification {
+    static func verifyStatusItemUsesToolbarIcon() -> (passed: Bool, message: String) {
+        let menubar = Menubar()
+        menubar.start(reload: {}, reset: {}, quit: {})
+        defer { menubar.stop() }
+
+        guard let snapshot = menubar.debugStatusButtonSnapshot() else {
+            return (false, "menubar status item did not create a button")
+        }
+        guard snapshot.hasImage else {
+            return (false, "menubar status item has no image")
+        }
+        guard snapshot.imageName == NarwhalIconResources.statusItemImageName else {
+            return (false, "menubar status item image is \(snapshot.imageName ?? "nil")")
+        }
+        guard snapshot.isTemplate else {
+            return (false, "menubar status item image is not a template image")
+        }
+        guard snapshot.title.isEmpty, snapshot.imagePosition == NSControl.ImagePosition.imageOnly else {
+            return (
+                false,
+                "menubar status item is not image-only: title=\(snapshot.title) imagePosition=\(snapshot.imagePosition.rawValue)"
+            )
+        }
+        guard snapshot.imageSize.width > 0, snapshot.imageSize.height > 0 else {
+            return (false, "menubar status item image has invalid size: \(snapshot.imageSize)")
+        }
+
+        return (
+            true,
+            "menubar status icon verified: image=\(snapshot.imageName ?? "nil") size=\(snapshot.imageSize.width)x\(snapshot.imageSize.height) template=\(snapshot.isTemplate)"
+        )
+    }
+}
+
+enum NarwhalIconResources {
+    static let statusItemImageName = "NarwhalToolbarIcon"
+
+    @MainActor
+    static func statusItemIcon() -> NSImage? {
+        if let image = NSImage(named: NSImage.Name(statusItemImageName)) {
+            image.setName(NSImage.Name(statusItemImageName))
+            image.isTemplate = true
+            return image
+        }
+        if let image = imageFromBundleResource(statusItemImageName) ?? imageFromRepositoryAsset(statusItemImageName) {
+            image.setName(NSImage.Name(statusItemImageName))
+            image.isTemplate = true
+            return image
+        }
+        return nil
+    }
+
+    @MainActor
+    private static func imageFromBundleResource(_ name: String) -> NSImage? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "png") else { return nil }
+        return NSImage(contentsOf: url)
+    }
+
+    @MainActor
+    private static func imageFromRepositoryAsset(_ name: String) -> NSImage? {
+        let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Packaging/Assets/\(name).png")
+        return NSImage(contentsOf: url)
     }
 }
 

@@ -8,6 +8,8 @@
 	<string>Narwhal</string>
 	<key>CFBundleExecutable</key>
 	<string>NarwhalApp</string>
+	<key>CFBundleIconFile</key>
+	<string>NarwhalIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.ben.narwhal</string>
 	<key>CFBundleInfoDictionaryVersion</key>

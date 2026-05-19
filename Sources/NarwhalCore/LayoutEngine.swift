@@ -61,6 +61,40 @@ public func flattenedLayout(of world: World) -> Result<Layout, UnsatisfiableLayo
     return .success(Layout(tiled: tiled, floatingZOrder: floating, hidden: []))
 }
 
+public func tiledBorderTargets(of world: World) -> Result<[FocusBorderTarget], UnsatisfiableLayout> {
+    switch flattenedLayout(of: world) {
+    case .success(let layout):
+        let targets = layout.tiled
+            .compactMap { windowID, layoutFrame -> FocusBorderTarget? in
+                guard let window = world.windows[windowID] else { return nil }
+                let frame = window.frame.isFinitePositive ? window.frame : layoutFrame
+                return FocusBorderTarget(window: window, frame: frame)
+            }
+            .sorted { $0.windowID.raw < $1.windowID.raw }
+        return .success(targets)
+    case .failure(let unsatisfiable):
+        return .failure(unsatisfiable)
+    }
+}
+
+public func pendingTileRuleApplications(in world: World) -> Result<[(WindowID, ZoneID)], UnsatisfiableLayout> {
+    switch flattenedLayout(of: world) {
+    case .success(let layout):
+        let activeWindowIDs = Set(layout.tiled.keys).union(layout.floatingZOrder)
+        let pending = world.pendingRules
+            .compactMap { windowID, action -> (WindowID, ZoneID)? in
+                guard activeWindowIDs.contains(windowID),
+                      case .tileToZone(let zoneID) = action
+                else { return nil }
+                return (windowID, zoneID)
+            }
+            .sorted { $0.0.raw < $1.0.raw }
+        return .success(pending)
+    case .failure(let unsatisfiable):
+        return .failure(unsatisfiable)
+    }
+}
+
 private func framesByWindow(in node: Node, frame: CGRect, innerGap: Double) -> [WindowID: CGRect] {
     switch node {
     case .void:
@@ -103,4 +137,10 @@ private func applyOuterGaps(_ gaps: Insets, to frame: CGRect) -> CGRect {
         width: max(0, frame.width - gaps.left - gaps.right),
         height: max(0, frame.height - gaps.top - gaps.bottom)
     )
+}
+
+private extension CGRect {
+    var isFinitePositive: Bool {
+        minX.isFinite && minY.isFinite && width.isFinite && height.isFinite && width > 0 && height > 0
+    }
 }

@@ -1,10 +1,23 @@
 import CoreGraphics
 
 public func focusTarget(in layout: Layout, from focused: WindowID, direction: Direction) -> WindowID? {
-    guard let sourceFrame = layout.tiled[focused] else { return nil }
+    focusTarget(in: layout.tiled, from: focused, direction: direction)
+}
+
+public func focusTarget(windows: [WindowMetadata], from focused: WindowID, direction: Direction) -> WindowID? {
+    let frames = windows
+        .filter { !$0.isMinimized }
+        .reduce(into: [WindowID: CGRect]()) { result, metadata in
+            result[metadata.id] = metadata.frame
+        }
+    return focusTarget(in: frames, from: focused, direction: direction)
+}
+
+private func focusTarget(in frames: [WindowID: CGRect], from focused: WindowID, direction: Direction) -> WindowID? {
+    guard let sourceFrame = frames[focused] else { return nil }
 
     var best: FocusCandidate?
-    for (windowID, frame) in layout.tiled {
+    for (windowID, frame) in frames {
         guard windowID != focused,
               frame.isFinitePositive,
               isCandidate(frame, from: sourceFrame, direction: direction)
