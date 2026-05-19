@@ -19,7 +19,7 @@ This is the pre-implementation gate for the fp-architect skill, adapted to Swift
 | Restore | Fuzzy match on stable window descriptors `(bundleID, title, role)`. Restore JSON stores descriptors, not raw OS window/display IDs. Native Space pinning is deferred until a stable Space-slot mapping exists. |
 | Config | Lua 5.4 embedded via C interop. `~/.config/winmgr/init.lua`. FSEvent hot reload, last-good fallback. |
 | Input | Carbon hotkeys + `CGEventTap` shift-drag + Unix-socket IPC + `winmgrctl` CLI. |
-| Default key families | `ctrl-option-H/J/K/L` focus, `ctrl-option-shift-H/J/K/L` swap, `ctrl-option-command-H/J/K/L` push, `ctrl-option-U/I` cycle, `ctrl-option-delete` reset. Balance and resize-split are exposed through IPC/CLI and configurable Lua hotkeys but have no default binding yet. |
+| Default key families | `ctrl-option-H/J/K/L` tiled focus, `ctrl-option-U/I` non-tiled cycle, `ctrl-option-P` previous focus, `ctrl-option-shift-H/J/K/L` swap, `ctrl-option-command-H/J/K/L` push, `ctrl-option-command-N` next display, `ctrl-option-shift-command-H/J/K/L` resize split, `ctrl-option-command-return` balance, `ctrl-option-Z` undo, `ctrl-option-space` pause, `ctrl-option-/` overlay, `ctrl-option-delete` reset. |
 | Visuals | Focus border overlay, Space HUD on switch, gaps, NSStatusItem menubar. No animations. |
 | Distribution | Notarized `.app` bundle + LaunchAgent + brew cask (later). Private repo. |
 
@@ -159,8 +159,7 @@ Rules:
 7. Shell balance requires Accessibility trust and a complete AX snapshot before
    applying frames, because it has no focused-window snapshot to anchor stale
    reconciliation.
-8. No default balance hotkey is shipped yet; avoiding a surprise global Carbon
-   binding is more important than guessing a key.
+8. The default balance hotkey is `ctrl-option-command-return`.
 
 This makes balance a layout-shape cleanup, not a tree rewrite.
 
@@ -196,8 +195,8 @@ Rules:
    <direction> --delta <weight>` and Lua `action = { type = "resize_split",
    direction = "...", delta = ... }`. The CLI requires `--delta`; no hidden
    default step size is chosen.
-10. No default resize hotkey is shipped yet; avoiding another surprise global
-    Carbon binding is more important than guessing a key.
+10. Default resize hotkeys are `ctrl-option-shift-command-H/J/K/L`, using a
+    `0.25` weight delta.
 
 This makes resize a local ratio edit on the existing tree, not a geometric
 mutation that bypasses the model.
@@ -244,6 +243,9 @@ Rules:
 4. A successful shell focus call records an expected focus echo and updates the
    focus border using the current tiled frame if available, otherwise the live
    window frame.
+5. `focusCycle(previous|next)` defaults to non-tiled windows only, sorted by
+   observed frame order. Directional focus remains tiled-geometry navigation.
+6. `focusPrevious` uses recent focus history and does not mutate layout state.
 
 ---
 
@@ -1463,7 +1465,10 @@ struct AXWindowSnapshot: Equatable {
 
 ### Lua rule schema
 
-Rules are explicit data at the Lua boundary. Supported predicate `type` values are `bundle_id`, `bundle_id_matches`, `role`, `title_matches`, `and`, `or`, and `not`. Supported action `type` values are `force_float`, `ignore`, and `pin_to_display`.
+Rules are explicit data at the Lua boundary. Supported predicate `type` values
+are `bundle_id`, `bundle_id_matches`, `role`, `title_matches`, `and`, `or`, and
+`not`. Supported action `type` values are `force_float`, `ignore`,
+`pin_to_display`, and `tile_to_zone`.
 
 ```lua
 rules = {
@@ -1488,10 +1493,15 @@ rules = {
     } },
     action = { type = "ignore" },
   },
+  {
+    predicate = { type = "bundle_id", value = "com.apple.Notes" },
+    action = { type = "tile_to_zone", zone = "center" },
+  },
 }
 ```
 
 Regex syntax is validated during config parsing. Invalid runtime-constructed regex predicates evaluate to false in the pure matcher so `matchRule` remains total.
+`tile_to_zone` validates that `zone` references a configured zone ID.
 
 ### Tree invariants (enforced at construction)
 

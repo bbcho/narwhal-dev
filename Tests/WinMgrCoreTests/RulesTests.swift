@@ -52,6 +52,8 @@ struct RulesTests {
         #expect(windowOpenDecision(fixed, rules: [WindowRule(predicate: .bundleID("com.apple.finder"), action: .ignore)]) == .ignore(fixed.id))
         #expect(windowOpenDecision(resizable, rules: [WindowRule(predicate: .bundleID("com.apple.finder"), action: .pinToDisplay(slot: 2))]) == .pinToDisplay(resizable, slot: 2))
         #expect(windowOpenDecision(fixed, rules: [WindowRule(predicate: .bundleID("com.apple.finder"), action: .pinToDisplay(slot: 2))]) == .forceFloat(fixed))
+        #expect(windowOpenDecision(resizable, rules: [WindowRule(predicate: .bundleID("com.apple.finder"), action: .tileToZone(ZoneID(raw: "center")))]) == .tileToZone(resizable, ZoneID(raw: "center")))
+        #expect(windowOpenDecision(fixed, rules: [WindowRule(predicate: .bundleID("com.apple.finder"), action: .tileToZone(ZoneID(raw: "center")))]) == .forceFloat(fixed))
     }
 
     private func metadata(

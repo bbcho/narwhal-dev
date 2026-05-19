@@ -85,6 +85,15 @@ struct MVPLayoutTests {
         #expect(result.tiled[window] == CGRect(x: 0, y: 0, width: 600, height: 800))
     }
 
+    @Test("Changing same window from vertical to horizontal resets to the horizontal edge half")
+    func changingSameWindowFromVerticalToHorizontalResetsToHalf() throws {
+        let window = WindowID(raw: 1)
+        let tree = pushIntoTree(window, .left, pushIntoTree(window, .up, .void))
+
+        #expect(occupiedWindows(in: tree) == [window])
+        #expect(frames(for: tree)[window] == CGRect(x: 0, y: 0, width: 600, height: 800))
+    }
+
     @Test("Left then right push with two windows fills left and right halves")
     func leftThenRightWithTwoWindowsCreatesHalves() throws {
         let first = WindowID(raw: 1)
@@ -193,6 +202,25 @@ struct MVPLayoutTests {
 
         #expect(occupiedWindows(in: tree) == [left, center, right])
         #expect(result[left] == CGRect(x: 0, y: 0, width: 300, height: 800))
+        #expect(result[center] == CGRect(x: 300, y: 0, width: 600, height: 800))
+        #expect(result[right] == CGRect(x: 900, y: 0, width: 300, height: 800))
+    }
+
+    @Test("Center anchor keeps side pushes as side stacks")
+    func centerAnchorKeepsSidePushesAsSideStacks() throws {
+        let center = WindowID(raw: 1)
+        let topLeft = WindowID(raw: 2)
+        let bottomLeft = WindowID(raw: 3)
+        let right = WindowID(raw: 4)
+        let tree = pushIntoTree(
+            right,
+            .right,
+            pushIntoTree(bottomLeft, .left, pushIntoTree(topLeft, .left, centerIntoTree(center, .void)))
+        )
+        let result = frames(for: tree)
+
+        #expect(result[topLeft] == CGRect(x: 0, y: 0, width: 300, height: 400))
+        #expect(result[bottomLeft] == CGRect(x: 0, y: 400, width: 300, height: 400))
         #expect(result[center] == CGRect(x: 300, y: 0, width: 600, height: 800))
         #expect(result[right] == CGRect(x: 900, y: 0, width: 300, height: 800))
     }

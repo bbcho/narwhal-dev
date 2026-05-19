@@ -62,8 +62,15 @@ public enum CommandTemplate: Equatable, Sendable {
     case resizeSplit(Direction, delta: Double)
     case focusDirection(Direction)
     case focusCycle(FocusCycleDirection)
+    case focusPrevious
     case toggleFloat
     case balance
+    case shuffle
+    case cascade
+    case maximizeReset
+    case undoLayout
+    case moveToNextDisplay
+    case togglePause
     case resetLayout
 }
 
@@ -91,6 +98,7 @@ public enum RuleAction: Equatable, Codable, Sendable {
     case forceFloat
     case ignore
     case pinToDisplay(slot: Int)
+    case tileToZone(ZoneID)
 }
 
 public enum WindowOpenDecision: Equatable, Sendable {
@@ -98,6 +106,7 @@ public enum WindowOpenDecision: Equatable, Sendable {
     case forceFloat(WindowMetadata)
     case ignore(WindowID)
     case pinToDisplay(WindowMetadata, slot: Int)
+    case tileToZone(WindowMetadata, ZoneID)
 }
 
 public struct Zone: Equatable, Sendable {
@@ -156,19 +165,28 @@ public enum DefaultKeymap {
         HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option]), action: .command(.focusDirection(.down))),
         HotkeyBinding(key: KeySpec(key: "u", modifiers: [.control, .option]), action: .command(.focusCycle(.previous))),
         HotkeyBinding(key: KeySpec(key: "i", modifiers: [.control, .option]), action: .command(.focusCycle(.next))),
+        HotkeyBinding(key: KeySpec(key: "p", modifiers: [.control, .option]), action: .command(.focusPrevious)),
         HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .shift]), action: .command(.swap(.left))),
         HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .shift]), action: .command(.swap(.right))),
         HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .shift]), action: .command(.swap(.up))),
         HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .shift]), action: .command(.swap(.down))),
+        HotkeyBinding(key: KeySpec(key: "z", modifiers: [.control, .option]), action: .command(.undoLayout)),
         HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .command]), action: .command(.push(.left))),
         HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .command]), action: .command(.push(.right))),
         HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .command]), action: .command(.push(.up))),
         HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .command]), action: .command(.push(.down))),
+        HotkeyBinding(key: KeySpec(key: "a", modifiers: [.control, .option, .command]), action: .command(.cascade)),
+        HotkeyBinding(key: KeySpec(key: "c", modifiers: [.control, .option, .command]), action: .command(.center)),
+        HotkeyBinding(key: KeySpec(key: "e", modifiers: [.control, .option, .command]), action: .command(.eject)),
+        HotkeyBinding(key: KeySpec(key: "m", modifiers: [.control, .option, .command]), action: .command(.maximizeReset)),
+        HotkeyBinding(key: KeySpec(key: "n", modifiers: [.control, .option, .command]), action: .command(.moveToNextDisplay)),
+        HotkeyBinding(key: KeySpec(key: "s", modifiers: [.control, .option, .command]), action: .command(.shuffle)),
         HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.left, delta: 0.25))),
         HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.right, delta: 0.25))),
         HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.up, delta: 0.25))),
         HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.down, delta: 0.25))),
         HotkeyBinding(key: KeySpec(key: "return", modifiers: [.control, .option, .command]), action: .command(.balance)),
+        HotkeyBinding(key: KeySpec(key: "space", modifiers: [.control, .option]), action: .command(.togglePause)),
         HotkeyBinding(key: KeySpec(key: "/", modifiers: [.control, .option]), action: .showCommands),
         HotkeyBinding(key: KeySpec(key: "delete", modifiers: [.control, .option]), action: .command(.resetLayout))
     ]
@@ -241,10 +259,24 @@ public enum DefaultConfigLua {
             return "{ type = \"focus_direction\", direction = \(quoted(direction.rawValue)) }"
         case .focusCycle(let direction):
             return "{ type = \"focus_cycle\", direction = \(quoted(direction.rawValue)) }"
+        case .focusPrevious:
+            return "{ type = \"focus_previous\" }"
         case .toggleFloat:
             return "{ type = \"toggle_float\" }"
         case .balance:
             return "{ type = \"balance\" }"
+        case .shuffle:
+            return "{ type = \"shuffle\" }"
+        case .cascade:
+            return "{ type = \"cascade\" }"
+        case .maximizeReset:
+            return "{ type = \"maximize_reset\" }"
+        case .undoLayout:
+            return "{ type = \"undo_layout\" }"
+        case .moveToNextDisplay:
+            return "{ type = \"move_to_next_display\" }"
+        case .togglePause:
+            return "{ type = \"toggle_pause\" }"
         case .resetLayout:
             return "{ type = \"reset_layout\" }"
         }
@@ -305,6 +337,8 @@ public enum DefaultConfigLua {
             return "{ type = \"ignore\" }"
         case .pinToDisplay(let slot):
             return "{ type = \"pin_to_display\", slot = \(slot) }"
+        case .tileToZone(let zoneID):
+            return "{ type = \"tile_to_zone\", zone = \(quoted(zoneID.raw)) }"
         }
     }
 

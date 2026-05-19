@@ -27,23 +27,37 @@ Default key mnemonics:
 | `control-option-J` | Focus down |
 | `control-option-K` | Focus up |
 | `control-option-L` | Focus right |
-| `control-option-U` | Focus previous visible window |
-| `control-option-I` | Focus next visible window |
+| `control-option-U` | Focus previous non-tiled window |
+| `control-option-I` | Focus next non-tiled window |
+| `control-option-P` | Focus last focused window |
 | `control-option-shift-H` | Swap left |
 | `control-option-shift-J` | Swap down |
 | `control-option-shift-K` | Swap up |
 | `control-option-shift-L` | Swap right |
+| `control-option-Z` | Undo last layout command |
 | `control-option-command-H` | Push left |
 | `control-option-command-J` | Push down |
 | `control-option-command-K` | Push up |
 | `control-option-command-L` | Push right |
+| `control-option-command-A` | Cascade reset windows into an offset stack |
+| `control-option-command-C` | Place focused window in the center half |
+| `control-option-command-E` | Pop focused window out of the tile layout |
+| `control-option-command-M` | Maximize focused window and reset tile memory |
+| `control-option-command-N` | Move focused window to next display |
+| `control-option-command-S` | Shuffle reset windows into random quarter-screen frames |
+| `control-option-shift-command-H` | Resize split left |
+| `control-option-shift-command-J` | Resize split down |
+| `control-option-shift-command-K` | Resize split up |
+| `control-option-shift-command-L` | Resize split right |
+| `control-option-command-return` | Balance split weights |
+| `control-option-space` | Pause or resume tiling actions |
 | `control-option-/` | Show command overlay |
 | `control-option-delete` | Reset layout memory |
 
 ## Command Overlay
 
-The command overlay lists active hotkey bindings from the current config. Toggle
-it with:
+The command overlay lists active hotkey bindings from the current config, plus
+the active drag modifier and configured drop zones. Toggle it with:
 
 ```text
 control-option-/
@@ -55,7 +69,18 @@ or configure another hotkey with:
 { key = "/", modifiers = { "control", "option" }, action = { type = "show_commands" } }
 ```
 
-The overlay is informational. It does not take mouse or keyboard input.
+The overlay is informational. It uses two columns of titled command groups. It
+does not take mouse input. If content is taller than the overlay, a scrollbar is
+shown and `control-option-J/K` scrolls the overlay while it is open.
+
+Rows are grouped by purpose:
+
+- Movement: focus commands.
+- Placing Windows: push, center, pop-out, max-reset, toggle-float, and display move commands.
+- Dragging Windows: drag-to-tile gesture and zone list.
+- Changing Layout: swap, resize, balance, cascade reset, shuffle reset, and undo.
+- Overlay: scroll keys for this command list.
+- System: pause, reload, overlay, and reset commands.
 
 ## CLI
 
@@ -246,10 +271,28 @@ transfers weight between the focused cell and the adjacent sibling.
 Balance sets every split cell weight to `1` in the active Space. It preserves
 tree shape and window membership.
 
+### Undo Layout
+
+Undo restores the previous tiled layout. The undo buffer is one step deep, so
+undoing once swaps the current and previous layouts.
+
+### Move To Next Display
+
+Move-to-display sends the focused window to the next display in display slot
+order and tiles it in the center lane on that display. With one display, the
+command fails because there is no target display.
+
+### Pause Tiling
+
+Pause blocks layout-mutating tiling actions while leaving focus movement, command
+overlay, config reload, and reset available. It also suppresses drag previews
+and drag-to-tile drops while paused.
+
 ### Focus
 
-Directional focus uses the solved layout geometry. Cycle focus walks visible
-windows in frame order and wraps.
+Directional focus uses the solved layout geometry. Cycle focus walks non-tiled
+windows in frame order and wraps. Previous focus uses WinMgr's recent focus
+history and does not mutate the layout.
 
 ### Reset
 

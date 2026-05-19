@@ -158,7 +158,13 @@ Pass criteria:
 - `control-option-command-H/J/K/L` pushes the focused window into the tree.
 - `control-option-H/J/K/L` moves focus between tiled windows.
 - `control-option-U/I` cycles through windows outside the current tree.
+- `control-option-P` returns to the previously focused window.
 - `control-option-shift-H/J/K/L` swaps windows in the requested direction.
+- `control-option-shift-command-H/J/K/L` resizes the nearest matching split.
+- `control-option-command-return` balances split weights in the active Space.
+- `control-option-command-N` moves the focused window to the next display.
+- `control-option-Z` undoes the previous layout command.
+- `control-option-space` pauses and resumes tiling actions.
 - Reset clears the active tree; the next push starts from an empty layout.
 - Observed BSP layouts match the documented sequence behavior in
   `layout-sequences-0-6.md`.

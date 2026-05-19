@@ -57,6 +57,8 @@ func worldByOpeningWindow(_ metadata: WindowMetadata, in world: World) -> World 
         return worldByClosingWindow(id, in: world)
     case .pinToDisplay(let metadata, let slot):
         return worldByTrackingOpenedWindow(metadata, pendingRule: .pinToDisplay(slot: slot), preferredDisplaySlot: slot, in: world)
+    case .tileToZone(let metadata, let zoneID):
+        return worldByTrackingOpenedWindow(metadata, pendingRule: .tileToZone(zoneID), preferredDisplaySlot: nil, in: world)
     }
 }
 

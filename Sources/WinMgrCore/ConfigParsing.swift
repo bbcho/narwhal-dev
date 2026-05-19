@@ -12,16 +12,20 @@ private struct ConfigParser {
     let root: [String: LuaValue]
 
     func parse() throws -> Config {
+        let keymap = try parseKeymap(required("keymap"))
+        let zones = try parseZones(required("zones"))
+        let rules = try parseRules(required("rules"))
         let config = Config(
-            keymap: try parseKeymap(required("keymap")),
-            rules: try parseRules(required("rules")),
-            zones: try parseZones(required("zones")),
+            keymap: keymap,
+            rules: rules,
+            zones: zones,
             gaps: try parseGaps(required("gaps")),
             border: try parseBorder(required("border")),
             hud: try parseHUD(required("hud")),
             dragModifier: try parseModifiers(required("drag_modifier"), key: "drag_modifier")
         )
         try validateNoDuplicateHotkeys(config.keymap)
+        try validateRuleActions(config.rules, zones: config.zones)
         return config
     }
 
@@ -69,10 +73,24 @@ private struct ConfigParser {
             return .command(.focusDirection(try parseDirection(required("direction", in: table, path: key), key: "\(key).direction")))
         case "focus_cycle":
             return .command(.focusCycle(try parseFocusCycleDirection(required("direction", in: table, path: key), key: "\(key).direction")))
+        case "focus_previous":
+            return .command(.focusPrevious)
         case "toggle_float":
             return .command(.toggleFloat)
         case "balance":
             return .command(.balance)
+        case "shuffle":
+            return .command(.shuffle)
+        case "cascade":
+            return .command(.cascade)
+        case "maximize_reset":
+            return .command(.maximizeReset)
+        case "undo_layout":
+            return .command(.undoLayout)
+        case "move_to_next_display":
+            return .command(.moveToNextDisplay)
+        case "toggle_pause":
+            return .command(.togglePause)
         case "reset_layout":
             return .command(.resetLayout)
         case "reload_config":
@@ -156,6 +174,8 @@ private struct ConfigParser {
             return .ignore
         case "pin_to_display":
             return .pinToDisplay(slot: try nonNegativeInt(required("slot", in: table, path: key), key: "\(key).slot"))
+        case "tile_to_zone":
+            return .tileToZone(ZoneID(raw: try nonEmptyString(required("zone", in: table, path: key), key: "\(key).zone")))
         default:
             throw ConfigError.invalidValue(key: "\(key).type", reason: "unsupported rule action '\(type)'")
         }
@@ -300,6 +320,19 @@ private struct ConfigParser {
         for (index, binding) in keymap.enumerated() {
             if keymap.dropFirst(index + 1).contains(where: { $0.key == binding.key }) {
                 throw ConfigError.invalidValue(key: "keymap[\(index + 1)]", reason: "duplicate hotkey")
+            }
+        }
+    }
+
+    private func validateRuleActions(_ rules: [WindowRule], zones: [Zone]) throws {
+        let zoneIDs = Set(zones.map(\.id))
+        for (index, rule) in rules.enumerated() {
+            guard case .tileToZone(let zoneID) = rule.action else { continue }
+            guard zoneIDs.contains(zoneID) else {
+                throw ConfigError.invalidValue(
+                    key: "rules[\(index + 1)].action.zone",
+                    reason: "unknown zone '\(zoneID.raw)'"
+                )
             }
         }
     }

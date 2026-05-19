@@ -50,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var worldActor = WorldActor()
     private let reporter = StartupReporter()
     private var config = Config.default
+    private var operatingStatus = MenubarOperatingStatus.empty
     private var accessibilityPollTimer: Timer?
     private var hotkeyManager: HotkeyManager?
     private var axObserverService: AXObserverService?
@@ -62,10 +63,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var environmentRefreshCoalescingTimerGeneration: UInt64?
     private var runningServices: RunningServices?
     private var servicesStarted = false
+    private var isPaused = false
 
     static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
+        if ProcessInfo.processInfo.arguments.contains("--verify-command-overlay-layout") {
+            let result = CommandOverlayVerification.verifyDefaultTwoColumnLayout()
+            print(result.message)
+            Darwin.exit(result.passed ? 0 : 1)
+        }
         app.delegate = instance
         app.run()
     }
@@ -73,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         reporter.info("WinMgrApp started")
         reporter.info("Log file: \(StartupReporter.defaultLogPath)")
+
         guard configureRestoreManagerOrTerminate() else { return }
 
         if ProcessInfo.processInfo.arguments.contains("--check-config") {
@@ -165,15 +173,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reporter.info("WinMgrApp stopped")
     }
 
+    private func updateOperatingStatus(_ update: (inout MenubarOperatingStatus) -> Void) {
+        update(&operatingStatus)
+        menubar.updateOperatingStatus(operatingStatus)
+    }
+
+    private func showOperatorFeedback(_ message: String, tone: OverlayTone, showsHUD: Bool = true) {
+        updateOperatingStatus { status in
+            status.lastCommand = message
+        }
+        if showsHUD {
+            overlay.showHUD(message, tone: tone)
+        }
+    }
+
     @discardableResult
     private func reportAccessibilityStatus(prompt: Bool) -> AccessibilityStatus {
         let status = AccessibilityTrust.current(prompt: prompt)
         switch status {
         case .trusted:
             reporter.info("Accessibility trusted")
+            updateOperatingStatus { $0.accessibilityTrusted = true }
         case .notTrusted(let prompted):
             let promptState = prompted ? "prompted" : "not prompted"
             reporter.error("Accessibility not trusted (\(promptState))")
+            updateOperatingStatus { $0.accessibilityTrusted = false }
+            showOperatorFeedback("Accessibility permission is not trusted", tone: .error)
         }
         return status
     }
@@ -203,9 +228,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard await loadRestoreState(using: environment.snapshot) else { return }
         if let focused {
             await worldActor.recordExternalFocus(focused.id)
-            overlay.updateFocusBorder(.show(focused.id, focused.frame))
+            updateFocusBorder(for: focused)
         }
         await applyStartupConverge()
+        await applyPendingTileRules(reason: "startup")
         startServices()
     }
 
@@ -213,10 +239,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch axClient.focusedWindowSnapshot() {
         case .success(let snapshot):
             reporter.info("Focused window: \(snapshot.logDescription)")
+            updateOperatingStatus { $0.focusedWindowID = snapshot.id }
             return snapshot
         case .failure(let error):
             reporter.error("Focused-window snapshot failed: \(error.description)")
+            showOperatorFeedback("Focused window unavailable", tone: .warning, showsHUD: false)
             return nil
+        }
+    }
+
+    @MainActor
+    private func updateFocusBorder(for snapshot: FocusedWindowSnapshot) {
+        if snapshot.isFullscreen {
+            overlay.updateFocusBorder(.hide)
+        } else {
+            overlay.updateFocusBorder(.show(snapshot.id, snapshot.frame))
         }
     }
 
@@ -244,6 +281,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reporter.info(
             "Environment refreshed (\(reason)): activeSpace=\(result.activeSpace?.raw.description ?? "nil") displays=\(result.displayCount) windows=\(result.windowCount) quality=\(describe(result.quality))"
         )
+        updateOperatingStatus { status in
+            status.activeSpace = result.activeSpace
+            status.displayCount = result.displayCount
+            status.windowCount = result.windowCount
+            status.snapshotQuality = result.quality
+        }
         return result
     }
 
@@ -478,6 +521,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         )
         menubar.updateConfigStatus(.loaded)
+        menubar.updateOperatingStatus(operatingStatus)
     }
 
     @MainActor
@@ -605,11 +649,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard eventTapClient == nil else {
             return {}
         }
-        let client = EventTapClient(modifier: config.dragModifier, reporter: reporter) { [weak self] location in
-            Task { @MainActor in
-                await self?.performDragDrop(at: location)
+        let client = EventTapClient(
+            modifier: config.dragModifier,
+            reporter: reporter,
+            dragChanged: { [weak self] location in
+                Task { @MainActor in
+                    self?.previewDragDrop(at: location)
+                }
+            },
+            dragEnded: { [weak self] in
+                Task { @MainActor in
+                    self?.overlay.hideDragPreview()
+                }
+            },
+            drop: { [weak self] location in
+                Task { @MainActor in
+                    await self?.performDragDrop(at: location)
+                }
             }
-        }
+        )
         try client.start()
         eventTapClient = client
         return { [weak self, client] in
@@ -622,6 +680,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func performHotkey(_ action: HotkeyAction) async {
+        if routeCommandOverlayHotkey(action) {
+            return
+        }
+
+        if isPaused, pausesTilingBlocks(action) {
+            reporter.info("Hotkey ignored while WinMgr is paused: \(describe(action))")
+            showOperatorFeedback("WinMgr paused", tone: .warning, showsHUD: false)
+            return
+        }
+
         switch action {
         case .command(.push(let direction)):
             await performPush(direction)
@@ -633,6 +701,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await performToggleFloat()
         case .command(.balance):
             await performBalance()
+        case .command(.shuffle):
+            await performShuffle()
+        case .command(.cascade):
+            await performCascade()
+        case .command(.maximizeReset):
+            await performMaximizeReset()
         case .command(.swap(let direction)):
             await performSwap(direction)
         case .command(.resizeSplit(let direction, let delta)):
@@ -641,18 +715,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await performFocusDirection(direction)
         case .command(.focusCycle(let direction)):
             await performFocusCycle(direction)
+        case .command(.focusPrevious):
+            await performFocusPrevious()
+        case .command(.undoLayout):
+            await performUndoLayout()
+        case .command(.moveToNextDisplay):
+            await performMoveToNextDisplay()
+        case .command(.togglePause):
+            await togglePause()
         case .command(.resetLayout):
-            await worldActor.resetLayoutMemory()
-            reporter.info("Reset layout memory: cleared BSP trees, floating lists, focus, pending rules, and observed window minimums")
-            overlay.updateFocusBorder(.hide)
-            await persistRestore(reason: "reset")
+            await performResetLayout(requiresConfirmation: true, logPrefix: "Reset", persistReason: "reset")
         case .command(let template):
             reporter.error("Hotkey action not implemented in this build: \(describe(template))")
+            showOperatorFeedback("Command unavailable: \(describe(template))", tone: .error)
         case .reloadConfig:
             await reloadConfig(reason: "hotkey")
         case .showCommands:
-            overlay.toggleCommandOverlay(bindings: config.keymap)
+            overlay.toggleCommandOverlay(
+                bindings: config.keymap,
+                dragModifier: config.dragModifier,
+                zones: config.zones
+            )
         }
+    }
+
+    private func pausesTilingBlocks(_ action: HotkeyAction) -> Bool {
+        switch action {
+        case .command(let template):
+            switch template {
+            case .push, .center, .eject, .swap, .resizeSplit, .toggleFloat, .balance, .shuffle, .cascade, .maximizeReset, .undoLayout, .moveToNextDisplay:
+                return true
+            case .focusDirection, .focusCycle, .focusPrevious, .togglePause, .resetLayout:
+                return false
+            }
+        case .reloadConfig, .showCommands:
+            return false
+        }
+    }
+
+    @MainActor
+    private func routeCommandOverlayHotkey(_ action: HotkeyAction) -> Bool {
+        guard overlay.isCommandOverlayVisible else { return false }
+        switch action {
+        case .showCommands:
+            overlay.hideCommandOverlay()
+            return true
+        case .command(.focusDirection(.up)):
+            overlay.scrollCommandOverlay(.up)
+            return true
+        case .command(.focusDirection(.down)):
+            overlay.scrollCommandOverlay(.down)
+            return true
+        default:
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performResetLayout(
+        requiresConfirmation: Bool,
+        logPrefix: String,
+        persistReason: String
+    ) async -> Bool {
+        if requiresConfirmation, !confirmResetLayout() {
+            showOperatorFeedback("Reset canceled", tone: .info)
+            return false
+        }
+
+        await worldActor.resetLayoutMemory()
+        reporter.info("\(logPrefix) layout memory: cleared BSP trees, floating lists, focus, pending rules, and observed window minimums")
+        overlay.updateFocusBorder(.hide)
+        updateOperatingStatus { $0.focusedWindowID = nil }
+        showOperatorFeedback("Layout memory reset", tone: .warning)
+        await persistRestore(reason: persistReason)
+        return true
+    }
+
+    @MainActor
+    private func confirmResetLayout() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Reset WinMgr layout memory?"
+        alert.informativeText = "This clears tracked tiling state, floating order, focus memory, pending rules, and observed window minimums for the current stored world."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Reset")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     @MainActor
@@ -660,6 +808,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func performFocusDirection(_ direction: Direction) async -> Bool {
         guard AccessibilityTrust.current(prompt: false).isTrusted else {
             reporter.error("Focus \(direction.rawValue) skipped because Accessibility is not trusted")
+            showOperatorFeedback("Focus failed: Accessibility not trusted", tone: .error)
             return false
         }
 
@@ -669,6 +818,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshot = value
         case .failure(let error):
             reporter.error("Focus \(direction.rawValue) failed reading focused window: \(error.description)")
+            showOperatorFeedback("Focus failed: no focused window", tone: .error)
             return false
         }
 
@@ -676,6 +826,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let environment = await refreshEnvironment(reason: "pre-focus \(direction.rawValue)", displays: displays)
         guard environment.activeSpace != nil else {
             reporter.error("Focus \(direction.rawValue) rejected before planning: active Space unavailable")
+            showOperatorFeedback("Focus failed: active Space unavailable", tone: .error)
             return false
         }
         await worldActor.recordExternalFocus(snapshot.id)
@@ -685,6 +836,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await focusWindow(result, reason: "focus \(direction.rawValue)")
         case .failure(let error):
             reporter.error("Focus \(direction.rawValue) rejected by core: \(error.message)")
+            showOperatorFeedback("Focus failed: \(error.message)", tone: .error)
             return false
         }
     }
@@ -694,6 +846,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func performFocusCycle(_ direction: FocusCycleDirection) async -> Bool {
         guard AccessibilityTrust.current(prompt: false).isTrusted else {
             reporter.error("Focus cycle \(direction.rawValue) skipped because Accessibility is not trusted")
+            showOperatorFeedback("Focus cycle failed: Accessibility not trusted", tone: .error)
             return false
         }
 
@@ -708,6 +861,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let environment = await refreshEnvironment(reason: "pre-focus-cycle \(direction.rawValue)")
         guard environment.activeSpace != nil else {
             reporter.error("Focus cycle \(direction.rawValue) rejected before planning: active Space unavailable")
+            showOperatorFeedback("Focus cycle failed: active Space unavailable", tone: .error)
             return false
         }
         if let focusedWindowID {
@@ -719,6 +873,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await focusWindow(result, reason: "focus cycle \(direction.rawValue)")
         case .failure(let error):
             reporter.error("Focus cycle \(direction.rawValue) rejected by core: \(error.message)")
+            showOperatorFeedback("Focus cycle failed: \(error.message)", tone: .error)
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performFocusPrevious() async -> Bool {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            reporter.error("Focus previous skipped because Accessibility is not trusted")
+            showOperatorFeedback("Focus previous failed: Accessibility not trusted", tone: .error)
+            return false
+        }
+
+        let focusedWindowID: WindowID?
+        switch axClient.focusedWindowSnapshot() {
+        case .success(let value):
+            focusedWindowID = value.id
+        case .failure:
+            focusedWindowID = nil
+        }
+
+        let environment = await refreshEnvironment(reason: "pre-focus-previous")
+        guard environment.activeSpace != nil else {
+            reporter.error("Focus previous rejected before planning: active Space unavailable")
+            showOperatorFeedback("Focus previous failed: active Space unavailable", tone: .error)
+            return false
+        }
+        if let focusedWindowID {
+            await worldActor.recordExternalFocus(focusedWindowID)
+        }
+
+        switch await worldActor.planFocusPrevious() {
+        case .success(let result):
+            return await focusWindow(result, reason: "focus previous")
+        case .failure(let error):
+            reporter.error("Focus previous rejected by core: \(error.message)")
+            showOperatorFeedback("Focus previous failed: \(error.message)", tone: .error)
             return false
         }
     }
@@ -729,11 +921,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .success:
             echoSuppressor.expectFocus(windowID: result.window.id)
             await worldActor.recordExternalFocus(result.window.id)
+            updateOperatingStatus { $0.focusedWindowID = result.window.id }
             overlay.updateFocusBorder(.show(result.window.id, result.frame))
             reporter.info("\(reason) completed target=\(result.window.id.description)")
+            showOperatorFeedback("\(reason) -> \(result.window.id.description)", tone: .success, showsHUD: false)
             return true
         case .failure(let error):
             reporter.error("\(reason) failed focusing \(result.window.id.description): \(error.description)")
+            showOperatorFeedback("\(reason) failed", tone: .error)
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performUndoLayout() async -> Bool {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            reporter.error("Undo skipped because Accessibility is not trusted")
+            showOperatorFeedback("Undo failed: Accessibility not trusted", tone: .error)
+            return false
+        }
+
+        let environment = await refreshEnvironment(reason: "pre-undo")
+        guard environment.activeSpace != nil else {
+            reporter.error("Undo rejected before planning: active Space unavailable")
+            showOperatorFeedback("Undo failed: active Space unavailable", tone: .error)
+            return false
+        }
+        guard case .complete = environment.quality else {
+            reporter.error("Undo rejected before planning: environment snapshot is \(describe(environment.quality))")
+            showOperatorFeedback("Undo failed: incomplete snapshot", tone: .error)
+            return false
+        }
+
+        switch await worldActor.planUndoLastLayout() {
+        case .success(nil):
+            reporter.info("Undo skipped: no previous layout")
+            showOperatorFeedback("Nothing to undo", tone: .warning, showsHUD: false)
+            return false
+        case .success(let result?):
+            return await applyPlannedUndo(result, retryOnClamp: true)
+        case .failure(let error):
+            reporter.error("Undo rejected by core: \(error.message)")
+            showOperatorFeedback("Undo failed: \(error.message)", tone: .error)
             return false
         }
     }
@@ -752,6 +982,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await applyPlannedPush(result, direction: direction, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Push \(direction.rawValue) rejected by core: \(error.message)")
+            showOperatorFeedback("Push failed: \(error.message)", tone: .error)
             return false
         }
     }
@@ -770,6 +1001,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await applyPlannedCenter(result, windowID: context.snapshot.id, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Center rejected by core: \(error.message)")
+            showOperatorFeedback("Center failed: \(error.message)", tone: .error)
             return false
         }
     }
@@ -788,6 +1020,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await applyPlannedEject(result, windowID: context.snapshot.id, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Eject rejected by core: \(error.message)")
+            showOperatorFeedback("Eject failed: \(error.message)", tone: .error)
             return false
         }
     }
@@ -806,6 +1039,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await applyPlannedToggleFloat(result, windowID: context.snapshot.id, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Toggle float rejected by core: \(error.message)")
+            showOperatorFeedback("Toggle float failed: \(error.message)", tone: .error)
             return false
         }
     }
@@ -824,6 +1058,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await applyPlannedSwap(result, windowID: context.snapshot.id, direction: direction, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Swap \(direction.rawValue) rejected by core: \(error.message)")
+            showOperatorFeedback("Swap failed: \(error.message)", tone: .error)
             return false
         }
     }
@@ -848,6 +1083,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         case .failure(let error):
             reporter.error("Resize \(direction.rawValue) rejected by core: \(error.message)")
+            showOperatorFeedback("Resize failed: \(error.message)", tone: .error)
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performMoveToNextDisplay() async -> Bool {
+        let operation = "Move display"
+        guard let context = focusedLayoutContext(operation: operation),
+              let displayID = displayForFocusedWindow(context, operation: operation),
+              await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-move-display")
+        else { return false }
+
+        switch await worldActor.planMoveToNextDisplay(context.snapshot.id) {
+        case .success(let result):
+            return await applyPlannedMoveToNextDisplay(result, windowID: context.snapshot.id, retryOnClamp: true)
+        case .failure(let error):
+            reporter.error("Move display rejected by core: \(error.message)")
+            showOperatorFeedback("Move display failed: \(error.message)", tone: .error)
             return false
         }
     }
@@ -861,18 +1116,163 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             persistReason: "balance"
         ) {
             reporter.error("Balance rejected: \(failure.message)")
+            showOperatorFeedback("Balance failed: \(failure.message)", tone: .error)
             return false
         }
         return true
     }
 
     @MainActor
+    @discardableResult
+    private func performShuffle() async -> Bool {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            reporter.error("Shuffle skipped because Accessibility is not trusted")
+            showOperatorFeedback("Shuffle failed: Accessibility not trusted", tone: .error)
+            return false
+        }
+
+        let environment = await refreshEnvironment(reason: "pre-shuffle")
+        guard environment.activeSpace != nil else {
+            reporter.error("Shuffle rejected before planning: active Space unavailable")
+            showOperatorFeedback("Shuffle failed: active Space unavailable", tone: .error)
+            return false
+        }
+        guard case .complete = environment.quality else {
+            reporter.error("Shuffle rejected before planning: environment snapshot is \(describe(environment.quality))")
+            showOperatorFeedback("Shuffle failed: incomplete snapshot", tone: .error)
+            return false
+        }
+
+        switch await worldActor.planShuffleActiveSpace() {
+        case .success(let result):
+            let completed = await applyPlannedShuffle(result, retryOnClamp: true)
+            if completed {
+                overlay.updateFocusBorder(.hide)
+                updateOperatingStatus { $0.focusedWindowID = nil }
+            }
+            return completed
+        case .failure(let error):
+            reporter.error("Shuffle rejected by core: \(error.message)")
+            showOperatorFeedback("Shuffle failed: \(error.message)", tone: .error)
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performCascade() async -> Bool {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            reporter.error("Cascade skipped because Accessibility is not trusted")
+            showOperatorFeedback("Cascade failed: Accessibility not trusted", tone: .error)
+            return false
+        }
+
+        let environment = await refreshEnvironment(reason: "pre-cascade")
+        guard environment.activeSpace != nil else {
+            reporter.error("Cascade rejected before planning: active Space unavailable")
+            showOperatorFeedback("Cascade failed: active Space unavailable", tone: .error)
+            return false
+        }
+        guard case .complete = environment.quality else {
+            reporter.error("Cascade rejected before planning: environment snapshot is \(describe(environment.quality))")
+            showOperatorFeedback("Cascade failed: incomplete snapshot", tone: .error)
+            return false
+        }
+
+        switch await worldActor.planCascadeActiveSpace() {
+        case .success(let result):
+            let completed = await applyPlannedCascade(result, retryOnClamp: true)
+            if completed {
+                overlay.updateFocusBorder(.hide)
+                updateOperatingStatus { $0.focusedWindowID = nil }
+            }
+            return completed
+        case .failure(let error):
+            reporter.error("Cascade rejected by core: \(error.message)")
+            showOperatorFeedback("Cascade failed: \(error.message)", tone: .error)
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performMaximizeReset() async -> Bool {
+        let operation = "Max reset"
+        guard let context = focusedLayoutContext(operation: operation),
+              let displayID = displayForFocusedWindow(context, operation: operation),
+              await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-max-reset")
+        else { return false }
+
+        switch await worldActor.planMaximizeReset(context.snapshot.id) {
+        case .success(let result):
+            return await applyPlannedMaximizeReset(result, windowID: context.snapshot.id, retryOnClamp: true)
+        case .failure(let error):
+            reporter.error("Max reset rejected by core: \(error.message)")
+            showOperatorFeedback("Max reset failed: \(error.message)", tone: .error)
+            return false
+        }
+    }
+
+    @MainActor
+    private func previewDragDrop(at location: CGPoint) {
+        guard !isPaused else {
+            overlay.hideDragPreview()
+            return
+        }
+        guard let preview = dragPreview(at: location, displays: displayClient.currentDisplays()) else {
+            overlay.hideDragPreview()
+            return
+        }
+        overlay.showDragPreview(frame: preview.frame, title: preview.title, valid: preview.valid)
+    }
+
+    private func dragPreview(at location: CGPoint, displays: [DisplayID: DisplayInfo]) -> DragZonePreview? {
+        guard let display = displays.values
+            .filter({ contains(location, in: $0.visibleFrame) })
+            .sorted(by: { $0.id.raw < $1.id.raw })
+            .first
+        else {
+            return nil
+        }
+        guard display.visibleFrame.width > 0, display.visibleFrame.height > 0 else { return nil }
+
+        let proportional = CGPoint(
+            x: (location.x - display.visibleFrame.minX) / display.visibleFrame.width,
+            y: (location.y - display.visibleFrame.minY) / display.visibleFrame.height
+        )
+        let matches = config.zones.filter { contains(proportional, in: $0.bounds) }
+        guard matches.count == 1, let zone = matches.first else {
+            if matches.count > 1 {
+                return DragZonePreview(
+                    frame: badgeFrame(around: location),
+                    title: "Overlapping zones",
+                    valid: false
+                )
+            }
+            return nil
+        }
+
+        return DragZonePreview(
+            frame: absoluteFrame(for: zone.bounds, in: display.visibleFrame),
+            title: "Drop: \(dropActionDescription(zone.action))",
+            valid: true
+        )
+    }
+
+    @MainActor
     private func performDragDrop(at location: CGPoint) async {
+        overlay.hideDragPreview()
+        guard !isPaused else {
+            reporter.info("Drag drop ignored while WinMgr is paused")
+            showOperatorFeedback("WinMgr paused", tone: .warning, showsHUD: false)
+            return
+        }
         let operation = "Drag drop"
         guard let context = focusedLayoutContext(operation: operation) else { return }
         let drag = DragEvent(windowID: context.snapshot.id, location: location, displayID: nil)
         guard let command = resolveDrop(drag, zones: config.zones, displays: context.displays) else {
             reporter.info("Drag drop ignored: no matching exclusive zone at \(location.debugDescription)")
+            showOperatorFeedback("No drop zone", tone: .warning)
             return
         }
         guard case .dropAtZone(let windowID, let displayID, let zoneID) = command else {
@@ -890,6 +1290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = await applyPlannedDrop(result, windowID: windowID, displayID: displayID, zoneID: zoneID, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Drag drop rejected by core: \(error.message)")
+            showOperatorFeedback("Drag drop failed: \(error.message)", tone: .error)
         }
     }
 
@@ -897,6 +1298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func focusedLayoutContext(operation: String) -> FocusedLayoutContext? {
         guard AccessibilityTrust.current(prompt: false).isTrusted else {
             reporter.error("\(operation) skipped because Accessibility is not trusted")
+            showOperatorFeedback("\(operation) failed: Accessibility not trusted", tone: .error)
             return nil
         }
 
@@ -906,6 +1308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshot = value
         case .failure(let error):
             reporter.error("\(operation) failed reading focused window: \(error.description)")
+            showOperatorFeedback("\(operation) failed: no focused window", tone: .error)
             return nil
         }
 
@@ -919,6 +1322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func displayForFocusedWindow(_ context: FocusedLayoutContext, operation: String) -> DisplayID? {
         guard let displayID = displayClient.displayContaining(frame: context.snapshot.frame, displays: context.displays) else {
             reporter.error("\(operation) failed: no display for focused window")
+            showOperatorFeedback("\(operation) failed: no display for focus", tone: .error)
             return nil
         }
         reporter.info("\(operation) selected display \(displayID.raw)")
@@ -935,6 +1339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let environment = await refreshEnvironment(reason: refreshReason, displays: context.displays)
         guard environment.activeSpace != nil else {
             reporter.error("\(operation) rejected before planning: active Space unavailable")
+            showOperatorFeedback("\(operation) failed: active Space unavailable", tone: .error)
             return false
         }
 
@@ -949,6 +1354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         case .failure(let error):
             reporter.error("\(operation) failed updating focused window state: \(error.message)")
+            showOperatorFeedback("\(operation) failed: \(error.message)", tone: .error)
             return false
         }
     }
@@ -1071,6 +1477,113 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    private func applyPlannedMoveToNextDisplay(
+        _ result: CommandPlanResult,
+        windowID: WindowID,
+        retryOnClamp: Bool
+    ) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: "Move display",
+            persistReason: "move display",
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.worldActor.planMoveToNextDisplay(windowID)
+        }
+    }
+
+    @MainActor
+    private func applyPlannedShuffle(_ result: CommandPlanResult, retryOnClamp: Bool) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: "Shuffle",
+            persistReason: "shuffle",
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.worldActor.planShuffleActiveSpace()
+        }
+    }
+
+    @MainActor
+    private func applyPlannedCascade(_ result: CommandPlanResult, retryOnClamp: Bool) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: "Cascade",
+            persistReason: "cascade",
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.worldActor.planCascadeActiveSpace()
+        }
+    }
+
+    @MainActor
+    private func applyPlannedMaximizeReset(
+        _ result: CommandPlanResult,
+        windowID: WindowID,
+        retryOnClamp: Bool
+    ) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: "Max reset",
+            persistReason: "max reset",
+            retryOnClamp: retryOnClamp,
+            showFocusBorder: false
+        ) {
+            await self.worldActor.planMaximizeReset(windowID)
+        }
+    }
+
+    @MainActor
+    private func applyPlannedUndo(_ result: CommandPlanResult, retryOnClamp: Bool) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: "Undo",
+            persistReason: "undo",
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.requireUndoLayoutPlan()
+        }
+    }
+
+    @MainActor
+    private func applyPlannedPendingTileRules(
+        _ result: CommandPlanResult,
+        reason: String,
+        retryOnClamp: Bool
+    ) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: "Open rules",
+            persistReason: "open rules \(reason)",
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.requirePendingTileRulePlan()
+        }
+    }
+
+    private func requireUndoLayoutPlan() async -> Result<CommandPlanResult, CommandError> {
+        switch await worldActor.planUndoLastLayout() {
+        case .success(let result?):
+            return .success(result)
+        case .success(nil):
+            return .failure(.configInvalid("nothing to undo"))
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    private func requirePendingTileRulePlan() async -> Result<CommandPlanResult, CommandError> {
+        switch await worldActor.planPendingTileRules() {
+        case .success(let result?):
+            return .success(result)
+        case .success(nil):
+            return .failure(.configInvalid("no pending tile rule"))
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    @MainActor
     private func applyPlannedBalance(
         _ result: CommandPlanResult,
         operation: String,
@@ -1093,6 +1606,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         operation: String,
         persistReason: String,
         retryOnClamp: Bool,
+        showFocusBorder: Bool = true,
         replanAfterClamp: () async -> Result<CommandPlanResult, CommandError>
     ) async -> Bool {
         let applyResult = LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
@@ -1101,10 +1615,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.info("\(operation) completed")
             if let focusedWindowID = result.focusedWindowID,
                let frame = applyResult.applied[focusedWindowID] ?? result.desiredLayout.layout.tiled[focusedWindowID] {
-                overlay.updateFocusBorder(.show(focusedWindowID, frame))
+                if showFocusBorder {
+                    overlay.updateFocusBorder(.show(focusedWindowID, frame))
+                } else {
+                    overlay.suppressFocusBorder(for: focusedWindowID, frame: frame)
+                }
             } else if result.focusedWindowID != nil {
                 overlay.updateFocusBorder(.hide)
             }
+            showOperatorFeedback("\(operation) completed", tone: .success, showsHUD: false)
             await persistRestore(reason: persistReason)
             return true
         }
@@ -1121,6 +1640,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.error(
                 "\(operation) failed applying \(applyResult.failures.count) window(s); planned layout was not committed: \(failureSummary)"
             )
+            showOperatorFeedback("\(operation) failed applying windows", tone: .error)
             return false
         }
 
@@ -1134,10 +1654,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.error(
                 "\(operation) still clamped after min-size re-solve; planned layout was not committed: \(clampSummary)"
             )
+            showOperatorFeedback("\(operation) clamped by app minimum size", tone: .warning)
             return false
         }
 
         reporter.info("\(operation) observed app min-size clamp; re-solving once: \(clampSummary)")
+        showOperatorFeedback("\(operation) re-solving after size clamp", tone: .warning)
         switch await replanAfterClamp() {
         case .success(let retry):
             return await applyPlannedLayout(
@@ -1149,6 +1671,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         case .failure(let error):
             reporter.error("\(operation) rejected after min-size observation: \(error.message)")
+            showOperatorFeedback("\(operation) failed after clamp: \(error.message)", tone: .error)
             return false
         }
     }
@@ -1218,6 +1741,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .failure(let error):
             reporter.error("Config reload failed (\(reason)): \(error.description)")
             menubar.updateConfigStatus(.failed(error.description))
+            showOperatorFeedback("Config reload failed", tone: .error)
             return
         }
 
@@ -1227,6 +1751,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let message = String(describing: error)
             reporter.error("Config reload failed rebinding hotkeys (\(reason)): \(message)")
             menubar.updateConfigStatus(.failed(message))
+            showOperatorFeedback("Hotkey rebind failed", tone: .error)
             return
         }
 
@@ -1237,6 +1762,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logStartupConfig(loaded)
         menubar.updateConfigStatus(.loaded)
         reporter.info("Config reload completed (\(reason))")
+        showOperatorFeedback("Config reloaded", tone: .success)
     }
 
     @MainActor
@@ -1244,12 +1770,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch event {
         case .windowFocused(let windowID):
             await worldActor.recordExternalFocus(windowID)
+            updateOperatingStatus { $0.focusedWindowID = windowID }
             if let snapshot {
-                overlay.updateFocusBorder(.show(windowID, snapshot.frame))
+                updateFocusBorder(for: snapshot)
             }
-        case .windowMoved(let windowID, _), .windowResized(let windowID, _):
+        case .windowMoved, .windowResized:
             if let snapshot {
-                overlay.updateFocusBorder(.show(windowID, snapshot.frame))
+                updateFocusBorder(for: snapshot)
             }
         case .windowOpened(let metadata):
             scheduleCoalescedEnvironmentRefresh(.windowOpened(metadata.id))
@@ -1303,6 +1830,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environmentRefreshCoalescer = completion.state
         switch completion.decision {
         case .cleared(let completedRequest):
+            if completed {
+                await applyPendingTileRules(reason: "coalesced \(completedRequest.description)")
+            }
             await persistRestore(reason: "coalesced \(completedRequest.description)")
         case .retained(let pending):
             reporter.info("Coalesced environment refresh retained pending generation \(pending.generation) after incomplete AX snapshot")
@@ -1312,14 +1842,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    @discardableResult
+    private func applyPendingTileRules(reason: String) async -> Bool {
+        guard !isPaused else { return false }
+        guard AccessibilityTrust.current(prompt: false).isTrusted else { return false }
+
+        switch await worldActor.planPendingTileRules() {
+        case .success(nil):
+            return false
+        case .success(let result?):
+            return await applyPlannedPendingTileRules(result, reason: reason, retryOnClamp: true)
+        case .failure(let error):
+            reporter.error("Open rules rejected by core (\(reason)): \(error.message)")
+            showOperatorFeedback("Open rules failed: \(error.message)", tone: .error)
+            return false
+        }
+    }
+
+    @MainActor
+    private func togglePause() async {
+        isPaused.toggle()
+        updateOperatingStatus { $0.paused = isPaused }
+        reporter.info(isPaused ? "WinMgr paused" : "WinMgr resumed")
+        showOperatorFeedback(isPaused ? "WinMgr paused" : "WinMgr resumed", tone: isPaused ? .warning : .success)
+        if isPaused {
+            overlay.hideDragPreview()
+        } else {
+            await applyPendingTileRules(reason: "resume")
+        }
+    }
+
+    @MainActor
     private func handleIPCCommand(_ command: IPCCommandDTO) async -> IPCReplyDTO {
         let commandID = CommandID(raw: "ipc-\(UUID().uuidString)")
         switch command {
         case .resetLayout:
-            await worldActor.resetLayoutMemory()
-            reporter.info("IPC reset layout memory: cleared BSP trees, floating lists, focus, pending rules, and observed window minimums")
-            overlay.updateFocusBorder(.hide)
-            await persistRestore(reason: "ipc reset")
+            await performResetLayout(requiresConfirmation: false, logPrefix: "IPC reset", persistReason: "ipc reset")
             return .ok(commandID: commandID)
         case .quit:
             reporter.info("IPC quit requested")
@@ -1759,6 +2317,89 @@ private struct FocusedLayoutContext {
     let displays: [DisplayID: DisplayInfo]
 }
 
+private struct DragZonePreview {
+    let frame: CGRect
+    let title: String
+    let valid: Bool
+}
+
+private func contains(_ point: CGPoint, in frame: CGRect) -> Bool {
+    point.x >= frame.minX
+        && point.x < frame.maxX
+        && point.y >= frame.minY
+        && point.y < frame.maxY
+}
+
+private func contains(_ point: CGPoint, in rect: ProportionalRect) -> Bool {
+    point.x >= CGFloat(rect.x)
+        && point.x < CGFloat(rect.x + rect.w)
+        && point.y >= CGFloat(rect.y)
+        && point.y < CGFloat(rect.y + rect.h)
+}
+
+private func absoluteFrame(for rect: ProportionalRect, in displayFrame: CGRect) -> CGRect {
+    CGRect(
+        x: displayFrame.minX + CGFloat(rect.x) * displayFrame.width,
+        y: displayFrame.minY + CGFloat(rect.y) * displayFrame.height,
+        width: CGFloat(rect.w) * displayFrame.width,
+        height: CGFloat(rect.h) * displayFrame.height
+    )
+}
+
+private func badgeFrame(around location: CGPoint) -> CGRect {
+    CGRect(x: location.x - 90, y: location.y - 22, width: 180, height: 44)
+}
+
+private func dropActionDescription(_ action: ZoneAction) -> String {
+    switch action {
+    case .insertAsHalf(let direction):
+        return "\(edgeName(direction)) lane"
+    case .insertAsQuarter(let corner):
+        return "\(cornerName(corner)) quarter"
+    case .insertAsCenter:
+        return "center lane"
+    case .insertAtSubtree(let path):
+        return "subtree \(path)"
+    }
+}
+
+private func describe(_ action: HotkeyAction) -> String {
+    switch action {
+    case .command(let template):
+        return describe(template)
+    case .reloadConfig:
+        return "reload config"
+    case .showCommands:
+        return "show commands"
+    }
+}
+
+private func edgeName(_ direction: Direction) -> String {
+    switch direction {
+    case .left:
+        return "left"
+    case .right:
+        return "right"
+    case .up:
+        return "top"
+    case .down:
+        return "bottom"
+    }
+}
+
+private func cornerName(_ corner: Corner) -> String {
+    switch corner {
+    case .topLeft:
+        return "top-left"
+    case .topRight:
+        return "top-right"
+    case .bottomLeft:
+        return "bottom-left"
+    case .bottomRight:
+        return "bottom-right"
+    }
+}
+
 private func describe(_ template: CommandTemplate) -> String {
     switch template {
     case .push(let direction):
@@ -1775,10 +2416,24 @@ private func describe(_ template: CommandTemplate) -> String {
         return "focus \(direction.rawValue)"
     case .focusCycle(let direction):
         return "focus cycle \(direction.rawValue)"
+    case .focusPrevious:
+        return "focus previous"
     case .toggleFloat:
         return "toggleFloat"
     case .balance:
         return "balance"
+    case .shuffle:
+        return "shuffle"
+    case .cascade:
+        return "cascade"
+    case .maximizeReset:
+        return "max reset"
+    case .undoLayout:
+        return "undo layout"
+    case .moveToNextDisplay:
+        return "move display"
+    case .togglePause:
+        return "toggle pause"
     case .resetLayout:
         return "resetLayout"
     }

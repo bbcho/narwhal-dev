@@ -90,6 +90,32 @@ struct WindowRuleIntegrationTests {
         #expect(next.spaces[space]?.displays[right]?.floating == [window])
     }
 
+    @Test("Window opened records tile-to-zone rule for later placement")
+    func windowOpenedRecordsTileToZoneRule() {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 40)
+        let metadata = metadata(window, bundleID: "com.example.tile")
+        let world = emptyWorld(
+            displays: [display: displayInfo(display, slot: 0, x: 0)],
+            activeSpace: space,
+            config: config(rules: [
+                WindowRule(predicate: .bundleID("com.example.tile"), action: .tileToZone(ZoneID(raw: "center")))
+            ])
+        )
+
+        guard case .success(let next) = apply(.windowOpened(metadata), to: world) else {
+            Issue.record("Expected windowOpened to succeed")
+            return
+        }
+
+        #expect(next.windows == [window: metadata])
+        #expect(next.windowDisplay == [window: display])
+        #expect(next.pendingRules == [window: .tileToZone(ZoneID(raw: "center"))])
+        #expect(next.spaces[space]?.displays[display]?.tree == .void)
+        #expect(next.spaces[space]?.displays[display]?.floating == [window])
+    }
+
     @Test("Window closed command prunes metadata, ownership, pending rules, constraints, focus, and tree leaves")
     func windowClosedPrunesWorldState() {
         let display = DisplayID(raw: 1)

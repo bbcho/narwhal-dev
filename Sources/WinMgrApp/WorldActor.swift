@@ -6,6 +6,7 @@ struct CommandPlanResult: Sendable {
     let desiredLayout: DesiredLayout
     let windows: [WindowID: WindowMetadata]
     let plannedWorld: World
+    let undoWorld: World?
 }
 
 struct FocusPlanResult: Sendable {
@@ -24,6 +25,8 @@ struct EnvironmentRefreshResult: Sendable {
 actor WorldActor {
     private var world: World
     private var nextGeneration: UInt64 = 1
+    private var undoWorld: World?
+    private var focusHistory: [WindowID] = []
 
     init(config: Config = .default) {
         self.world = World(
@@ -45,6 +48,7 @@ actor WorldActor {
         case .failure:
             break
         }
+        pruneRuntimeState()
         return EnvironmentRefreshResult(
             snapshot: snapshot,
             activeSpace: world.activeSpace,
@@ -70,6 +74,7 @@ actor WorldActor {
 
     func recordExternalFocus(_ windowID: WindowID) {
         guard case .success(let next) = apply(.windowFocusedExternally(windowID), to: world) else { return }
+        recordFocus(windowID)
         world = next
     }
 
@@ -80,6 +85,7 @@ actor WorldActor {
 
     func reconcileLiveWindows(_ liveWindowIDs: Set<WindowID>) {
         world = pruneWorld(world, keepingLiveWindows: liveWindowIDs)
+        pruneRuntimeState()
     }
 
     func upsertWindow(
@@ -131,6 +137,10 @@ actor WorldActor {
         planLayoutCommand(.toggleFloat(windowID), focusedWindowID: windowID)
     }
 
+    func planMoveToNextDisplay(_ windowID: WindowID) -> Result<CommandPlanResult, CommandError> {
+        planLayoutCommand(.moveToNextDisplay(windowID), focusedWindowID: windowID)
+    }
+
     func planSwap(_ windowID: WindowID, direction: Direction) -> Result<CommandPlanResult, CommandError> {
         planLayoutCommand(.swapInTree(windowID, direction), focusedWindowID: windowID)
     }
@@ -150,46 +160,163 @@ actor WorldActor {
         return planLayoutCommand(.balance(activeSpace), focusedWindowID: world.spaces[activeSpace]?.focused)
     }
 
+    func planShuffleActiveSpace() -> Result<CommandPlanResult, CommandError> {
+        switch shuffledResetLayout(in: world) {
+        case .success(let layout):
+            return makeCustomLayoutPlan(
+                from: world,
+                to: resetTilingState(in: world),
+                layout: layout,
+                focusedWindowID: nil,
+                undoWorld: nil
+            )
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    func planCascadeActiveSpace() -> Result<CommandPlanResult, CommandError> {
+        switch cascadeResetLayout(in: world) {
+        case .success(let layout):
+            return makeCustomLayoutPlan(
+                from: world,
+                to: resetTilingState(in: world),
+                layout: layout,
+                focusedWindowID: nil,
+                undoWorld: nil
+            )
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    func planMaximizeReset(_ windowID: WindowID) -> Result<CommandPlanResult, CommandError> {
+        switch maximizeResetLayout(windowID: windowID, in: world) {
+        case .success(let layout):
+            return makeCustomLayoutPlan(
+                from: world,
+                to: resetTilingState(in: world).settingFocus(windowID),
+                layout: layout,
+                focusedWindowID: windowID,
+                undoWorld: nil
+            )
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
     func planDrop(windowID: WindowID, displayID: DisplayID, zoneID: ZoneID) -> Result<CommandPlanResult, CommandError> {
         planLayoutCommand(.dropAtZone(windowID, displayID, zoneID), focusedWindowID: windowID)
+    }
+
+    func planUndoLastLayout() -> Result<CommandPlanResult?, CommandError> {
+        guard let undoWorld else { return .success(nil) }
+        return makePlan(from: world, to: undoWorld, focusedWindowID: undoWorld.spaces[undoWorld.activeSpace ?? SpaceID(raw: 0)]?.focused, undoWorld: world)
+            .map(Optional.some)
+    }
+
+    func planPendingTileRules() -> Result<CommandPlanResult?, CommandError> {
+        let pending = world.pendingRules
+            .compactMap { windowID, action -> (WindowID, ZoneID)? in
+                guard case .tileToZone(let zoneID) = action else { return nil }
+                return (windowID, zoneID)
+            }
+            .sorted { $0.0.raw < $1.0.raw }
+        guard !pending.isEmpty else { return .success(nil) }
+
+        var plannedWorld = world
+        var focusedWindowID: WindowID?
+        for (windowID, zoneID) in pending {
+            guard let displayID = plannedWorld.windowDisplay[windowID] else { continue }
+            switch apply(.dropAtZone(windowID, displayID, zoneID), to: plannedWorld) {
+            case .success(let next):
+                plannedWorld = next.clearingPendingRule(for: windowID)
+                focusedWindowID = windowID
+            case .failure(let error):
+                return .failure(error)
+            }
+        }
+        guard plannedWorld != world else { return .success(nil) }
+        return makePlan(from: world, to: plannedWorld, focusedWindowID: focusedWindowID, undoWorld: world)
+            .map(Optional.some)
     }
 
     private func planLayoutCommand(
         _ command: Command,
         focusedWindowID: WindowID?
     ) -> Result<CommandPlanResult, CommandError> {
+        switch apply(command, to: world) {
+        case .success(let newWorld):
+            return makePlan(from: world, to: newWorld, focusedWindowID: focusedWindowID, undoWorld: world)
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    private func makePlan(
+        from oldWorld: World,
+        to newWorld: World,
+        focusedWindowID: WindowID?,
+        undoWorld: World?
+    ) -> Result<CommandPlanResult, CommandError> {
         let oldLayout: Layout
-        switch flattenedLayout(of: world) {
+        switch flattenedLayout(of: oldWorld) {
         case .success(let layout):
             oldLayout = layout
         case .failure(let unsatisfiable):
             return .failure(.layoutUnsatisfiable(unsatisfiable))
         }
 
-        switch apply(command, to: world) {
-        case .success(let newWorld):
-            let newLayout: Layout
-            switch flattenedLayout(of: newWorld) {
-            case .success(let layout):
-                newLayout = layout
-            case .failure(let unsatisfiable):
-                return .failure(.layoutUnsatisfiable(unsatisfiable))
-            }
-            let desired = DesiredLayout(
-                generation: LayoutGeneration(raw: nextGeneration),
-                layout: newLayout,
-                delta: diff(old: oldLayout, new: newLayout)
-            )
-            nextGeneration += 1
-            return .success(CommandPlanResult(
-                focusedWindowID: focusedWindowID,
-                desiredLayout: desired,
-                windows: newWorld.windows,
-                plannedWorld: newWorld
-            ))
-        case .failure(let error):
-            return .failure(error)
+        let newLayout: Layout
+        switch flattenedLayout(of: newWorld) {
+        case .success(let layout):
+            newLayout = layout
+        case .failure(let unsatisfiable):
+            return .failure(.layoutUnsatisfiable(unsatisfiable))
         }
+        let desired = DesiredLayout(
+            generation: LayoutGeneration(raw: nextGeneration),
+            layout: newLayout,
+            delta: diff(old: oldLayout, new: newLayout)
+        )
+        nextGeneration += 1
+        return .success(CommandPlanResult(
+            focusedWindowID: focusedWindowID,
+            desiredLayout: desired,
+            windows: newWorld.windows,
+            plannedWorld: newWorld,
+            undoWorld: undoWorld
+        ))
+    }
+
+    private func makeCustomLayoutPlan(
+        from oldWorld: World,
+        to newWorld: World,
+        layout newLayout: Layout,
+        focusedWindowID: WindowID?,
+        undoWorld: World?
+    ) -> Result<CommandPlanResult, CommandError> {
+        let oldLayout: Layout
+        switch flattenedLayout(of: oldWorld) {
+        case .success(let layout):
+            oldLayout = layout
+        case .failure(let unsatisfiable):
+            return .failure(.layoutUnsatisfiable(unsatisfiable))
+        }
+
+        let desired = DesiredLayout(
+            generation: LayoutGeneration(raw: nextGeneration),
+            layout: newLayout,
+            delta: diff(old: oldLayout, new: newLayout)
+        )
+        nextGeneration += 1
+        return .success(CommandPlanResult(
+            focusedWindowID: focusedWindowID,
+            desiredLayout: desired,
+            windows: newWorld.windows,
+            plannedWorld: newWorld,
+            undoWorld: undoWorld
+        ))
     }
 
     func planCurrentLayout() -> Result<CommandPlanResult?, CommandError> {
@@ -219,7 +346,8 @@ actor WorldActor {
             focusedWindowID: nil,
             desiredLayout: desired,
             windows: world.windows,
-            plannedWorld: world
+            plannedWorld: world,
+            undoWorld: nil
         ))
     }
 
@@ -244,8 +372,15 @@ actor WorldActor {
     }
 
     func planFocusCycle(from focusedWindowID: WindowID?, direction: FocusCycleDirection) -> Result<FocusPlanResult, CommandError> {
+        let tiledWindowIDs: Set<WindowID>
+        switch flattenedLayout(of: world) {
+        case .success(let layout):
+            tiledWindowIDs = Set(layout.tiled.keys)
+        case .failure:
+            tiledWindowIDs = []
+        }
         guard let targetWindowID = focusCycleTarget(
-            windows: Array(world.windows.values),
+            windows: Array(world.windows.values).filter { !tiledWindowIDs.contains($0.id) },
             from: focusedWindowID,
             direction: direction
         ) else {
@@ -262,6 +397,16 @@ actor WorldActor {
             targetFrame = target.frame
         }
         return .success(FocusPlanResult(window: target, frame: targetFrame))
+    }
+
+    func planFocusPrevious() -> Result<FocusPlanResult, CommandError> {
+        let current = world.activeSpace.flatMap { world.spaces[$0]?.focused }
+        guard let targetWindowID = focusHistory.reversed().first(where: { windowID in
+            windowID != current && world.windows[windowID] != nil
+        }) else {
+            return .failure(.windowNotFound(current ?? WindowID(raw: 0)))
+        }
+        return planFocus(targetWindowID)
     }
 
     func planFocus(_ windowID: WindowID) -> Result<FocusPlanResult, CommandError> {
@@ -291,6 +436,8 @@ actor WorldActor {
         case .failure:
             world = resetTilingState(in: world)
         }
+        undoWorld = nil
+        focusHistory = []
     }
 
     func restoreSnapshot() -> StoredWorld {
@@ -298,7 +445,12 @@ actor WorldActor {
     }
 
     func commit(_ result: CommandPlanResult, appliedFrames: [WindowID: CGRect]) {
+        undoWorld = result.undoWorld
+        if let focusedWindowID = result.focusedWindowID {
+            recordFocus(focusedWindowID)
+        }
         world = worldByRecording(frames: appliedFrames, in: result.plannedWorld)
+        pruneRuntimeState()
     }
 
     func recordAppliedFrames(_ frames: [WindowID: CGRect]) {
@@ -337,4 +489,58 @@ actor WorldActor {
         )
     }
 
+    private func recordFocus(_ windowID: WindowID) {
+        guard focusHistory.last != windowID else { return }
+        focusHistory.append(windowID)
+        if focusHistory.count > 16 {
+            focusHistory.removeFirst(focusHistory.count - 16)
+        }
+    }
+
+    private func pruneRuntimeState() {
+        let liveWindowIDs = Set(world.windows.keys)
+        focusHistory.removeAll { !liveWindowIDs.contains($0) }
+        if let undo = undoWorld {
+            let undoWindowIDs = Set(undo.windows.keys)
+            if !undoWindowIDs.isSubset(of: liveWindowIDs) {
+                undoWorld = nil
+            }
+        }
+    }
+}
+
+private extension World {
+    func settingFocus(_ windowID: WindowID) -> World {
+        guard let activeSpace else { return self }
+        var spaces = spaces
+        let space = spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
+        spaces[activeSpace] = SpaceState(id: space.id, displays: space.displays, focused: windowID)
+        return World(
+            displays: displays,
+            activeSpace: activeSpace,
+            spaces: spaces,
+            windows: windows,
+            windowDisplay: windowDisplay,
+            windowConstraints: windowConstraints,
+            pendingRules: pendingRules,
+            config: config
+        )
+    }
+}
+
+private extension World {
+    func clearingPendingRule(for windowID: WindowID) -> World {
+        var pendingRules = self.pendingRules
+        pendingRules.removeValue(forKey: windowID)
+        return World(
+            displays: displays,
+            activeSpace: activeSpace,
+            spaces: spaces,
+            windows: windows,
+            windowDisplay: windowDisplay,
+            windowConstraints: windowConstraints,
+            pendingRules: pendingRules,
+            config: config
+        )
+    }
 }

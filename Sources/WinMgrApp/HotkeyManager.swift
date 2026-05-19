@@ -170,6 +170,12 @@ enum HotkeyError: Error, CustomStringConvertible {
 
 private func carbonKeyCode(for key: String) -> UInt32? {
     switch key.lowercased() {
+    case "a":
+        return UInt32(kVK_ANSI_A)
+    case "c":
+        return UInt32(kVK_ANSI_C)
+    case "e":
+        return UInt32(kVK_ANSI_E)
     case "h":
         return UInt32(kVK_ANSI_H)
     case "j":
@@ -178,12 +184,22 @@ private func carbonKeyCode(for key: String) -> UInt32? {
         return UInt32(kVK_ANSI_K)
     case "l":
         return UInt32(kVK_ANSI_L)
+    case "m":
+        return UInt32(kVK_ANSI_M)
+    case "n":
+        return UInt32(kVK_ANSI_N)
+    case "p":
+        return UInt32(kVK_ANSI_P)
+    case "s":
+        return UInt32(kVK_ANSI_S)
     case "u":
         return UInt32(kVK_ANSI_U)
     case "i":
         return UInt32(kVK_ANSI_I)
     case "r":
         return UInt32(kVK_ANSI_R)
+    case "z":
+        return UInt32(kVK_ANSI_Z)
     case "/":
         return UInt32(kVK_ANSI_Slash)
     case "return":
@@ -255,10 +271,24 @@ private func describe(_ template: CommandTemplate) -> String {
         return "focus \(direction.rawValue)"
     case .focusCycle(let direction):
         return "focus cycle \(direction.rawValue)"
+    case .focusPrevious:
+        return "focus previous"
     case .toggleFloat:
         return "toggleFloat"
     case .balance:
         return "balance"
+    case .shuffle:
+        return "shuffle"
+    case .cascade:
+        return "cascade"
+    case .maximizeReset:
+        return "max reset"
+    case .undoLayout:
+        return "undo layout"
+    case .moveToNextDisplay:
+        return "move display"
+    case .togglePause:
+        return "toggle pause"
     case .resetLayout:
         return "resetLayout"
     }

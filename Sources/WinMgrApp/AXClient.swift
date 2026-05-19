@@ -13,6 +13,7 @@ struct FocusedWindowSnapshot: Equatable, Sendable {
     let frame: CGRect
     let isResizable: Bool
     let isMinimized: Bool
+    let isFullscreen: Bool
 
     var metadata: WindowMetadata {
         WindowMetadata(
@@ -28,7 +29,7 @@ struct FocusedWindowSnapshot: Equatable, Sendable {
     }
 
     var logDescription: String {
-        "id=\(id.description) pid=\(processID) bundle=\(bundleID.raw) title=\"\(title)\" role=\(role) frame=\(frame.debugDescription)"
+        "id=\(id.description) pid=\(processID) bundle=\(bundleID.raw) title=\"\(title)\" role=\(role) frame=\(frame.debugDescription) fullscreen=\(isFullscreen)"
     }
 }
 
@@ -191,6 +192,7 @@ struct AXClient {
 
             let bundleID = BundleID(raw: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "")
             let isMinimized = boolAttribute(focusedWindow, kAXMinimizedAttribute, defaultValue: false)
+            let isFullscreen = boolAttribute(focusedWindow, "AXFullScreen", defaultValue: false)
             return .success(FocusedWindowSnapshot(
                 id: id,
                 bundleID: bundleID,
@@ -199,7 +201,8 @@ struct AXClient {
                 role: role,
                 frame: frame,
                 isResizable: isResizable(focusedWindow),
-                isMinimized: isMinimized
+                isMinimized: isMinimized,
+                isFullscreen: isFullscreen
             ))
         case .failure(let error):
             return .failure(error)

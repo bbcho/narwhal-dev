@@ -61,11 +61,22 @@ $HOME/Applications/WinMgr.app/Contents/MacOS/winmgrctl balance
 
 Default hotkeys:
 
-- `control-option-command-H/J/K/L`: push focused window left/down/up/right.
 - `control-option-H/J/K/L`: focus left/down/up/right.
+- `control-option-U/I`: cycle previous/next non-tiled window.
+- `control-option-P`: focus the previously focused window.
 - `control-option-shift-H/J/K/L`: swap with neighbor.
-- `control-option-U/I`: cycle previous/next visible window.
-- `control-option-/`: show command overlay.
+- `control-option-command-H/J/K/L`: push focused window left/down/up/right.
+- `control-option-command-A`: cascade reset windows into an offset stack.
+- `control-option-command-C`: place focused window in the center half.
+- `control-option-command-E`: pop focused window out of the tile layout.
+- `control-option-command-M`: maximize focused window and reset tile memory.
+- `control-option-command-N`: move focused window to the next display.
+- `control-option-command-S`: shuffle reset resizable windows into random quarter-screen frames.
+- `control-option-shift-command-H/J/K/L`: resize the nearest split.
+- `control-option-command-return`: balance split weights.
+- `control-option-Z`: undo the last layout command.
+- `control-option-space`: pause or resume tiling actions.
+- `control-option-/`: show two-column command overlay. While open, scroll it with `control-option-J/K`.
 - `control-option-delete`: reset layout memory.
 
 Logs are written to `/tmp/winmgr.log`. The IPC socket is

@@ -75,15 +75,26 @@ Default bindings:
 | Hotkey | Action |
 |---|---|
 | `control-option-H/J/K/L` | Focus the nearest tiled window in that direction. |
-| `control-option-U` | Focus previous visible window. |
-| `control-option-I` | Focus next visible window. |
+| `control-option-U` | Focus previous non-tiled window in screen order. |
+| `control-option-I` | Focus next non-tiled window in screen order. |
+| `control-option-P` | Focus the previously focused window. |
 | `control-option-shift-H/J/K/L` | Swap focused tiled window with the neighbor in that direction. |
 | `control-option-command-H/J/K/L` | Push the focused window into that edge lane. |
-| `control-option-/` | Show or hide the command overlay. |
+| `control-option-command-A` | Cascade reset windows into an offset stack. |
+| `control-option-command-C` | Place focused window in the center half. |
+| `control-option-command-E` | Pop focused window out of the tile layout. |
+| `control-option-command-M` | Maximize focused window and reset tile memory. |
+| `control-option-command-N` | Move the focused window to the next display and tile it in the center. |
+| `control-option-command-S` | Shuffle reset resizable windows into random quarter-screen frames. |
+| `control-option-shift-command-H/J/K/L` | Resize the nearest matching split by `0.25` weight units. |
+| `control-option-command-return` | Balance split weights in the active Space. |
+| `control-option-Z` | Undo the last layout command. |
+| `control-option-space` | Pause or resume tiling actions. |
+| `control-option-/` | Show or hide the command overlay. While open, scroll it with `control-option-J/K`. |
 | `control-option-delete` | Reset layout memory. |
 
-Balance and resize are available through configuration and `winmgrctl`, but they
-do not ship with default hotkeys.
+Toggle-float is available through configuration or IPC, but it does not ship
+with a default hotkey.
 
 ## Common Workflows
 
@@ -108,6 +119,18 @@ control-option-H/J/K/L
 
 Directional focus uses geometry from the current solved layout.
 
+To move through floating or otherwise non-tiled windows, use:
+
+```text
+control-option-U/I
+```
+
+To return to the previous focused window, use:
+
+```text
+control-option-P
+```
+
 ### Swap Windows
 
 Focus a tiled window and press:
@@ -117,6 +140,56 @@ control-option-shift-H/J/K/L
 ```
 
 Swap exchanges window leaves. It does not rewrite axes, weights, or empty zones.
+
+### Resize And Balance
+
+Focus a tiled window and press:
+
+```text
+control-option-shift-command-H/J/K/L
+```
+
+Resize changes the nearest matching split weight by `0.25`. Use:
+
+```text
+control-option-command-return
+```
+
+to normalize all split weights in the active Space.
+
+### Undo A Layout Command
+
+Use:
+
+```text
+control-option-Z
+```
+
+Undo restores the previous tiled layout. It is one step deep; after undoing, the
+next undo toggles back to the layout you just left.
+
+### Move To The Next Display
+
+Use:
+
+```text
+control-option-command-N
+```
+
+The focused window moves to the next display by display slot order and is tiled
+in that display's center lane.
+
+### Pause Tiling
+
+Use:
+
+```text
+control-option-space
+```
+
+Pause blocks tiling mutations such as push, swap, resize, balance, undo,
+toggle-float, and drag-to-tile. Focus movement, the command overlay, config
+reload, and reset remain available.
 
 ### Reset Layout Memory
 
@@ -137,8 +210,9 @@ minimum-size constraints. It does not close windows.
 
 ### Drag Into A Zone
 
-Hold the configured drag modifier, drag a window, and release inside one of the
-configured proportional zones. The default modifier is `shift`.
+Hold the configured drag modifier before mouse-down, drag the focused window,
+and release inside one of the configured proportional zones. The default
+modifier is `shift`.
 
 The default zones are narrow edge and center regions:
 
@@ -149,6 +223,11 @@ The default zones are narrow edge and center regions:
 - center
 
 If a point matches zero or multiple zones, the drag is ignored.
+
+The command overlay lists active shortcuts in two columns of titled groups,
+including the active drag modifier and configured drop zones. If the overlay is
+taller than the available screen space, it shows a scrollbar and
+`control-option-J/K` scrolls it while it is open.
 
 ## Command Line
 

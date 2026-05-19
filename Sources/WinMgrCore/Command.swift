@@ -11,6 +11,7 @@ public enum Command: Equatable, Sendable {
     case resizeSplit(WindowID, Direction, delta: Double)
     case balance(SpaceID)
     case toggleFloat(WindowID)
+    case moveToNextDisplay(WindowID)
     case dropAtZone(WindowID, DisplayID, ZoneID)
     case resetLayout
     case startupConverge

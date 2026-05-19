@@ -5,6 +5,8 @@ import WinMgrCore
 final class EventTapClient {
     private var modifier: ModifierSet
     private let reporter: StartupReporter
+    private let dragChanged: (CGPoint) -> Void
+    private let dragEnded: () -> Void
     private let drop: (CGPoint) -> Void
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -14,10 +16,14 @@ final class EventTapClient {
     init(
         modifier: ModifierSet,
         reporter: StartupReporter,
+        dragChanged: @escaping (CGPoint) -> Void,
+        dragEnded: @escaping () -> Void,
         drop: @escaping (CGPoint) -> Void
     ) {
         self.modifier = modifier
         self.reporter = reporter
+        self.dragChanged = dragChanged
+        self.dragEnded = dragEnded
         self.drop = drop
     }
 
@@ -76,21 +82,29 @@ final class EventTapClient {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
                 reporter.error("Drag-zone event tap was disabled by timeout; re-enabled")
             }
+            dragEnded()
         case .tapDisabledByUserInput:
             reporter.error("Drag-zone event tap disabled by user input")
+            dragEnded()
         case .leftMouseDown:
             dragCandidate = modifiers(from: flagsRaw) == modifier
             hasDragged = false
+            if dragCandidate {
+                dragChanged(location)
+            }
         case .leftMouseDragged:
             guard dragCandidate else { return }
             if modifiers(from: flagsRaw) == modifier {
                 hasDragged = true
+                dragChanged(location)
             } else {
                 resetDrag()
+                dragEnded()
             }
         case .leftMouseUp:
             let shouldDrop = dragCandidate && hasDragged
             resetDrag()
+            dragEnded()
             if shouldDrop {
                 drop(location)
             }

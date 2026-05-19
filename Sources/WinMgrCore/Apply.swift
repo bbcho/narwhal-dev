@@ -22,6 +22,8 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
         return applyBalance(spaceID, to: world)
     case .toggleFloat(let windowID):
         return applyToggleFloat(windowID, to: world)
+    case .moveToNextDisplay(let windowID):
+        return applyMoveToNextDisplay(windowID, to: world)
     case .dropAtZone(let windowID, let displayID, let zoneID):
         return applyDropAtZone(windowID, displayID: displayID, zoneID: zoneID, to: world)
     case .resetLayout:
@@ -154,6 +156,29 @@ private func applyToggleFloat(_ windowID: WindowID, to world: World) -> Result<W
     }
 }
 
+private func applyMoveToNextDisplay(_ windowID: WindowID, to world: World) -> Result<World, CommandError> {
+    let currentDisplayID: DisplayID?
+    if let activeSpace = world.activeSpace,
+       let space = world.spaces[activeSpace],
+       let tiledDisplayID = tiledDisplay(containing: windowID, in: space) {
+        currentDisplayID = tiledDisplayID
+    } else {
+        currentDisplayID = world.windowDisplay[windowID]
+    }
+    guard let currentDisplayID else {
+        return .failure(.displayNotFound(DisplayID(raw: 0)))
+    }
+    guard let targetDisplayID = nextDisplayID(after: currentDisplayID, in: world.displays) else {
+        return .failure(.displayNotFound(currentDisplayID))
+    }
+    switch retileTarget(windowID, displayID: targetDisplayID, in: world) {
+    case .success(let target):
+        return worldByRetiling(target, insertion: .center, in: world)
+    case .failure(let error):
+        return .failure(error)
+    }
+}
+
 private func applyFocus(_ windowID: WindowID, to world: World) -> Result<World, CommandError> {
     guard world.windows[windowID] != nil else {
         return .failure(.windowNotFound(windowID))
@@ -206,14 +231,36 @@ private func applyFocusCycle(_ direction: FocusCycleDirection, to world: World) 
         return .failure(.activeSpaceUnavailable)
     }
     let focusedWindowID = world.spaces[activeSpace]?.focused
+    let tiledWindowIDs: Set<WindowID>
+    switch flattenedLayout(of: world) {
+    case .success(let layout):
+        tiledWindowIDs = Set(layout.tiled.keys)
+    case .failure:
+        tiledWindowIDs = []
+    }
     guard let targetWindowID = focusCycleTarget(
-        windows: Array(world.windows.values),
+        windows: Array(world.windows.values).filter { !tiledWindowIDs.contains($0.id) },
         from: focusedWindowID,
         direction: direction
     ) else {
         return .failure(.windowNotFound(focusedWindowID ?? WindowID(raw: 0)))
     }
     return applyFocus(targetWindowID, to: world)
+}
+
+private func nextDisplayID(after currentDisplayID: DisplayID, in displays: [DisplayID: DisplayInfo]) -> DisplayID? {
+    let ordered = displays.values.sorted { lhs, rhs in
+        if lhs.slot != rhs.slot {
+            return lhs.slot < rhs.slot
+        }
+        return lhs.id.raw < rhs.id.raw
+    }
+    guard ordered.count > 1,
+          let index = ordered.firstIndex(where: { $0.id == currentDisplayID })
+    else {
+        return nil
+    }
+    return ordered[(index + 1) % ordered.count].id
 }
 
 private func applySwap(_ windowID: WindowID, direction: Direction, to world: World) -> Result<World, CommandError> {

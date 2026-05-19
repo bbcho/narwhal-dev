@@ -16,6 +16,8 @@ public func windowOpenDecision(_ metadata: WindowMetadata, rules: [WindowRule]) 
         return .ignore(metadata.id)
     case .pinToDisplay(let slot):
         return metadata.isResizable ? .pinToDisplay(metadata, slot: slot) : .forceFloat(metadata)
+    case .tileToZone(let zoneID):
+        return metadata.isResizable ? .tileToZone(metadata, zoneID) : .forceFloat(metadata)
     }
 }
 

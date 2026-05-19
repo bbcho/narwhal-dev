@@ -51,7 +51,7 @@ All top-level keys are required.
 Keys are lowercased during parsing. The current Carbon hotkey backend supports:
 
 - `h`, `j`, `k`, `l`
-- `u`, `i`, `r`
+- `n`, `p`, `r`, `u`, `i`, `z`
 - `/`
 - `return`
 - `space`
@@ -89,7 +89,7 @@ Tiles the focused window into the center anchor.
 
 ### `eject`
 
-Moves a tiled focused window to the floating list while preserving the zone tree.
+Pops a tiled focused window out to the floating list while preserving the zone tree.
 
 ```lua
 { type = "eject" }
@@ -133,7 +133,7 @@ Focuses the nearest tiled neighbor in a direction.
 
 ### `focus_cycle`
 
-Cycles through visible windows in frame order.
+Cycles through non-tiled windows in frame order.
 
 ```lua
 { type = "focus_cycle", direction = "next" }
@@ -141,12 +141,72 @@ Cycles through visible windows in frame order.
 
 Directions: `previous`, `next`.
 
+### `focus_previous`
+
+Focuses the previous window in WinMgr's recent focus history.
+
+```lua
+{ type = "focus_previous" }
+```
+
 ### `balance`
 
 Normalizes every split weight in the active Space while preserving tree shape.
 
 ```lua
 { type = "balance" }
+```
+
+### `shuffle`
+
+Clears tile memory and lays out resizable visible windows as random quarter-screen frames.
+
+```lua
+{ type = "shuffle" }
+```
+
+### `cascade`
+
+Clears tile memory and lays out resizable visible windows as a down-right offset
+stack of quarter-screen frames.
+
+```lua
+{ type = "cascade" }
+```
+
+### `maximize_reset`
+
+Maximizes the focused window to the display's visible frame and clears tile
+memory for the rest of the layout.
+
+```lua
+{ type = "maximize_reset" }
+```
+
+### `undo_layout`
+
+Restores the previous tiled layout. The undo buffer is one step deep.
+
+```lua
+{ type = "undo_layout" }
+```
+
+### `move_to_next_display`
+
+Moves the focused window to the next display by display slot order and tiles it
+in the center lane.
+
+```lua
+{ type = "move_to_next_display" }
+```
+
+### `toggle_pause`
+
+Pauses or resumes layout-mutating tiling actions. Focus movement, command
+overlay, config reload, and reset remain available.
+
+```lua
+{ type = "toggle_pause" }
 ```
 
 ### `reset_layout`
@@ -167,7 +227,9 @@ Reloads the config file.
 
 ### `show_commands`
 
-Shows or hides the command overlay.
+Shows or hides the command overlay. The overlay uses two columns of titled
+groups and shows a scrollbar when the content is taller than the available
+screen space.
 
 ```lua
 { type = "show_commands" }
@@ -229,8 +291,8 @@ Zone IDs must be non-empty and unique.
 
 Corners: `topLeft`, `topRight`, `bottomLeft`, `bottomRight`.
 
-`insert_at_subtree` is parsed for schema stability, but current drag execution
-rejects it explicitly as unsupported.
+`insert_at_subtree` inserts into the configured tree path. If the path is absent
+in the current tree, the command fails explicitly.
 
 ## Border
 
@@ -323,6 +385,16 @@ Pin to display slot:
 
 `slot` must be a non-negative integer that fits in Swift `Int`.
 
+Tile to a configured zone:
+
+```lua
+{ type = "tile_to_zone", zone = "center" }
+```
+
+`zone` must reference a configured zone ID. WinMgr tracks the opened window,
+waits for the coalesced environment refresh to complete, then applies the same
+placement action used by drag-to-tile for that zone.
+
 If a rule asks to tile a non-resizable window, the core force-floats it instead.
 
 ## Full Example
@@ -332,6 +404,17 @@ return {
   keymap = {
     { key = "h", modifiers = { "control", "option", "command" }, action = { type = "push", direction = "left" } },
     { key = "l", modifiers = { "control", "option", "command" }, action = { type = "push", direction = "right" } },
+    { key = "a", modifiers = { "control", "option", "command" }, action = { type = "cascade" } },
+    { key = "c", modifiers = { "control", "option", "command" }, action = { type = "center" } },
+    { key = "e", modifiers = { "control", "option", "command" }, action = { type = "eject" } },
+    { key = "m", modifiers = { "control", "option", "command" }, action = { type = "maximize_reset" } },
+    { key = "n", modifiers = { "control", "option", "command" }, action = { type = "move_to_next_display" } },
+    { key = "s", modifiers = { "control", "option", "command" }, action = { type = "shuffle" } },
+    { key = "h", modifiers = { "control", "option", "shift", "command" }, action = { type = "resize_split", direction = "left", delta = 0.25 } },
+    { key = "l", modifiers = { "control", "option", "shift", "command" }, action = { type = "resize_split", direction = "right", delta = 0.25 } },
+    { key = "return", modifiers = { "control", "option", "command" }, action = { type = "balance" } },
+    { key = "z", modifiers = { "control", "option" }, action = { type = "undo_layout" } },
+    { key = "space", modifiers = { "control", "option" }, action = { type = "toggle_pause" } },
     { key = "r", modifiers = { "control", "option" }, action = { type = "reload_config" } },
     { key = "/", modifiers = { "control", "option" }, action = { type = "show_commands" } },
     { key = "delete", modifiers = { "control", "option" }, action = { type = "reset_layout" } },
@@ -352,6 +435,10 @@ return {
     {
       predicate = { type = "role", value = "AXDialog" },
       action = { type = "force_float" },
+    },
+    {
+      predicate = { type = "bundle_id", value = "com.apple.Notes" },
+      action = { type = "tile_to_zone", zone = "center" },
     },
   },
 }

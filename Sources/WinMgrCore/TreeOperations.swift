@@ -43,17 +43,17 @@ public func pruneTree(_ node: Node, keeping liveWindowIDs: Set<WindowID>) -> Nod
 }
 
 public func pushIntoTree(_ window: WindowID, _ direction: Direction, _ node: Node) -> Node {
-    let treeWithoutWindow = clearWindowPreservingZones(window, from: node)
+    let treeWithoutWindow = insertionBaseAfterClearing(window, from: node)
     return insertAtRootEdge(window, direction, treeWithoutWindow)
 }
 
 public func centerIntoTree(_ window: WindowID, _ node: Node) -> Node {
-    let treeWithoutWindow = clearWindowPreservingZones(window, from: node)
+    let treeWithoutWindow = insertionBaseAfterClearing(window, from: node)
     return insertAtCenter(window, treeWithoutWindow)
 }
 
 public func quarterIntoTree(_ window: WindowID, _ corner: Corner, _ node: Node) -> Node {
-    let treeWithoutWindow = clearWindowPreservingZones(window, from: node)
+    let treeWithoutWindow = insertionBaseAfterClearing(window, from: node)
     return insertAtRootCorner(window, corner, treeWithoutWindow)
 }
 
@@ -143,6 +143,11 @@ private func clearWindowPreservingZones(_ window: WindowID, from node: Node) -> 
         }
         return .split(makeSplit(axis: split.axis, cells: cells))
     }
+}
+
+private func insertionBaseAfterClearing(_ window: WindowID, from node: Node) -> Node {
+    let cleared = clearWindowPreservingZones(window, from: node)
+    return occupiedWindows(in: cleared).isEmpty ? .void : cleared
 }
 
 private func insertIntoSubtreeAfterClearing(

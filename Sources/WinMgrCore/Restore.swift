@@ -142,6 +142,7 @@ public enum StoredRuleAction: Equatable, Codable, Sendable {
     case forceFloat
     case ignore
     case pinToDisplay(displaySlot: Int)
+    case tileToZone(ZoneID)
 }
 
 public struct StoredWorld: Equatable, Codable, Sendable {
@@ -432,6 +433,8 @@ private func storedRuleAction(from action: RuleAction) -> StoredRuleAction {
         return .ignore
     case .pinToDisplay(let slot):
         return .pinToDisplay(displaySlot: slot)
+    case .tileToZone(let zoneID):
+        return .tileToZone(zoneID)
     }
 }
 
@@ -443,6 +446,8 @@ private func ruleAction(from action: StoredRuleAction) -> RuleAction {
         return .ignore
     case .pinToDisplay(let displaySlot):
         return .pinToDisplay(slot: displaySlot)
+    case .tileToZone(let zoneID):
+        return .tileToZone(zoneID)
     }
 }
 
