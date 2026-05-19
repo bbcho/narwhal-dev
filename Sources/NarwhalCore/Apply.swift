@@ -227,7 +227,11 @@ private func applyFocusDirection(_ direction: Direction, to world: World) -> Res
         return .failure(.layoutUnsatisfiable(unsatisfiable))
     }
     let targetWindowID = focusTarget(in: currentLayout, from: focusedWindowID, direction: direction)
-        ?? focusTarget(windows: Array(world.windows.values), from: focusedWindowID, direction: direction)
+        ?? focusTarget(
+            windows: activeLayoutWindows(in: currentLayout, world: world),
+            from: focusedWindowID,
+            direction: direction
+        )
     guard let targetWindowID else {
         return .failure(.noNeighbor(direction))
     }
@@ -239,21 +243,26 @@ private func applyFocusCycle(_ direction: FocusCycleDirection, to world: World) 
         return .failure(.activeSpaceUnavailable)
     }
     let focusedWindowID = world.spaces[activeSpace]?.focused
-    let tiledWindowIDs: Set<WindowID>
+    let floatingWindows: [WindowMetadata]
     switch flattenedLayout(of: world) {
     case .success(let layout):
-        tiledWindowIDs = Set(layout.tiled.keys)
+        floatingWindows = layout.floatingZOrder.compactMap { world.windows[$0] }
     case .failure:
-        tiledWindowIDs = []
+        floatingWindows = []
     }
     guard let targetWindowID = focusCycleTarget(
-        windows: Array(world.windows.values).filter { !tiledWindowIDs.contains($0.id) },
+        windows: floatingWindows,
         from: focusedWindowID,
         direction: direction
     ) else {
         return .failure(.windowNotFound(focusedWindowID ?? WindowID(raw: 0)))
     }
     return applyFocus(targetWindowID, to: world)
+}
+
+private func activeLayoutWindows(in layout: Layout, world: World) -> [WindowMetadata] {
+    let activeWindowIDs = Set(layout.tiled.keys).union(layout.floatingZOrder)
+    return activeWindowIDs.compactMap { world.windows[$0] }
 }
 
 private func nextDisplayID(after currentDisplayID: DisplayID, in displays: [DisplayID: DisplayInfo]) -> DisplayID? {

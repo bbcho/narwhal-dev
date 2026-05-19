@@ -118,6 +118,26 @@ struct WindowInventoryTests {
         #expect(poll.suppressedSpaceReplacement)
     }
 
+    @Test("Bulk open-only inventory expansion is treated as Space replacement")
+    func bulkOpenOnlyInventoryExpansionIsSpaceReplacement() {
+        let previous = WindowInventoryState(visibleWindowIDs: [
+            WindowID(raw: 1),
+            WindowID(raw: 2),
+            WindowID(raw: 3),
+            WindowID(raw: 4)
+        ])
+        let current = (1...17).map { metadata(WindowID(raw: UInt32($0))) }
+
+        let poll = pollWindowInventorySuppressingLikelySpaceReplacement(
+            previous: previous,
+            current: current
+        )
+
+        #expect(poll.state == WindowInventoryState(visibleWindowIDs: Set(current.map(\.id))))
+        #expect(poll.events == [])
+        #expect(poll.suppressedSpaceReplacement)
+    }
+
     @Test("Full disappearance inventory snapshot is treated as transient Space replacement")
     func fullDisappearanceInventorySnapshotIsTransientSpaceReplacement() {
         let previous = WindowInventoryState(visibleWindowIDs: [

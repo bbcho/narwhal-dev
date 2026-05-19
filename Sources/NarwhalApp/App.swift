@@ -306,8 +306,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             preserveSpaceLayouts: preserveSpaceLayouts
         )
         let result = await worldActor.refreshEnvironment(snapshot)
+        let preserved = result.preservedSpaceLayouts ? " preservedSpaceLayouts=true" : ""
         reporter.info(
-            "Environment refreshed (\(reason)): activeSpace=\(result.activeSpace?.raw.description ?? "nil") displays=\(result.displayCount) windows=\(result.windowCount) quality=\(describe(result.quality))"
+            "Environment refreshed (\(reason)): activeSpace=\(result.activeSpace?.raw.description ?? "nil") displays=\(result.displayCount) windows=\(result.windowCount) quality=\(describe(result.quality))\(preserved)"
         )
         updateOperatingStatus { status in
             status.activeSpace = result.activeSpace
@@ -1962,13 +1963,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch completion.decision {
         case .cleared(let completedRequest):
             if completed && shouldApplyPendingTileRulesAfterEnvironmentRefresh(
-                preservedSpaceLayouts: preserveSpaceLayouts
+                preservedSpaceLayouts: environment.preservedSpaceLayouts
             ) {
                 await applyPendingTileRules(reason: "coalesced \(completedRequest.description)")
             }
             if shouldPersistRestoreAfterEnvironmentRefresh(
                 reasons: completedRequest.reasons,
-                preservedSpaceLayouts: preserveSpaceLayouts
+                preservedSpaceLayouts: environment.preservedSpaceLayouts
             ) {
                 await persistRestore(reason: "coalesced \(completedRequest.description)")
             }

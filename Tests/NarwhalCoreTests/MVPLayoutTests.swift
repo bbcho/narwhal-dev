@@ -1924,6 +1924,138 @@ struct MVPLayoutTests {
         #expect(next.pendingRules == [firstSpaceWindow: .forceFloat])
     }
 
+    @Test("Contaminated active Space snapshots preserve inactive Space memory")
+    func contaminatedActiveSpaceSnapshotsPreserveInactiveSpaceMemory() throws {
+        let displayID = DisplayID(raw: 1)
+        let firstSpace = SpaceID(raw: 1)
+        let secondSpace = SpaceID(raw: 2)
+        let firstSpaceWindow = WindowID(raw: 11)
+        let secondSpaceFloating = WindowID(raw: 21)
+        let firstTree = pushIntoTree(firstSpaceWindow, .left, .void)
+        let display = self.display(displayID, x: 0, width: 1200)
+        let world = World(
+            displays: [displayID: display],
+            activeSpace: secondSpace,
+            spaces: [
+                firstSpace: SpaceState(
+                    id: firstSpace,
+                    displays: [displayID: DisplaySpaceState(displayID: displayID, tree: firstTree, floating: [])],
+                    focused: firstSpaceWindow
+                ),
+                secondSpace: SpaceState(
+                    id: secondSpace,
+                    displays: [
+                        displayID: DisplaySpaceState(displayID: displayID, tree: .void, floating: [secondSpaceFloating])
+                    ],
+                    focused: secondSpaceFloating
+                )
+            ],
+            windows: [
+                firstSpaceWindow: metadata(for: firstSpaceWindow),
+                secondSpaceFloating: metadata(for: secondSpaceFloating)
+            ],
+            windowDisplay: [
+                firstSpaceWindow: displayID,
+                secondSpaceFloating: displayID
+            ],
+            windowConstraints: [firstSpaceWindow: WindowConstraints(minWidth: 500)],
+            pendingRules: [firstSpaceWindow: .forceFloat],
+            config: .default
+        )
+        let inactiveFrame = CGRect(x: 100, y: 100, width: 500, height: 600)
+        let activeFrame = CGRect(x: 650, y: 100, width: 500, height: 600)
+        let snapshot = EnvironmentSnapshot(
+            activeSpace: secondSpace,
+            displays: [displayID: display],
+            axSnapshot: AXWindowSnapshot(
+                windows: [
+                    metadata(for: firstSpaceWindow, frame: inactiveFrame),
+                    metadata(for: secondSpaceFloating, frame: activeFrame)
+                ],
+                quality: .complete
+            )
+        )
+
+        #expect(environmentSnapshotPreservesSpaceLayouts(snapshot, in: world))
+        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
+            Issue.record("Expected environmentChanged to succeed")
+            return
+        }
+
+        #expect(next.windows[firstSpaceWindow]?.frame == inactiveFrame)
+        #expect(next.windows[secondSpaceFloating]?.frame == activeFrame)
+        #expect(next.spaces[firstSpace]?.displays[displayID]?.tree == firstTree)
+        #expect(next.spaces[firstSpace]?.focused == firstSpaceWindow)
+        #expect(next.spaces[secondSpace]?.displays[displayID]?.floating == [secondSpaceFloating])
+        #expect(next.windowConstraints == [firstSpaceWindow: WindowConstraints(minWidth: 500)])
+        #expect(next.pendingRules == [firstSpaceWindow: .forceFloat])
+    }
+
+    @Test("Active Space live pruning preserves inactive Space memory")
+    func activeSpaceLivePruningPreservesInactiveSpaceMemory() throws {
+        let displayID = DisplayID(raw: 1)
+        let firstSpace = SpaceID(raw: 1)
+        let secondSpace = SpaceID(raw: 2)
+        let firstSpaceWindow = WindowID(raw: 11)
+        let activeLive = WindowID(raw: 21)
+        let activeClosed = WindowID(raw: 22)
+        let firstTree = pushIntoTree(firstSpaceWindow, .left, .void)
+        let display = self.display(displayID, x: 0, width: 1200)
+        let world = World(
+            displays: [displayID: display],
+            activeSpace: secondSpace,
+            spaces: [
+                firstSpace: SpaceState(
+                    id: firstSpace,
+                    displays: [displayID: DisplaySpaceState(displayID: displayID, tree: firstTree, floating: [])],
+                    focused: firstSpaceWindow
+                ),
+                secondSpace: SpaceState(
+                    id: secondSpace,
+                    displays: [
+                        displayID: DisplaySpaceState(
+                            displayID: displayID,
+                            tree: .void,
+                            floating: [activeLive, activeClosed]
+                        )
+                    ],
+                    focused: activeClosed
+                )
+            ],
+            windows: [
+                firstSpaceWindow: metadata(for: firstSpaceWindow),
+                activeLive: metadata(for: activeLive),
+                activeClosed: metadata(for: activeClosed)
+            ],
+            windowDisplay: [
+                firstSpaceWindow: displayID,
+                activeLive: displayID,
+                activeClosed: displayID
+            ],
+            windowConstraints: [
+                firstSpaceWindow: WindowConstraints(minWidth: 500),
+                activeClosed: WindowConstraints(minWidth: 600)
+            ],
+            pendingRules: [
+                firstSpaceWindow: .forceFloat,
+                activeClosed: .forceFloat
+            ],
+            config: .default
+        )
+
+        let next = pruneActiveSpace(world, keepingLiveWindows: [activeLive])
+
+        #expect(next.windows[firstSpaceWindow] == metadata(for: firstSpaceWindow))
+        #expect(next.windows[activeLive] == metadata(for: activeLive))
+        #expect(next.windows[activeClosed] == nil)
+        #expect(next.spaces[firstSpace]?.displays[displayID]?.tree == firstTree)
+        #expect(next.spaces[firstSpace]?.focused == firstSpaceWindow)
+        #expect(next.spaces[secondSpace]?.displays[displayID]?.floating == [activeLive])
+        #expect(next.spaces[secondSpace]?.focused == nil)
+        #expect(next.windowConstraints == [firstSpaceWindow: WindowConstraints(minWidth: 500)])
+        #expect(next.pendingRules == [firstSpaceWindow: .forceFloat])
+    }
+
     @Test("Post-transition cleanup applies open rules to windows first seen during preservation")
     func postTransitionCleanupAppliesOpenRulesToWindowsFirstSeenDuringPreservation() throws {
         let displayID = DisplayID(raw: 1)

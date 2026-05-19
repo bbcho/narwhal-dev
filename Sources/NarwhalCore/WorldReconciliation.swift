@@ -29,6 +29,29 @@ public func pruneWorld(_ world: World, keepingLiveWindows liveWindowIDs: Set<Win
     )
 }
 
+public func pruneActiveSpace(_ world: World, keepingLiveWindows liveWindowIDs: Set<WindowID>) -> World {
+    guard let activeSpaceID = world.activeSpace,
+          let activeSpace = world.spaces[activeSpaceID]
+    else { return world }
+
+    let removedActiveSpaceWindowIDs = windowIDs(in: activeSpace).subtracting(liveWindowIDs)
+    guard !removedActiveSpaceWindowIDs.isEmpty else { return world }
+
+    var spaces = world.spaces
+    spaces[activeSpaceID] = removingWindows(removedActiveSpaceWindowIDs, from: activeSpace)
+
+    return World(
+        displays: world.displays,
+        activeSpace: world.activeSpace,
+        spaces: spaces,
+        windows: world.windows.filter { !removedActiveSpaceWindowIDs.contains($0.key) },
+        windowDisplay: world.windowDisplay.filter { !removedActiveSpaceWindowIDs.contains($0.key) },
+        windowConstraints: world.windowConstraints.filter { !removedActiveSpaceWindowIDs.contains($0.key) },
+        pendingRules: world.pendingRules.filter { !removedActiveSpaceWindowIDs.contains($0.key) },
+        config: world.config
+    )
+}
+
 public func reconcileEnvironment(_ snapshot: EnvironmentSnapshot, in world: World) -> World {
     switch snapshot.axSnapshot.quality {
     case .complete:
@@ -66,6 +89,22 @@ func worldByClosingWindow(_ windowID: WindowID, in world: World) -> World {
     pruneWorld(world, keepingLiveWindows: Set(world.windows.keys).subtracting([windowID]))
 }
 
+public func environmentSnapshotPreservesSpaceLayouts(_ snapshot: EnvironmentSnapshot, in world: World) -> Bool {
+    guard case .complete = snapshot.axSnapshot.quality else {
+        return snapshot.preserveSpaceLayouts
+    }
+
+    let liveWindowIDs = Set(snapshot.axSnapshot.windows.map(\.id))
+    let activeSpaceChanged = world.activeSpace != nil && snapshot.activeSpace != world.activeSpace
+    return snapshot.preserveSpaceLayouts
+        || activeSpaceChanged
+        || containsTrackedInactiveSpaceWindows(
+            liveWindowIDs,
+            activeSpace: snapshot.activeSpace,
+            spaces: world.spaces
+        )
+}
+
 private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in world: World) -> World {
     let liveWindows = snapshot.axSnapshot.windows.reduce(into: [:]) { result, metadata in
         result[metadata.id] = metadata
@@ -73,8 +112,7 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
     let liveWindowIDs = Set(liveWindows.keys)
     let previouslyTrackedWindowIDs = trackedWindowIDs(in: world.spaces)
     let liveWindowDisplay = displayOwnership(for: liveWindows.values, displays: snapshot.displays)
-    let activeSpaceChanged = world.activeSpace != nil && snapshot.activeSpace != world.activeSpace
-    if snapshot.preserveSpaceLayouts || activeSpaceChanged {
+    if environmentSnapshotPreservesSpaceLayouts(snapshot, in: world) {
         var windows = world.windows
         windows.merge(liveWindows) { _, live in live }
 
@@ -161,6 +199,19 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
         previouslyTrackedWindowIDs: previouslyTrackedWindowIDs,
         in: reconciled
     )
+}
+
+private func containsTrackedInactiveSpaceWindows(
+    _ liveWindowIDs: Set<WindowID>,
+    activeSpace: SpaceID?,
+    spaces: [SpaceID: SpaceState]
+) -> Bool {
+    guard let activeSpace else { return false }
+    let inactiveWindowIDs = spaces.reduce(into: Set<WindowID>()) { result, pair in
+        guard pair.key != activeSpace else { return }
+        result.formUnion(windowIDs(in: pair.value))
+    }
+    return !liveWindowIDs.isDisjoint(with: inactiveWindowIDs)
 }
 
 private func trackedWindowIDs(in spaces: [SpaceID: SpaceState]) -> Set<WindowID> {

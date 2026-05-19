@@ -20,6 +20,7 @@ struct EnvironmentRefreshResult: Sendable {
     let displayCount: Int
     let windowCount: Int
     let quality: AXSnapshotQuality
+    let preservedSpaceLayouts: Bool
 }
 
 actor WorldActor {
@@ -42,6 +43,7 @@ actor WorldActor {
     }
 
     func refreshEnvironment(_ snapshot: EnvironmentSnapshot) -> EnvironmentRefreshResult {
+        let preservedSpaceLayouts = environmentSnapshotPreservesSpaceLayouts(snapshot, in: world)
         switch apply(.environmentChanged(snapshot), to: world) {
         case .success(let next):
             world = next
@@ -54,7 +56,8 @@ actor WorldActor {
             activeSpace: world.activeSpace,
             displayCount: world.displays.count,
             windowCount: world.windows.count,
-            quality: snapshot.axSnapshot.quality
+            quality: snapshot.axSnapshot.quality,
+            preservedSpaceLayouts: preservedSpaceLayouts
         )
     }
 
@@ -94,7 +97,7 @@ actor WorldActor {
     }
 
     func reconcileLiveWindows(_ liveWindowIDs: Set<WindowID>) {
-        world = pruneWorld(world, keepingLiveWindows: liveWindowIDs)
+        world = pruneActiveSpace(world, keepingLiveWindows: liveWindowIDs)
         pruneRuntimeState()
     }
 
@@ -374,7 +377,11 @@ actor WorldActor {
             return .failure(.layoutUnsatisfiable(unsatisfiable))
         }
         let targetWindowID = focusTarget(in: currentLayout, from: focusedWindowID, direction: direction)
-            ?? focusTarget(windows: Array(world.windows.values), from: focusedWindowID, direction: direction)
+            ?? focusTarget(
+                windows: activeLayoutWindows(in: currentLayout),
+                from: focusedWindowID,
+                direction: direction
+            )
         guard let targetWindowID else {
             return .failure(.noNeighbor(direction))
         }
@@ -385,15 +392,15 @@ actor WorldActor {
     }
 
     func planFocusCycle(from focusedWindowID: WindowID?, direction: FocusCycleDirection) -> Result<FocusPlanResult, CommandError> {
-        let tiledWindowIDs: Set<WindowID>
+        let currentLayout: Layout
         switch flattenedLayout(of: world) {
         case .success(let layout):
-            tiledWindowIDs = Set(layout.tiled.keys)
+            currentLayout = layout
         case .failure:
-            tiledWindowIDs = []
+            currentLayout = Layout(tiled: [:], floatingZOrder: [], hidden: [])
         }
         guard let targetWindowID = focusCycleTarget(
-            windows: Array(world.windows.values).filter { !tiledWindowIDs.contains($0.id) },
+            windows: currentLayout.floatingZOrder.compactMap { world.windows[$0] },
             from: focusedWindowID,
             direction: direction
         ) else {
@@ -412,10 +419,22 @@ actor WorldActor {
         return .success(FocusPlanResult(window: target, frame: targetFrame))
     }
 
+    private func activeLayoutWindows(in layout: Layout) -> [WindowMetadata] {
+        let activeWindowIDs = Set(layout.tiled.keys).union(layout.floatingZOrder)
+        return activeWindowIDs.compactMap { world.windows[$0] }
+    }
+
     func planFocusPrevious() -> Result<FocusPlanResult, CommandError> {
         let current = world.activeSpace.flatMap { world.spaces[$0]?.focused }
+        let activeWindowIDs: Set<WindowID>
+        switch flattenedLayout(of: world) {
+        case .success(let layout):
+            activeWindowIDs = Set(layout.tiled.keys).union(layout.floatingZOrder)
+        case .failure:
+            activeWindowIDs = []
+        }
         guard let targetWindowID = focusHistory.reversed().first(where: { windowID in
-            windowID != current && world.windows[windowID] != nil
+            windowID != current && activeWindowIDs.contains(windowID) && world.windows[windowID] != nil
         }) else {
             return .failure(.windowNotFound(current ?? WindowID(raw: 0)))
         }

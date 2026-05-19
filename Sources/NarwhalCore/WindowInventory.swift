@@ -64,8 +64,16 @@ public func pollWindowInventorySuppressingLikelySpaceReplacement(
         && closedCount > 0
         && previousCount >= 3
         && currentCount * 2 <= previousCount
+    let isLikelyBulkAppearance = closedCount == 0
+        && openedCount >= 5
+        && previousCount > 0
+        && currentCount >= previousCount * 2
 
-    guard isLikelySpaceReplacement || isLikelyTransientFullDisappearance || isLikelyBulkDisappearance else {
+    guard isLikelySpaceReplacement
+        || isLikelyTransientFullDisappearance
+        || isLikelyBulkDisappearance
+        || isLikelyBulkAppearance
+    else {
         return poll
     }
     return WindowInventoryPoll(

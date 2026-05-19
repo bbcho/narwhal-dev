@@ -97,6 +97,105 @@ struct ApplyCommandTests {
         #expect(wrapped.spaces[space]?.focused == secondFloating)
     }
 
+    @Test("Focus cycle stays inside active Space floating windows")
+    func focusCycleStaysInsideActiveSpaceFloatingWindows() throws {
+        let display = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let inactiveSpace = SpaceID(raw: 2)
+        let activeFloating = WindowID(raw: 10)
+        let inactiveFloating = WindowID(raw: 20)
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0)],
+            activeSpace: activeSpace,
+            spaces: [
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [
+                        display: DisplaySpaceState(displayID: display, tree: .void, floating: [activeFloating])
+                    ],
+                    focused: nil
+                ),
+                inactiveSpace: SpaceState(
+                    id: inactiveSpace,
+                    displays: [
+                        display: DisplaySpaceState(displayID: display, tree: .void, floating: [inactiveFloating])
+                    ],
+                    focused: inactiveFloating
+                )
+            ],
+            windows: [
+                activeFloating: metadata(activeFloating, x: 400, y: 0),
+                inactiveFloating: metadata(inactiveFloating, x: 0, y: 0)
+            ],
+            windowDisplay: [
+                activeFloating: display,
+                inactiveFloating: display
+            ],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.focusCycle(.next), to: world) else {
+            Issue.record("Expected focusCycle to succeed")
+            return
+        }
+
+        #expect(next.spaces[activeSpace]?.focused == activeFloating)
+        #expect(next.spaces[inactiveSpace]?.focused == inactiveFloating)
+    }
+
+    @Test("Directional focus fallback stays inside active Space windows")
+    func directionalFocusFallbackStaysInsideActiveSpaceWindows() throws {
+        let display = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let inactiveSpace = SpaceID(raw: 2)
+        let source = WindowID(raw: 10)
+        let activeRight = WindowID(raw: 11)
+        let inactiveRight = WindowID(raw: 20)
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0)],
+            activeSpace: activeSpace,
+            spaces: [
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [
+                        display: DisplaySpaceState(displayID: display, tree: .void, floating: [source, activeRight])
+                    ],
+                    focused: source
+                ),
+                inactiveSpace: SpaceState(
+                    id: inactiveSpace,
+                    displays: [
+                        display: DisplaySpaceState(displayID: display, tree: .void, floating: [inactiveRight])
+                    ],
+                    focused: inactiveRight
+                )
+            ],
+            windows: [
+                source: metadata(source, x: 100, y: 0),
+                activeRight: metadata(activeRight, x: 500, y: 0),
+                inactiveRight: metadata(inactiveRight, x: 200, y: 0)
+            ],
+            windowDisplay: [
+                source: display,
+                activeRight: display,
+                inactiveRight: display
+            ],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        guard case .success(let next) = apply(.focusDirection(.right), to: world) else {
+            Issue.record("Expected focusDirection to succeed")
+            return
+        }
+
+        #expect(next.spaces[activeSpace]?.focused == activeRight)
+        #expect(next.spaces[inactiveSpace]?.focused == inactiveRight)
+    }
+
     @Test("Shuffle reset layouts all resizable windows as quarter-screen frames")
     func shuffleResetLayoutsResizableWindowsAsQuarterScreenFrames() throws {
         let display = DisplayID(raw: 1)
