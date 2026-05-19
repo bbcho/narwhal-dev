@@ -571,6 +571,31 @@ public func resetTilingState(in world: World) -> World {
     )
 }
 
+public func resetActiveSpaceTilingState(in world: World) -> World {
+    guard let activeSpaceID = world.activeSpace,
+          let activeSpace = world.spaces[activeSpaceID]
+    else { return world }
+
+    let activeWindowIDs = activeSpaceWindowIDs(in: world)
+    let displays = activeSpace.displays.mapValues { displayState in
+        DisplaySpaceState(displayID: displayState.displayID, tree: .void, floating: [])
+    }
+    var spaces = world.spaces
+    spaces[activeSpaceID] = SpaceState(id: activeSpace.id, displays: displays, focused: nil)
+    let activeOnlyWindowIDs = activeWindowIDs.subtracting(trackedWindowIDs(in: spaces))
+
+    return World(
+        displays: world.displays,
+        activeSpace: world.activeSpace,
+        spaces: spaces,
+        windows: world.windows,
+        windowDisplay: world.windowDisplay,
+        windowConstraints: world.windowConstraints.filter { !activeOnlyWindowIDs.contains($0.key) },
+        pendingRules: world.pendingRules.filter { !activeOnlyWindowIDs.contains($0.key) },
+        config: world.config
+    )
+}
+
 public func recordObservedConstraints(_ observed: WindowConstraints, for windowID: WindowID, in world: World) -> World {
     guard world.windows[windowID] != nil, !observed.isEmpty else { return world }
 

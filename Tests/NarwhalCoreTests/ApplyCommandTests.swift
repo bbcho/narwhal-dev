@@ -145,6 +145,52 @@ struct ApplyCommandTests {
         #expect(next.spaces[inactiveSpace]?.focused == inactiveFloating)
     }
 
+    @Test("Focus cycle fails instead of crossing Spaces when active Space has no floating windows")
+    func focusCycleFailsInsteadOfCrossingSpacesWhenActiveSpaceHasNoFloatingWindows() throws {
+        let display = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let inactiveSpace = SpaceID(raw: 2)
+        let activeTiled = WindowID(raw: 10)
+        let inactiveFloating = WindowID(raw: 20)
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0)],
+            activeSpace: activeSpace,
+            spaces: [
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [
+                        display: DisplaySpaceState(
+                            displayID: display,
+                            tree: pushIntoTree(activeTiled, .left, .void),
+                            floating: []
+                        )
+                    ],
+                    focused: activeTiled
+                ),
+                inactiveSpace: SpaceState(
+                    id: inactiveSpace,
+                    displays: [
+                        display: DisplaySpaceState(displayID: display, tree: .void, floating: [inactiveFloating])
+                    ],
+                    focused: inactiveFloating
+                )
+            ],
+            windows: [
+                activeTiled: metadata(activeTiled, x: 0, y: 0),
+                inactiveFloating: metadata(inactiveFloating, x: 400, y: 0)
+            ],
+            windowDisplay: [
+                activeTiled: display,
+                inactiveFloating: display
+            ],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        #expect(apply(.focusCycle(.next), to: world) == .failure(.windowNotFound(activeTiled)))
+    }
+
     @Test("Directional focus fallback stays inside active Space windows")
     func directionalFocusFallbackStaysInsideActiveSpaceWindows() throws {
         let display = DisplayID(raw: 1)
@@ -210,7 +256,13 @@ struct ApplyCommandTests {
             spaces: [
                 space: SpaceState(
                     id: space,
-                    displays: [display: DisplaySpaceState(displayID: display, tree: pushIntoTree(first, .left, .void), floating: [])],
+                    displays: [
+                        display: DisplaySpaceState(
+                            displayID: display,
+                            tree: pushIntoTree(first, .left, .void),
+                            floating: [second, third, fourth]
+                        )
+                    ],
                     focused: first
                 )
             ],
@@ -260,7 +312,13 @@ struct ApplyCommandTests {
             spaces: [
                 space: SpaceState(
                     id: space,
-                    displays: [display: DisplaySpaceState(displayID: display, tree: pushIntoTree(first, .left, .void), floating: [])],
+                    displays: [
+                        display: DisplaySpaceState(
+                            displayID: display,
+                            tree: pushIntoTree(first, .left, .void),
+                            floating: [second, third]
+                        )
+                    ],
                     focused: first
                 )
             ],

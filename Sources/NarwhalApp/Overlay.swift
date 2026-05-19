@@ -104,6 +104,14 @@ final class Overlay {
         tiledBorderWindows[windowID]?.frame
     }
 
+    func debugTiledBorderWindowNumber(for windowID: WindowID) -> Int? {
+        tiledBorderWindows[windowID]?.windowNumber
+    }
+
+    func debugTiledBorderLevelRawValue(for windowID: WindowID) -> Int? {
+        tiledBorderWindows[windowID]?.level.rawValue
+    }
+
     func stop() {
         hideFocusBorder()
         updateTiledBorders([])
@@ -200,7 +208,7 @@ final class Overlay {
         }
 
         let appKitFrame = appKitFrame(forAXFrame: target.frame).insetBy(dx: -config.width / 2, dy: -config.width / 2)
-        let window = tiledBorderWindows[target.windowID] ?? makeBorderWindow(frame: appKitFrame)
+        let window = tiledBorderWindows[target.windowID] ?? makeTiledBorderWindow(frame: appKitFrame)
         let view = tiledBorderViews[target.windowID] ?? BorderView(border: config, cornerRadius: target.cornerRadius)
         if tiledBorderViews[target.windowID] == nil {
             window.contentView = view
@@ -208,7 +216,7 @@ final class Overlay {
         }
         view.update(border: config, cornerRadius: target.cornerRadius)
         window.setFrame(appKitFrame, display: true)
-        window.orderFrontRegardless()
+        orderTiledBorderWindow(window, above: target.windowID)
         tiledBorderWindows[target.windowID] = window
     }
 
@@ -263,6 +271,26 @@ final class Overlay {
         window.level = .statusBar
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         return window
+    }
+
+    private func makeTiledBorderWindow(frame: CGRect) -> NSWindow {
+        let window = NSWindow(
+            contentRect: frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.hasShadow = false
+        window.ignoresMouseEvents = true
+        window.level = .normal
+        window.collectionBehavior = [.ignoresCycle]
+        return window
+    }
+
+    private func orderTiledBorderWindow(_ window: NSWindow, above targetWindowID: WindowID) {
+        window.order(.above, relativeTo: Int(targetWindowID.raw))
     }
 
     private func makeCommandWindow(frame: CGRect) -> NSWindow {
@@ -1334,10 +1362,98 @@ enum FocusBorderVerification {
         }
         tiledOverlay.stop()
 
+        let stacking = verifyTiledBorderStacking(cornerRadius: standardRadius)
+        guard stacking.passed else {
+            return stacking
+        }
+
         return (
             true,
-            "focus/tiled borders verified: focus standard=\(standardRadius) dialog=\(dialogRadius) utility=\(utilityRadius) tiny=\(tinyRadius) path=\(standardSnapshot.pathBoundingBox.debugDescription)"
+            "focus/tiled borders verified: focus standard=\(standardRadius) dialog=\(dialogRadius) utility=\(utilityRadius) tiny=\(tinyRadius) path=\(standardSnapshot.pathBoundingBox.debugDescription); \(stacking.message)"
         )
+    }
+
+    private static func verifyTiledBorderStacking(cornerRadius: Double) -> (passed: Bool, message: String) {
+        let targetFrame = CGRect(x: 120, y: 120, width: 300, height: 220)
+        let coverFrame = CGRect(x: 140, y: 140, width: 260, height: 180)
+        let targetWindow = makeVerificationWindow(frame: targetFrame, color: .systemGray)
+        let coverWindow = makeVerificationWindow(frame: coverFrame, color: .systemRed)
+        let overlay = Overlay(border: BorderConfig(width: 2, colorHex: "#4DA3FF"), hud: Config.default.hud)
+        defer {
+            overlay.stop()
+            targetWindow.orderOut(nil)
+            coverWindow.orderOut(nil)
+        }
+
+        targetWindow.orderFrontRegardless()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+
+        let targetID = WindowID(raw: CGWindowID(targetWindow.windowNumber))
+        overlay.updateTiledBorders([
+            FocusBorderTarget(windowID: targetID, frame: targetFrame, cornerRadius: cornerRadius)
+        ])
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+
+        coverWindow.orderFrontRegardless()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+
+        guard overlay.debugTiledBorderLevelRawValue(for: targetID) == NSWindow.Level.normal.rawValue else {
+            return (false, "tiled border window was not at normal window level")
+        }
+        guard let borderNumber = overlay.debugTiledBorderWindowNumber(for: targetID) else {
+            return (false, "tiled border window did not expose a window number")
+        }
+        guard let orderedWindowNumbers = frontToBackWindowNumbers(),
+              let coverIndex = orderedWindowNumbers.firstIndex(of: coverWindow.windowNumber),
+              let borderIndex = orderedWindowNumbers.firstIndex(of: borderNumber),
+              let targetIndex = orderedWindowNumbers.firstIndex(of: targetWindow.windowNumber)
+        else {
+            return (false, "could not verify tiled border window-server stacking")
+        }
+        guard coverIndex < borderIndex, borderIndex < targetIndex else {
+            return (
+                false,
+                "tiled border stacking is wrong: coverIndex=\(coverIndex) borderIndex=\(borderIndex) targetIndex=\(targetIndex)"
+            )
+        }
+
+        return (
+            true,
+            "tiled border stacking verified cover=\(coverWindow.windowNumber) border=\(borderNumber) target=\(targetWindow.windowNumber)"
+        )
+    }
+
+    private static func makeVerificationWindow(frame: CGRect, color: NSColor) -> NSWindow {
+        let window = NSWindow(
+            contentRect: frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.backgroundColor = color
+        window.isOpaque = true
+        window.hasShadow = false
+        window.level = .normal
+        window.collectionBehavior = [.ignoresCycle]
+        return window
+    }
+
+    private static func frontToBackWindowNumbers() -> [Int]? {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]]
+        else { return nil }
+
+        return windows.compactMap { window in
+            if let number = window[kCGWindowNumber as String] as? CGWindowID {
+                return Int(number)
+            }
+            if let number = window[kCGWindowNumber as String] as? Int {
+                return number
+            }
+            return nil
+        }
     }
 }
 

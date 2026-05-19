@@ -2056,6 +2056,65 @@ struct MVPLayoutTests {
         #expect(next.pendingRules == [firstSpaceWindow: .forceFloat])
     }
 
+    @Test("Active Space pruning keeps metadata for windows still tracked in inactive Spaces")
+    func activeSpacePruningKeepsMetadataForWindowsStillTrackedInInactiveSpaces() throws {
+        let displayID = DisplayID(raw: 1)
+        let inactiveSpace = SpaceID(raw: 1)
+        let activeSpace = SpaceID(raw: 2)
+        let sharedWindow = WindowID(raw: 11)
+        let activeClosed = WindowID(raw: 21)
+        let inactiveTree = pushIntoTree(sharedWindow, .left, .void)
+        let world = World(
+            displays: [displayID: self.display(displayID, x: 0, width: 1200)],
+            activeSpace: activeSpace,
+            spaces: [
+                inactiveSpace: SpaceState(
+                    id: inactiveSpace,
+                    displays: [displayID: DisplaySpaceState(displayID: displayID, tree: inactiveTree, floating: [])],
+                    focused: sharedWindow
+                ),
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [
+                        displayID: DisplaySpaceState(
+                            displayID: displayID,
+                            tree: .void,
+                            floating: [sharedWindow, activeClosed]
+                        )
+                    ],
+                    focused: activeClosed
+                )
+            ],
+            windows: [
+                sharedWindow: metadata(for: sharedWindow),
+                activeClosed: metadata(for: activeClosed)
+            ],
+            windowDisplay: [
+                sharedWindow: displayID,
+                activeClosed: displayID
+            ],
+            windowConstraints: [
+                sharedWindow: WindowConstraints(minWidth: 500),
+                activeClosed: WindowConstraints(minWidth: 600)
+            ],
+            pendingRules: [
+                sharedWindow: .forceFloat,
+                activeClosed: .forceFloat
+            ],
+            config: .default
+        )
+
+        let next = pruneActiveSpace(world, keepingLiveWindows: [])
+
+        #expect(next.windows[sharedWindow] == metadata(for: sharedWindow))
+        #expect(next.windows[activeClosed] == nil)
+        #expect(next.windowDisplay == [sharedWindow: displayID])
+        #expect(next.windowConstraints == [sharedWindow: WindowConstraints(minWidth: 500)])
+        #expect(next.pendingRules == [sharedWindow: .forceFloat])
+        #expect(next.spaces[inactiveSpace]?.displays[displayID]?.tree == inactiveTree)
+        #expect(next.spaces[activeSpace]?.displays[displayID]?.floating == [])
+    }
+
     @Test("Post-transition cleanup applies open rules to windows first seen during preservation")
     func postTransitionCleanupAppliesOpenRulesToWindowsFirstSeenDuringPreservation() throws {
         let displayID = DisplayID(raw: 1)
@@ -2126,6 +2185,469 @@ struct MVPLayoutTests {
         #expect(next.spaces[firstSpace]?.displays[displayID]?.tree == firstTree)
         #expect(next.spaces[secondSpace]?.displays[displayID]?.floating == [newWindow])
         #expect(next.pendingRules == [newWindow: .tileToZone(ZoneID(raw: "center"))])
+    }
+
+    @Test("Bulk untracked complete snapshots preserve Space layout memory")
+    func bulkUntrackedCompleteSnapshotsPreserveSpaceLayoutMemory() throws {
+        let displayID = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let inactiveSpace = SpaceID(raw: 2)
+        let activeTiled = WindowID(raw: 11)
+        let activeFloating = WindowID(raw: 12)
+        let inactiveTiled = WindowID(raw: 21)
+        let activeTree = pushIntoTree(activeTiled, .left, .void)
+        let inactiveTree = pushIntoTree(inactiveTiled, .right, .void)
+        let display = self.display(displayID, x: 0, width: 1200)
+        let untrackedWindows = (0..<6).map { WindowID(raw: CGWindowID(100 + $0)) }
+        let world = World(
+            displays: [displayID: display],
+            activeSpace: activeSpace,
+            spaces: [
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [
+                        displayID: DisplaySpaceState(
+                            displayID: displayID,
+                            tree: activeTree,
+                            floating: [activeFloating]
+                        )
+                    ],
+                    focused: activeTiled
+                ),
+                inactiveSpace: SpaceState(
+                    id: inactiveSpace,
+                    displays: [displayID: DisplaySpaceState(displayID: displayID, tree: inactiveTree, floating: [])],
+                    focused: inactiveTiled
+                )
+            ],
+            windows: [
+                activeTiled: metadata(for: activeTiled),
+                activeFloating: metadata(for: activeFloating),
+                inactiveTiled: metadata(for: inactiveTiled)
+            ],
+            windowDisplay: [
+                activeTiled: displayID,
+                activeFloating: displayID,
+                inactiveTiled: displayID
+            ],
+            windowConstraints: [inactiveTiled: WindowConstraints(minWidth: 500)],
+            pendingRules: [inactiveTiled: .forceFloat],
+            config: .default
+        )
+        let liveWindows = [
+            metadata(for: activeTiled),
+            metadata(for: activeFloating)
+        ] + untrackedWindows.map { metadata(for: $0) }
+        let snapshot = EnvironmentSnapshot(
+            activeSpace: activeSpace,
+            displays: [displayID: display],
+            axSnapshot: AXWindowSnapshot(windows: liveWindows, quality: .complete)
+        )
+
+        #expect(environmentSnapshotPreservesSpaceLayouts(snapshot, in: world))
+        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
+            Issue.record("Expected environmentChanged to succeed")
+            return
+        }
+
+        #expect(next.spaces[activeSpace]?.displays[displayID]?.tree == activeTree)
+        #expect(next.spaces[activeSpace]?.displays[displayID]?.floating == [activeFloating])
+        #expect(next.spaces[inactiveSpace]?.displays[displayID]?.tree == inactiveTree)
+        for windowID in untrackedWindows {
+            #expect(next.windows[windowID] == metadata(for: windowID))
+        }
+        #expect(next.windowConstraints == [inactiveTiled: WindowConstraints(minWidth: 500)])
+        #expect(next.pendingRules == [inactiveTiled: .forceFloat])
+    }
+
+    @Test("Bulk untracked snapshots with missing active windows still reconcile active closures")
+    func bulkUntrackedSnapshotsWithMissingActiveWindowsStillReconcileActiveClosures() throws {
+        let displayID = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let activeLive = WindowID(raw: 11)
+        let activeClosed = WindowID(raw: 12)
+        let activeTree = pushIntoTree(activeClosed, .right, pushIntoTree(activeLive, .left, .void))
+        let display = self.display(displayID, x: 0, width: 1200)
+        let untrackedWindows = (0..<8).map { WindowID(raw: CGWindowID(200 + $0)) }
+        let world = World(
+            displays: [displayID: display],
+            activeSpace: activeSpace,
+            spaces: [
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [displayID: DisplaySpaceState(displayID: displayID, tree: activeTree, floating: [])],
+                    focused: activeClosed
+                )
+            ],
+            windows: [
+                activeLive: metadata(for: activeLive),
+                activeClosed: metadata(for: activeClosed)
+            ],
+            windowDisplay: [
+                activeLive: displayID,
+                activeClosed: displayID
+            ],
+            windowConstraints: [activeClosed: WindowConstraints(minWidth: 500)],
+            pendingRules: [activeClosed: .forceFloat],
+            config: .default
+        )
+        let liveWindows = [metadata(for: activeLive)] + untrackedWindows.map { metadata(for: $0) }
+        let snapshot = EnvironmentSnapshot(
+            activeSpace: activeSpace,
+            displays: [displayID: display],
+            axSnapshot: AXWindowSnapshot(windows: liveWindows, quality: .complete)
+        )
+
+        #expect(!environmentSnapshotPreservesSpaceLayouts(snapshot, in: world))
+        let next = try requireWorld(
+            apply(.environmentChanged(snapshot), to: world),
+            "Expected active closure reconciliation to succeed"
+        )
+
+        #expect(next.windows[activeClosed] == nil)
+        #expect(next.windowConstraints.isEmpty)
+        #expect(next.pendingRules.isEmpty)
+        #expect(next.spaces[activeSpace]?.focused == nil)
+        #expect(next.spaces[activeSpace]?.displays[displayID].map { occupiedWindows(in: $0.tree) } == [activeLive])
+        for windowID in untrackedWindows {
+            #expect(next.spaces[activeSpace]?.displays[displayID]?.floating.contains(windowID) == true)
+        }
+    }
+
+    @Test("Bulk untracked snapshots without existing active memory are normal startup discovery")
+    func bulkUntrackedSnapshotsWithoutExistingActiveMemoryAreNormalStartupDiscovery() throws {
+        let displayID = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let display = self.display(displayID, x: 0, width: 1200)
+        let startupWindows = (0..<7).map { WindowID(raw: CGWindowID(300 + $0)) }
+        let world = World(
+            displays: [displayID: display],
+            activeSpace: activeSpace,
+            spaces: [activeSpace: SpaceState(id: activeSpace, displays: [:], focused: nil)],
+            windows: [:],
+            windowDisplay: [:],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+        let snapshot = EnvironmentSnapshot(
+            activeSpace: activeSpace,
+            displays: [displayID: display],
+            axSnapshot: AXWindowSnapshot(
+                windows: startupWindows.map { metadata(for: $0) },
+                quality: .complete
+            )
+        )
+
+        #expect(!environmentSnapshotPreservesSpaceLayouts(snapshot, in: world))
+        let next = try requireWorld(
+            apply(.environmentChanged(snapshot), to: world),
+            "Expected startup discovery to track visible windows"
+        )
+
+        #expect(Set(next.windows.keys) == Set(startupWindows))
+        #expect(next.spaces[activeSpace]?.displays[displayID]?.floating == startupWindows)
+    }
+
+    @Test("Small active Space window bursts are not treated as Space contamination")
+    func smallActiveSpaceWindowBurstsAreNotTreatedAsSpaceContamination() throws {
+        let displayID = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let existing = WindowID(raw: 11)
+        let display = self.display(displayID, x: 0, width: 1200)
+        let openedWindows = (0..<4).map { WindowID(raw: CGWindowID(400 + $0)) }
+        let world = World(
+            displays: [displayID: display],
+            activeSpace: activeSpace,
+            spaces: [
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [displayID: DisplaySpaceState(displayID: displayID, tree: .void, floating: [existing])],
+                    focused: existing
+                )
+            ],
+            windows: [existing: metadata(for: existing)],
+            windowDisplay: [existing: displayID],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+        let liveWindows = [metadata(for: existing)] + openedWindows.map { metadata(for: $0) }
+        let snapshot = EnvironmentSnapshot(
+            activeSpace: activeSpace,
+            displays: [displayID: display],
+            axSnapshot: AXWindowSnapshot(windows: liveWindows, quality: .complete)
+        )
+
+        #expect(!environmentSnapshotPreservesSpaceLayouts(snapshot, in: world))
+        let next = try requireWorld(
+            apply(.environmentChanged(snapshot), to: world),
+            "Expected small active window burst to reconcile"
+        )
+
+        #expect(next.spaces[activeSpace]?.displays[displayID]?.floating == [existing] + openedWindows)
+    }
+
+    @Test("Reset layouts only operate on active Space windows")
+    func resetLayoutsOnlyOperateOnActiveSpaceWindows() throws {
+        let displayID = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let inactiveSpace = SpaceID(raw: 2)
+        let activeTiled = WindowID(raw: 11)
+        let activeFloating = WindowID(raw: 12)
+        let inactiveTiled = WindowID(raw: 21)
+        let activeTree = pushIntoTree(activeTiled, .left, .void)
+        let inactiveTree = pushIntoTree(inactiveTiled, .right, .void)
+        let world = World(
+            displays: [displayID: self.display(displayID, x: 0, width: 1200)],
+            activeSpace: activeSpace,
+            spaces: [
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [
+                        displayID: DisplaySpaceState(
+                            displayID: displayID,
+                            tree: activeTree,
+                            floating: [activeFloating]
+                        )
+                    ],
+                    focused: activeTiled
+                ),
+                inactiveSpace: SpaceState(
+                    id: inactiveSpace,
+                    displays: [displayID: DisplaySpaceState(displayID: displayID, tree: inactiveTree, floating: [])],
+                    focused: inactiveTiled
+                )
+            ],
+            windows: [
+                activeTiled: metadata(for: activeTiled),
+                activeFloating: metadata(for: activeFloating),
+                inactiveTiled: metadata(for: inactiveTiled)
+            ],
+            windowDisplay: [
+                activeTiled: displayID,
+                activeFloating: displayID,
+                inactiveTiled: displayID
+            ],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        guard case .success(let shuffled) = shuffledResetLayout(in: world) else {
+            Issue.record("Expected shuffled reset layout to succeed")
+            return
+        }
+        guard case .success(let cascaded) = cascadeResetLayout(in: world) else {
+            Issue.record("Expected cascade reset layout to succeed")
+            return
+        }
+
+        #expect(Set(shuffled.tiled.keys) == [activeTiled, activeFloating])
+        #expect(Set(cascaded.tiled.keys) == [activeTiled, activeFloating])
+    }
+
+    @Test("Active Space reset preserves inactive Space layout memory")
+    func activeSpaceResetPreservesInactiveSpaceLayoutMemory() throws {
+        let displayID = DisplayID(raw: 1)
+        let inactiveSpace = SpaceID(raw: 1)
+        let activeSpace = SpaceID(raw: 2)
+        let inactiveWindow = WindowID(raw: 11)
+        let sharedWindow = WindowID(raw: 12)
+        let activeWindow = WindowID(raw: 21)
+        let inactiveTree = pushIntoTree(sharedWindow, .right, pushIntoTree(inactiveWindow, .left, .void))
+        let activeTree = pushIntoTree(activeWindow, .left, .void)
+        let world = World(
+            displays: [displayID: self.display(displayID, x: 0, width: 1200)],
+            activeSpace: activeSpace,
+            spaces: [
+                inactiveSpace: SpaceState(
+                    id: inactiveSpace,
+                    displays: [displayID: DisplaySpaceState(displayID: displayID, tree: inactiveTree, floating: [])],
+                    focused: sharedWindow
+                ),
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [
+                        displayID: DisplaySpaceState(
+                            displayID: displayID,
+                            tree: activeTree,
+                            floating: [sharedWindow]
+                        )
+                    ],
+                    focused: activeWindow
+                )
+            ],
+            windows: [
+                inactiveWindow: metadata(for: inactiveWindow),
+                sharedWindow: metadata(for: sharedWindow),
+                activeWindow: metadata(for: activeWindow)
+            ],
+            windowDisplay: [
+                inactiveWindow: displayID,
+                sharedWindow: displayID,
+                activeWindow: displayID
+            ],
+            windowConstraints: [
+                inactiveWindow: WindowConstraints(minWidth: 500),
+                sharedWindow: WindowConstraints(minWidth: 550),
+                activeWindow: WindowConstraints(minWidth: 600)
+            ],
+            pendingRules: [
+                inactiveWindow: .forceFloat,
+                sharedWindow: .forceFloat,
+                activeWindow: .forceFloat
+            ],
+            config: .default
+        )
+
+        let next = resetActiveSpaceTilingState(in: world)
+
+        #expect(next.windows == world.windows)
+        #expect(next.windowDisplay == world.windowDisplay)
+        #expect(next.spaces[inactiveSpace]?.displays[displayID]?.tree == inactiveTree)
+        #expect(next.spaces[inactiveSpace]?.focused == sharedWindow)
+        #expect(next.spaces[activeSpace]?.displays[displayID]?.tree == .void)
+        #expect(next.spaces[activeSpace]?.displays[displayID]?.floating == [])
+        #expect(next.spaces[activeSpace]?.focused == nil)
+        #expect(next.windowConstraints == [
+            inactiveWindow: WindowConstraints(minWidth: 500),
+            sharedWindow: WindowConstraints(minWidth: 550)
+        ])
+        #expect(next.pendingRules == [
+            inactiveWindow: .forceFloat,
+            sharedWindow: .forceFloat
+        ])
+    }
+
+    @Test("User Space switching keeps tile memory and commands local")
+    func userSpaceSwitchingKeepsTileMemoryAndCommandsLocal() throws {
+        let displayID = DisplayID(raw: 1)
+        let spaceFour = SpaceID(raw: 4)
+        let spaceThree = SpaceID(raw: 3)
+        let rightTile = WindowID(raw: 31639)
+        let topLeftTile = WindowID(raw: 73384)
+        let bottomLeftTile = WindowID(raw: 41662)
+        let lowerRightTile = WindowID(raw: 72825)
+        let spaceFourFloating = WindowID(raw: 70013)
+        let spaceThreeLeft = WindowID(raw: 77623)
+        let spaceThreeRight = WindowID(raw: 75807)
+        let spaceThreeFloating = WindowID(raw: 75962)
+        let display = self.display(displayID, x: 0, width: 3840)
+        let spaceFourWindows = [rightTile, topLeftTile, bottomLeftTile, lowerRightTile, spaceFourFloating]
+        let spaceThreeWindows = [spaceThreeLeft, spaceThreeRight, spaceThreeFloating]
+        let allWindows = spaceFourWindows + spaceThreeWindows
+
+        var world = try requireWorld(
+            apply(
+                .environmentChanged(EnvironmentSnapshot(
+                    activeSpace: spaceFour,
+                    displays: [displayID: display],
+                    axSnapshot: AXWindowSnapshot(windows: spaceFourWindows.map { metadata(for: $0) }, quality: .complete)
+                )),
+                to: World.empty
+            ),
+            "Expected initial Space 4 refresh to succeed"
+        )
+        world = try requireWorld(apply(.push(rightTile, .right), to: world), "Expected first Space 4 push to succeed")
+        world = try requireWorld(apply(.push(topLeftTile, .left), to: world), "Expected second Space 4 push to succeed")
+        world = try requireWorld(apply(.push(bottomLeftTile, .left), to: world), "Expected third Space 4 push to succeed")
+        world = try requireWorld(apply(.push(lowerRightTile, .left), to: world), "Expected fourth Space 4 push to succeed")
+
+        let expectedSpaceFour = try requireSpace(world, spaceFour, "Expected Space 4 to exist after tiling")
+        let expectedSpaceFourTree = expectedSpaceFour.displays[displayID]?.tree
+        #expect(expectedSpaceFourTree.map { Set(occupiedWindows(in: $0)) } == [
+            rightTile,
+            topLeftTile,
+            bottomLeftTile,
+            lowerRightTile
+        ])
+        #expect(expectedSpaceFour.displays[displayID]?.floating == [spaceFourFloating])
+
+        let noisySpaceThreeSnapshot = EnvironmentSnapshot(
+            activeSpace: spaceThree,
+            displays: [displayID: display],
+            axSnapshot: AXWindowSnapshot(windows: allWindows.map { metadata(for: $0) }, quality: .complete)
+        )
+        #expect(environmentSnapshotPreservesSpaceLayouts(noisySpaceThreeSnapshot, in: world))
+        world = try requireWorld(
+            apply(.environmentChanged(noisySpaceThreeSnapshot), to: world),
+            "Expected noisy switch to Space 3 to preserve existing Space memory"
+        )
+        #expect(world.spaces[spaceFour] == expectedSpaceFour)
+
+        world = try requireWorld(apply(.push(spaceThreeRight, .right), to: world), "Expected Space 3 right push to succeed")
+        world = try requireWorld(apply(.push(spaceThreeLeft, .left), to: world), "Expected Space 3 left push to succeed")
+        world = try requireWorld(
+            apply(.windowOpened(metadata(for: spaceThreeFloating)), to: world),
+            "Expected active Space 3 floating window to be tracked"
+        )
+        let focusedSpaceThree = try requireWorld(
+            apply(.focusCycle(.next), to: world),
+            "Expected Space 3 focus cycle to succeed"
+        )
+        #expect(focusedSpaceThree.spaces[spaceThree]?.focused == spaceThreeFloating)
+        world = focusedSpaceThree
+
+        let expectedSpaceThree = try requireSpace(world, spaceThree, "Expected Space 3 to exist after user actions")
+        #expect(Set(occupiedWindows(in: expectedSpaceThree.displays[displayID]?.tree ?? .void)) == [
+            spaceThreeLeft,
+            spaceThreeRight
+        ])
+        #expect(expectedSpaceThree.displays[displayID]?.floating == [spaceThreeFloating])
+        #expect(world.spaces[spaceFour] == expectedSpaceFour)
+
+        let noisySpaceFourSnapshot = EnvironmentSnapshot(
+            activeSpace: spaceFour,
+            displays: [displayID: display],
+            axSnapshot: AXWindowSnapshot(windows: allWindows.map { metadata(for: $0) }, quality: .complete)
+        )
+        #expect(environmentSnapshotPreservesSpaceLayouts(noisySpaceFourSnapshot, in: world))
+        world = try requireWorld(
+            apply(.environmentChanged(noisySpaceFourSnapshot), to: world),
+            "Expected noisy switch back to Space 4 to preserve per-Space memory"
+        )
+
+        #expect(world.spaces[spaceFour] == expectedSpaceFour)
+        #expect(world.spaces[spaceThree] == expectedSpaceThree)
+
+        let spaceFourLayout = try requireLayout(flattenedLayout(of: world), "Expected Space 4 layout to flatten")
+        #expect(Set(spaceFourLayout.tiled.keys) == [
+            rightTile,
+            topLeftTile,
+            bottomLeftTile,
+            lowerRightTile
+        ])
+        #expect(spaceFourLayout.floatingZOrder == [spaceFourFloating])
+
+        let focusedSpaceFour = try requireWorld(
+            apply(.focusCycle(.next), to: world),
+            "Expected Space 4 focus cycle to stay local"
+        )
+        #expect(focusedSpaceFour.spaces[spaceFour]?.focused == spaceFourFloating)
+
+        guard case .success(let spaceFourShuffle) = shuffledResetLayout(in: focusedSpaceFour) else {
+            Issue.record("Expected Space 4 shuffle plan to succeed")
+            return
+        }
+        #expect(Set(spaceFourShuffle.tiled.keys) == Set(spaceFourWindows))
+        #expect(spaceFourShuffle.tiled[spaceThreeLeft] == nil)
+        #expect(spaceFourShuffle.tiled[spaceThreeRight] == nil)
+        #expect(spaceFourShuffle.tiled[spaceThreeFloating] == nil)
+
+        var worldOnSpaceThree = try requireWorld(
+            apply(.environmentChanged(noisySpaceThreeSnapshot), to: focusedSpaceFour),
+            "Expected noisy switch back to Space 3 to preserve per-Space memory"
+        )
+        let spaceThreeLayout = try requireLayout(flattenedLayout(of: worldOnSpaceThree), "Expected Space 3 layout to flatten")
+        #expect(Set(spaceThreeLayout.tiled.keys) == [spaceThreeLeft, spaceThreeRight])
+        #expect(spaceThreeLayout.floatingZOrder == [spaceThreeFloating])
+
+        worldOnSpaceThree = resetActiveSpaceTilingState(in: worldOnSpaceThree)
+        #expect(worldOnSpaceThree.spaces[spaceFour]?.displays == expectedSpaceFour.displays)
+        #expect(worldOnSpaceThree.spaces[spaceFour]?.focused == spaceFourFloating)
+        #expect(worldOnSpaceThree.spaces[spaceThree]?.displays[displayID]?.tree == .void)
+        #expect(worldOnSpaceThree.spaces[spaceThree]?.displays[displayID]?.floating == [])
     }
 
     @Test("Pending tile rule applications are limited to active Space windows")
@@ -3016,4 +3538,34 @@ struct MVPLayoutTests {
             throw error
         }
     }
+
+    private func requireWorld(_ result: Result<World, CommandError>, _ message: String) throws -> World {
+        switch result {
+        case .success(let world):
+            return world
+        case .failure(let error):
+            Issue.record("\(message): \(error.message)")
+            throw TestAbort()
+        }
+    }
+
+    private func requireSpace(_ world: World, _ spaceID: SpaceID, _ message: String) throws -> SpaceState {
+        guard let space = world.spaces[spaceID] else {
+            Issue.record("\(message)")
+            throw TestAbort()
+        }
+        return space
+    }
+
+    private func requireLayout(_ result: Result<Layout, UnsatisfiableLayout>, _ message: String) throws -> Layout {
+        switch result {
+        case .success(let layout):
+            return layout
+        case .failure:
+            Issue.record("\(message)")
+            throw TestAbort()
+        }
+    }
+
+    private struct TestAbort: Error {}
 }

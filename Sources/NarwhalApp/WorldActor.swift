@@ -101,6 +101,11 @@ actor WorldActor {
         pruneRuntimeState()
     }
 
+    func removeWindowFromActiveSpace(_ windowID: WindowID) {
+        world = removeWindowsFromActiveSpace([windowID], in: world)
+        pruneRuntimeState()
+    }
+
     func upsertWindow(
         _ metadata: WindowMetadata,
         displayID: DisplayID,
@@ -178,7 +183,7 @@ actor WorldActor {
         case .success(let layout):
             return makeCustomLayoutPlan(
                 from: world,
-                to: resetTilingState(in: world),
+                to: resetActiveSpaceTilingState(in: world),
                 layout: layout,
                 focusedWindowID: nil,
                 undoWorld: nil
@@ -193,7 +198,7 @@ actor WorldActor {
         case .success(let layout):
             return makeCustomLayoutPlan(
                 from: world,
-                to: resetTilingState(in: world),
+                to: resetActiveSpaceTilingState(in: world),
                 layout: layout,
                 focusedWindowID: nil,
                 undoWorld: nil
@@ -208,7 +213,7 @@ actor WorldActor {
         case .success(let layout):
             return makeCustomLayoutPlan(
                 from: world,
-                to: resetTilingState(in: world).settingFocus(windowID),
+                to: resetActiveSpaceTilingState(in: world).settingFocus(windowID),
                 layout: layout,
                 focusedWindowID: windowID,
                 undoWorld: nil

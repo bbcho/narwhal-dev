@@ -995,7 +995,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         case .failure(let error):
             reporter.error("\(reason) failed focusing \(result.window.id.description): \(error.description)")
+            if shouldRemoveFailedFocusTarget(error, reason: reason) {
+                await worldActor.removeWindowFromActiveSpace(result.window.id)
+                await updateTiledBordersFromWorld()
+                reporter.info("Removed stale focus target \(result.window.id.description) from active Space after focus failure")
+            }
             showOperatorFeedback("\(reason) failed", tone: .error)
+            return false
+        }
+    }
+
+    private func shouldRemoveFailedFocusTarget(_ error: AXClientError, reason: String) -> Bool {
+        let isCycling = reason.hasPrefix("focus cycle") || reason == "focus previous"
+        switch error {
+        case .windowElementNotFound:
+            return true
+        case .performActionFailed(let action, let axError):
+            return isCycling && action == kAXRaiseAction && axError == .cannotComplete
+        case .applicationActivateFailed:
+            return isCycling
+        case .copyAttributeFailed,
+             .missingFocusedWindow,
+             .focusedWindowWrongType,
+             .pidUnavailable,
+             .pointAttributeInvalid,
+             .sizeAttributeInvalid,
+             .boolAttributeInvalid,
+             .focusedWindowUnmatchedToCGWindow,
+             .windowsAttributeInvalid,
+             .setAttributeFailed,
+             .frameDidNotConverge,
+             .visibleWindowListUnavailable:
             return false
         }
     }
