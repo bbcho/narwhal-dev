@@ -184,6 +184,8 @@ private func carbonKeyCode(for key: String) -> UInt32? {
         return UInt32(kVK_ANSI_I)
     case "r":
         return UInt32(kVK_ANSI_R)
+    case "/":
+        return UInt32(kVK_ANSI_Slash)
     case "return":
         return UInt32(kVK_Return)
     case "space":
@@ -232,6 +234,8 @@ private func describe(_ action: HotkeyAction) -> String {
         return describe(template)
     case .reloadConfig:
         return "reloadConfig"
+    case .showCommands:
+        return "show commands"
     }
 }
 

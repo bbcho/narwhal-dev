@@ -97,6 +97,8 @@ struct StartupConfigLoader {
 }
 
 private final class LuaConfigDecoder {
+    private static let maxDecodeDepth = 64
+
     let url: URL
 
     init(url: URL) {
@@ -123,14 +125,21 @@ private final class LuaConfigDecoder {
             throw StartupConfigError.luaRuntimeFailed(path: url.path, message: stackString(state, index: -1) ?? "unknown runtime error")
         }
 
-        let value = try decodeValue(state, index: -1, path: "return")
+        var activeTables = Set<UInt>()
+        let value = try decodeValue(state, index: -1, path: "return", depth: 0, activeTables: &activeTables)
         guard case .table(let root) = value else {
             throw StartupConfigError.luaDecodeFailed(path: url.path, message: "config must return a table")
         }
         return LuaConfigData(root: root)
     }
 
-    private func decodeValue(_ state: OpaquePointer, index: CInt, path: String) throws -> LuaValue {
+    private func decodeValue(
+        _ state: OpaquePointer,
+        index: CInt,
+        path: String,
+        depth: Int,
+        activeTables: inout Set<UInt>
+    ) throws -> LuaValue {
         let absolute = winmgr_lua_absindex(state, index)
         let type = winmgr_lua_type(state, absolute)
 
@@ -152,13 +161,36 @@ private final class LuaConfigDecoder {
             }
             return .string(string)
         case winmgr_lua_type_table():
-            return try decodeTable(state, index: absolute, path: path)
+            return try decodeTable(state, index: absolute, path: path, depth: depth, activeTables: &activeTables)
         default:
             throw StartupConfigError.luaDecodeFailed(path: url.path, message: "\(path) has unsupported Lua type \(type)")
         }
     }
 
-    private func decodeTable(_ state: OpaquePointer, index: CInt, path: String) throws -> LuaValue {
+    private func decodeTable(
+        _ state: OpaquePointer,
+        index: CInt,
+        path: String,
+        depth: Int,
+        activeTables: inout Set<UInt>
+    ) throws -> LuaValue {
+        guard depth < Self.maxDecodeDepth else {
+            throw StartupConfigError.luaDecodeFailed(
+                path: url.path,
+                message: "\(path) exceeds maximum table nesting depth \(Self.maxDecodeDepth)"
+            )
+        }
+        guard let tablePointer = winmgr_lua_topointer(state, index) else {
+            throw StartupConfigError.luaDecodeFailed(path: url.path, message: "\(path) table identity unavailable")
+        }
+        let tableID = UInt(bitPattern: tablePointer)
+        guard activeTables.insert(tableID).inserted else {
+            throw StartupConfigError.luaDecodeFailed(path: url.path, message: "\(path) contains a cyclic table reference")
+        }
+        defer {
+            activeTables.remove(tableID)
+        }
+
         var stringEntries: [String: LuaValue] = [:]
         var integerEntries: [Int: LuaValue] = [:]
 
@@ -166,7 +198,13 @@ private final class LuaConfigDecoder {
         while winmgr_lua_next(state, index) != 0 {
             let key = try decodeTableKey(state, index: -2, path: path)
             let entryPath = "\(path)[\(key.description)]"
-            let value = try decodeValue(state, index: -1, path: entryPath)
+            let value = try decodeValue(
+                state,
+                index: -1,
+                path: entryPath,
+                depth: depth + 1,
+                activeTables: &activeTables
+            )
             switch key {
             case .string(let name):
                 stringEntries[name] = value

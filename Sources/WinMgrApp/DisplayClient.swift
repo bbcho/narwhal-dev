@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import Foundation
 import WinMgrCore
 
 struct DisplayClient {
@@ -18,14 +19,14 @@ struct DisplayClient {
             let visibleFrame = axVisibleFrame(for: screen, displayFrame: frame)
             return (
                 id,
-                DisplayInfo(
-                    id: id,
-                    slot: slot,
-                    fingerprint: nil,
-                    frame: frame,
-                    visibleFrame: visibleFrame
+                    DisplayInfo(
+                        id: id,
+                        slot: slot,
+                        fingerprint: displayFingerprint(for: displayID),
+                        frame: frame,
+                        visibleFrame: visibleFrame
+                    )
                 )
-            )
         })
     }
 
@@ -47,6 +48,13 @@ struct DisplayClient {
             return nil
         }
         return CGDirectDisplayID(number.uint32Value)
+    }
+
+    private func displayFingerprint(for displayID: CGDirectDisplayID) -> String? {
+        guard let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue() else {
+            return nil
+        }
+        return CFUUIDCreateString(kCFAllocatorDefault, uuid) as String
     }
 
     private func axVisibleFrame(for screen: NSScreen, displayFrame: CGRect) -> CGRect {

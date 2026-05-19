@@ -155,7 +155,13 @@ struct AXClient {
             role: kAXWindowRole,
             pid: ownerPID,
             frame: frame,
-            isResizable: true,
+            isResizable: isResizable(
+                processID: ownerPID,
+                title: window[kCGWindowName as String] as? String ?? "",
+                role: kAXWindowRole,
+                frame: frame,
+                windowID: WindowID(raw: number)
+            ),
             isMinimized: false
         )
     }
@@ -192,7 +198,7 @@ struct AXClient {
                 title: title,
                 role: role,
                 frame: frame,
-                isResizable: true,
+                isResizable: isResizable(focusedWindow),
                 isMinimized: isMinimized
             ))
         case .failure(let error):
@@ -415,25 +421,61 @@ struct AXClient {
         guard let currentInfo = cgWindowInfo(matching: metadata.id, processID: metadata.pid) else {
             return .failure(.windowElementNotFound(metadata.id))
         }
+        return windowElement(
+            processID: metadata.pid,
+            title: currentInfo.title,
+            role: metadata.role,
+            frame: currentInfo.frame,
+            windowID: metadata.id
+        )
+    }
 
-        let app = AXUIElementCreateApplication(metadata.pid)
+    private func isResizable(
+        processID: pid_t,
+        title: String,
+        role: String,
+        frame: CGRect,
+        windowID: WindowID
+    ) -> Bool {
+        switch windowElement(processID: processID, title: title, role: role, frame: frame, windowID: windowID) {
+        case .success(let element):
+            return isResizable(element)
+        case .failure:
+            return false
+        }
+    }
+
+    private func isResizable(_ window: AXUIElement) -> Bool {
+        var settable = DarwinBoolean(false)
+        let error = AXUIElementIsAttributeSettable(window, kAXSizeAttribute as CFString, &settable)
+        return error == .success && settable.boolValue
+    }
+
+    private func windowElement(
+        processID: pid_t,
+        title expectedTitle: String,
+        role expectedRole: String,
+        frame expectedFrame: CGRect,
+        windowID: WindowID
+    ) -> Result<AXUIElement, AXClientError> {
+        let app = AXUIElementCreateApplication(processID)
         var value: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value)
         guard error == .success else {
-            return .failure(.windowsAttributeInvalid(metadata.pid, error))
+            return .failure(.windowsAttributeInvalid(processID, error))
         }
         guard let windows = value as? [AXUIElement] else {
-            return .failure(.windowsAttributeInvalid(metadata.pid, error))
+            return .failure(.windowsAttributeInvalid(processID, error))
         }
 
         for window in windows {
             let title = stringAttribute(window, kAXTitleAttribute)
             let role = stringAttribute(window, kAXRoleAttribute)
-            guard currentInfo.title.isEmpty || title.isEmpty || title == currentInfo.title else { continue }
-            guard metadata.role.isEmpty || role.isEmpty || role == metadata.role else { continue }
+            guard expectedTitle.isEmpty || title.isEmpty || title == expectedTitle else { continue }
+            guard expectedRole.isEmpty || role.isEmpty || role == expectedRole else { continue }
 
             switch focusedWindowFrame(window) {
-            case .success(let frame) where framesApproximatelyMatch(frame, currentInfo.frame):
+            case .success(let frame) where framesApproximatelyMatch(frame, expectedFrame):
                 return .success(window)
             case .success:
                 continue
@@ -442,7 +484,7 @@ struct AXClient {
             }
         }
 
-        return .failure(.windowElementNotFound(metadata.id))
+        return .failure(.windowElementNotFound(windowID))
     }
 
     private func cgWindowInfo(matching id: WindowID, processID: pid_t) -> (title: String, frame: CGRect)? {

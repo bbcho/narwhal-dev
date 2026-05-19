@@ -650,6 +650,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.error("Hotkey action not implemented in this build: \(describe(template))")
         case .reloadConfig:
             await reloadConfig(reason: "hotkey")
+        case .showCommands:
+            overlay.toggleCommandOverlay(bindings: config.keymap)
         }
     }
 

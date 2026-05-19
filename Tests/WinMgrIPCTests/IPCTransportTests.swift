@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 import WinMgrCore
@@ -57,7 +58,94 @@ struct IPCTransportTests {
         ))
     }
 
+    @Test("Server stop closes idle active client sockets")
+    func stopClosesIdleActiveClientSockets() async throws {
+        let path = tempSocketPath()
+        let server = IPCServer(socketPath: path) { _ in
+            .ok(commandID: CommandID(raw: "should-not-run"))
+        }
+        try server.start()
+        defer { server.stop() }
+
+        let fd = try connectRawSocket(path: path)
+        defer { Darwin.close(fd) }
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        server.stop()
+
+        var byte: UInt8 = 0
+        let closed = try await waitUntil {
+            let count = Darwin.read(fd, &byte, 1)
+            if count == 0 { return true }
+            if count < 0, errno == EAGAIN || errno == EWOULDBLOCK { return false }
+            if count < 0, errno == EINTR { return false }
+            return true
+        }
+        #expect(closed)
+    }
+
     private func tempSocketPath() -> String {
         "/private/tmp/winmgr-ipc-\(UUID().uuidString).sock"
+    }
+
+    private func connectRawSocket(path: String) throws -> Int32 {
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+
+        do {
+            try withSocketAddress(path: path) { address, length in
+                guard Darwin.connect(fd, address, length) == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+            }
+            let flags = Darwin.fcntl(fd, F_GETFL, 0)
+            guard flags >= 0, Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            return fd
+        } catch {
+            Darwin.close(fd)
+            throw error
+        }
+    }
+
+    private func withSocketAddress<Result>(
+        path: String,
+        _ body: (UnsafePointer<sockaddr>, socklen_t) throws -> Result
+    ) throws -> Result {
+        let pathBytes = Array(path.utf8) + [0]
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathCapacity = MemoryLayout.size(ofValue: address.sun_path)
+        guard pathBytes.count <= pathCapacity else {
+            throw POSIXError(.ENAMETOOLONG)
+        }
+        guard let pathOffset = MemoryLayout<sockaddr_un>.offset(of: \.sun_path) else {
+            throw POSIXError(.EINVAL)
+        }
+        withUnsafeMutableBytes(of: &address) { rawAddress in
+            for (index, byte) in pathBytes.enumerated() {
+                rawAddress[pathOffset + index] = byte
+            }
+        }
+        let length = socklen_t(MemoryLayout<sockaddr_un>.size)
+        address.sun_len = UInt8(length)
+        return try withUnsafePointer(to: &address) { pointer in
+            try pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+                try body(socketAddress, length)
+            }
+        }
+    }
+
+    private func waitUntil(_ condition: () throws -> Bool) async throws -> Bool {
+        for _ in 0..<50 {
+            if try condition() {
+                return true
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return try condition()
     }
 }

@@ -77,6 +77,8 @@ private struct ConfigParser {
             return .command(.resetLayout)
         case "reload_config":
             return .reloadConfig
+        case "show_commands":
+            return .showCommands
         default:
             throw ConfigError.invalidValue(key: "\(key).type", reason: "unsupported action '\(type)'")
         }
@@ -383,7 +385,10 @@ private struct ConfigParser {
         guard number.rounded() == number else {
             throw ConfigError.invalidValue(key: key, reason: "number must be an integer")
         }
-        return Int(number)
+        guard let integer = Int(exactly: number) else {
+            throw ConfigError.invalidValue(key: key, reason: "number must fit in Int")
+        }
+        return integer
     }
 
     private func modifier(named name: String, key: String) throws -> ModifierSet {

@@ -57,6 +57,10 @@ static inline lua_Unsigned winmgr_lua_rawlen(lua_State *state, int index) {
     return lua_rawlen(state, index);
 }
 
+static inline const void *winmgr_lua_topointer(lua_State *state, int index) {
+    return lua_topointer(state, index);
+}
+
 static inline int winmgr_lua_geti(lua_State *state, int index, lua_Integer key) {
     return lua_geti(state, index, key);
 }

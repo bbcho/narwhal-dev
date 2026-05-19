@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Default config")
 struct ConfigTests {
-    @Test("Default keymap contains only implemented MVP hotkeys")
+    @Test("Default keymap contains implemented hotkeys")
     func defaultKeymapContainsOnlyMvpHotkeys() {
         #expect(Config.default.keymap == [
             HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option]), action: .command(.focusDirection(.left))),
@@ -21,6 +21,7 @@ struct ConfigTests {
             HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .command]), action: .command(.push(.right))),
             HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .command]), action: .command(.push(.up))),
             HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .command]), action: .command(.push(.down))),
+            HotkeyBinding(key: KeySpec(key: "/", modifiers: [.control, .option]), action: .showCommands),
             HotkeyBinding(key: KeySpec(key: "delete", modifiers: [.control, .option]), action: .command(.resetLayout))
         ])
     }
@@ -58,6 +59,7 @@ struct ConfigTests {
             HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .shift]), action: .command(.push(.left))),
             HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .shift]), action: .command(.push(.right))),
             HotkeyBinding(key: KeySpec(key: "u", modifiers: [.control, .shift]), action: .command(.resizeSplit(.right, delta: 0.25))),
+            HotkeyBinding(key: KeySpec(key: "/", modifiers: [.control, .shift]), action: .showCommands),
             HotkeyBinding(key: KeySpec(key: "r", modifiers: [.control, .shift]), action: .command(.balance)),
             HotkeyBinding(key: KeySpec(key: "delete", modifiers: [.control, .shift]), action: .command(.resetLayout))
         ]
@@ -68,6 +70,7 @@ struct ConfigTests {
             binding(key: "h", modifiers: ["control", "shift"], action: ["type": .string("push"), "direction": .string("left")]),
             binding(key: "l", modifiers: ["control", "shift"], action: ["type": .string("push"), "direction": .string("right")]),
             binding(key: "u", modifiers: ["control", "shift"], action: ["type": .string("resize_split"), "direction": .string("right"), "delta": .number(0.25)]),
+            binding(key: "/", modifiers: ["control", "shift"], action: ["type": .string("show_commands")]),
             binding(key: "r", modifiers: ["control", "shift"], action: ["type": .string("balance")]),
             binding(key: "delete", modifiers: ["control", "shift"], action: ["type": .string("reset_layout")])
         ])
@@ -142,6 +145,31 @@ struct ConfigTests {
         #expect(line.map(String.init) == #"    { key = "u", modifiers = { "control", "option", "command" }, action = { type = "resize_split", direction = "right", delta = 0.25 } },"#)
     }
 
+    @Test("Lua config renderer emits show commands actions exactly")
+    func luaConfigRendererEmitsShowCommandsAction() throws {
+        let config = Config(
+            keymap: [
+                HotkeyBinding(
+                    key: KeySpec(key: "/", modifiers: [.control, .option]),
+                    action: .showCommands
+                )
+            ],
+            rules: [],
+            zones: [],
+            gaps: .init(inner: 0, outer: .init(top: 0, left: 0, bottom: 0, right: 0)),
+            border: .default,
+            hud: .default,
+            dragModifier: [.shift]
+        )
+
+        let rendered = DefaultConfigLua.render(config)
+        let line = rendered
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .first { $0.contains("type = \"show_commands\"") }
+
+        #expect(line.map(String.init) == #"    { key = "/", modifiers = { "control", "option" }, action = { type = "show_commands" } },"#)
+    }
+
     @Test("Lua config parser rejects non-finite resize split deltas")
     func luaConfigParserRejectsNonFiniteResizeSplitDeltas() {
         var root = defaultLuaRoot()
@@ -155,6 +183,19 @@ struct ConfigTests {
 
         #expect(parseConfig(LuaConfigData(root: root)) == .failure(
             .invalidValue(key: "keymap[1].action.delta", reason: "number must be finite")
+        ))
+    }
+
+    @Test("Lua config parser rejects integer values outside Swift Int")
+    func luaConfigParserRejectsOutOfRangeIntegers() {
+        var root = defaultLuaRoot()
+        root["hud"] = .table([
+            "enabled": .bool(true),
+            "duration_millis": .number(Double.greatestFiniteMagnitude)
+        ])
+
+        #expect(parseConfig(LuaConfigData(root: root)) == .failure(
+            .invalidValue(key: "hud.duration_millis", reason: "number must fit in Int")
         ))
     }
 
@@ -303,6 +344,7 @@ struct ConfigTests {
                 binding(key: "l", modifiers: ["control", "option", "command"], action: ["type": .string("push"), "direction": .string("right")]),
                 binding(key: "k", modifiers: ["control", "option", "command"], action: ["type": .string("push"), "direction": .string("up")]),
                 binding(key: "j", modifiers: ["control", "option", "command"], action: ["type": .string("push"), "direction": .string("down")]),
+                binding(key: "/", modifiers: ["control", "option"], action: ["type": .string("show_commands")]),
                 binding(key: "delete", modifiers: ["control", "option"], action: ["type": .string("reset_layout")])
             ]),
             "gaps": .table([

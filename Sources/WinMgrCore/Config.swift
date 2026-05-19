@@ -51,6 +51,7 @@ public struct HotkeyBinding: Equatable, Sendable {
 public enum HotkeyAction: Equatable, Sendable {
     case command(CommandTemplate)
     case reloadConfig
+    case showCommands
 }
 
 public enum CommandTemplate: Equatable, Sendable {
@@ -163,6 +164,7 @@ public enum DefaultKeymap {
         HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .command]), action: .command(.push(.right))),
         HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .command]), action: .command(.push(.up))),
         HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .command]), action: .command(.push(.down))),
+        HotkeyBinding(key: KeySpec(key: "/", modifiers: [.control, .option]), action: .showCommands),
         HotkeyBinding(key: KeySpec(key: "delete", modifiers: [.control, .option]), action: .command(.resetLayout))
     ]
 }
@@ -213,6 +215,8 @@ public enum DefaultConfigLua {
             return renderTemplate(template)
         case .reloadConfig:
             return "{ type = \"reload_config\" }"
+        case .showCommands:
+            return "{ type = \"show_commands\" }"
         }
     }
 

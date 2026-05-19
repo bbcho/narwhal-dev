@@ -170,9 +170,10 @@ public final class IPCServer: @unchecked Sendable {
     }
 
     public func stop() {
-        guard let oldFD = state.stop() else { return }
-        Darwin.shutdown(oldFD, SHUT_RDWR)
-        Darwin.close(oldFD)
+        let sockets = state.stop()
+        for fd in sockets {
+            closeSocket(fd)
+        }
         Darwin.unlink(socketPath)
     }
 
@@ -187,22 +188,22 @@ public final class IPCServer: @unchecked Sendable {
                 return
             }
 
-            guard state.tryOpenConnection(limit: maxConnections) else {
-                Darwin.close(clientFD)
+            guard state.openConnection(clientFD, limit: maxConnections) else {
+                closeSocket(clientFD)
                 continue
             }
 
             Task.detached { [self] in
                 await processConnection(clientFD)
-                state.closeConnection()
             }
         }
     }
 
     private func processConnection(_ clientFD: Int32) async {
         defer {
-            Darwin.shutdown(clientFD, SHUT_RDWR)
-            Darwin.close(clientFD)
+            if state.closeConnection(clientFD) {
+                closeSocket(clientFD)
+            }
         }
 
         while state.isRunning {
@@ -249,7 +250,7 @@ private final class IPCServerState: @unchecked Sendable {
     private let lock = NSLock()
     private var fd: Int32?
     private var running = false
-    private var activeConnections = 0
+    private var clientFDs = Set<Int32>()
 
     var isRunning: Bool {
         lock.lock()
@@ -264,28 +265,35 @@ private final class IPCServerState: @unchecked Sendable {
         lock.unlock()
     }
 
-    func stop() -> Int32? {
+    func stop() -> [Int32] {
         lock.lock()
         running = false
-        let oldFD = fd
+        let sockets = [fd].compactMap { $0 } + clientFDs.sorted()
         fd = nil
+        clientFDs.removeAll()
         lock.unlock()
-        return oldFD
+        return sockets
     }
 
-    func tryOpenConnection(limit: Int) -> Bool {
+    func openConnection(_ clientFD: Int32, limit: Int) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard running && activeConnections < limit else { return false }
-        activeConnections += 1
+        guard running && clientFDs.count < limit else { return false }
+        clientFDs.insert(clientFD)
         return true
     }
 
-    func closeConnection() {
+    func closeConnection(_ clientFD: Int32) -> Bool {
         lock.lock()
-        activeConnections = max(0, activeConnections - 1)
+        let wasActive = clientFDs.remove(clientFD) != nil
         lock.unlock()
+        return wasActive
     }
+}
+
+private func closeSocket(_ fd: Int32) {
+    Darwin.shutdown(fd, SHUT_RDWR)
+    Darwin.close(fd)
 }
 
 private func encodeReplyLine(_ reply: IPCReplyDTO) throws -> Data {

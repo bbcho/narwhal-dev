@@ -16,6 +16,7 @@ return {
     { key = "l", modifiers = { "control", "option", "command" }, action = { type = "push", direction = "right" } },
     { key = "k", modifiers = { "control", "option", "command" }, action = { type = "push", direction = "up" } },
     { key = "j", modifiers = { "control", "option", "command" }, action = { type = "push", direction = "down" } },
+    { key = "/", modifiers = { "control", "option" }, action = { type = "show_commands" } },
     { key = "delete", modifiers = { "control", "option" }, action = { type = "reset_layout" } },
   },
   gaps = {
