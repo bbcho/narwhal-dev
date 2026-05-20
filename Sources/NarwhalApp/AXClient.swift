@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import NarwhalAppSupport
 import NarwhalCore
 
 struct FocusedWindowSnapshot: Equatable, Sendable {
@@ -107,6 +108,12 @@ enum AXFrameWriteOutcome: Sendable {
 }
 
 struct AXClient {
+    private let inventoryFilter: WindowInventoryFilter
+
+    init(processID: pid_t = getpid()) {
+        inventoryFilter = WindowInventoryFilter(currentProcessID: processID)
+    }
+
     func windowSnapshot() -> AXWindowSnapshot {
         guard
             let windows = CGWindowListCopyWindowInfo(
@@ -138,8 +145,11 @@ struct AXClient {
         let ids: Set<WindowID> = Set(windows.compactMap { window in
             guard
                 let layer = window[kCGWindowLayer as String] as? Int,
-                layer == 0,
-                let number = window[kCGWindowNumber as String] as? CGWindowID
+                let ownerPID = window[kCGWindowOwnerPID as String] as? pid_t,
+                let number = window[kCGWindowNumber as String] as? CGWindowID,
+                let boundsDictionary = window[kCGWindowBounds as String] as? NSDictionary,
+                let frame = CGRect(dictionaryRepresentation: boundsDictionary),
+                inventoryFilter.accepts(layer: layer, ownerPID: ownerPID, frame: frame)
             else {
                 return nil
             }
@@ -152,13 +162,11 @@ struct AXClient {
     private func windowMetadata(from window: [String: Any]) -> WindowMetadata? {
         guard
             let layer = window[kCGWindowLayer as String] as? Int,
-            layer == 0,
             let number = window[kCGWindowNumber as String] as? CGWindowID,
             let ownerPID = window[kCGWindowOwnerPID as String] as? pid_t,
             let boundsDictionary = window[kCGWindowBounds as String] as? NSDictionary,
             let frame = CGRect(dictionaryRepresentation: boundsDictionary),
-            frame.width > 0,
-            frame.height > 0
+            inventoryFilter.accepts(layer: layer, ownerPID: ownerPID, frame: frame)
         else {
             return nil
         }
@@ -507,6 +515,7 @@ struct AXClient {
     }
 
     private func cgWindowInfo(matching id: WindowID, processID: pid_t) -> (title: String, frame: CGRect)? {
+        guard processID != inventoryFilter.currentProcessID else { return nil }
         guard
             let windows = CGWindowListCopyWindowInfo(
                 [.optionOnScreenOnly, .excludeDesktopElements],
@@ -601,6 +610,7 @@ struct AXClient {
     }
 
     private func matchedWindowID(processID: pid_t, title: String, frame: CGRect) -> WindowID? {
+        guard processID != inventoryFilter.currentProcessID else { return nil }
         guard
             let windows = CGWindowListCopyWindowInfo(
                 [.optionOnScreenOnly, .excludeDesktopElements],
