@@ -71,23 +71,30 @@ public final class RunningServices {
 
 @MainActor
 public func startServiceSequence(_ steps: [ServiceStartStep]) -> Result<RunningServices, ServiceStartupError> {
-    var handles: [ServiceHandle] = []
+    startServiceSequence(ArraySlice(steps), startedHandles: [])
+}
 
-    for step in steps {
-        do {
-            handles.append(try step.start())
-        } catch {
-            let startedServices = handles.map(\.name)
-            RunningServices(handles: handles).stopAll()
-            return .failure(ServiceStartupError(
-                service: step.name,
-                startedServices: startedServices,
-                underlyingError: error
-            ))
-        }
+@MainActor
+private func startServiceSequence(
+    _ remainingSteps: ArraySlice<ServiceStartStep>,
+    startedHandles: [ServiceHandle]
+) -> Result<RunningServices, ServiceStartupError> {
+    guard let step = remainingSteps.first else {
+        return .success(RunningServices(handles: startedHandles))
     }
 
-    return .success(RunningServices(handles: handles))
+    do {
+        let handle = try step.start()
+        return startServiceSequence(remainingSteps.dropFirst(), startedHandles: startedHandles + [handle])
+    } catch {
+        let startedServices = startedHandles.map(\.name)
+        RunningServices(handles: startedHandles).stopAll()
+        return .failure(ServiceStartupError(
+            service: step.name,
+            startedServices: startedServices,
+            underlyingError: error
+        ))
+    }
 }
 
 public func serviceStartSteps(
