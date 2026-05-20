@@ -1,4 +1,5 @@
 import AppKit
+import NarwhalAppSupport
 import NarwhalCore
 
 @MainActor
@@ -16,7 +17,7 @@ final class AXObserverService {
     private var timer: Timer?
     private var settleTimers: [Timer] = []
     private var workspaceObserver: NSObjectProtocol?
-    private var focusedGeometryState = FocusedWindowGeometryState.empty
+    private var focusedObservationState = FocusedWindowObservationState.empty
     private var windowInventoryState: WindowInventoryState?
     private var windowFrameInventoryState: WindowFrameInventoryState?
     private var windowInventorySpaceID: SpaceID?
@@ -78,7 +79,7 @@ final class AXObserverService {
     private func activeSpaceChanged() {
         settleTimers.forEach { $0.invalidate() }
         settleTimers.removeAll()
-        focusedGeometryState = .empty
+        focusedObservationState = .empty
         windowInventoryState = nil
         windowFrameInventoryState = nil
         windowInventorySpaceID = nil
@@ -110,30 +111,48 @@ final class AXObserverService {
     }
 
     private func pollFocusedWindow() {
-        let snapshot: FocusedWindowSnapshot
+        let transition: FocusedWindowObservationTransition
         switch axClient.focusedWindowSnapshot() {
         case .success(let value):
-            snapshot = value
+            transition = reduceFocusedWindowObservation(
+                state: focusedObservationState,
+                input: .observed(windowID: value.id, frame: value.frame),
+                tolerance: Self.frameTolerance
+            )
+            focusedObservationState = transition.state
+            handleFocusedObservationEffects(transition.effects, snapshot: value)
         case .failure(let error):
-            guard focusedGeometryState.windowID != nil else { return }
-            focusedGeometryState = .empty
-            focusedWindowUnavailable()
-            reporter.info("Focused-window snapshot unavailable; focus border hidden: \(error.description)")
-            return
+            transition = reduceFocusedWindowObservation(
+                state: focusedObservationState,
+                input: .unavailable,
+                tolerance: Self.frameTolerance
+            )
+            focusedObservationState = transition.state
+            handleFocusedObservationEffects(transition.effects, snapshot: nil)
+            if transition.effects.contains(.focusedWindowUnavailable) {
+                reporter.info("Focused-window snapshot unavailable; focus border hidden: \(error.description)")
+            }
         }
-        let poll = pollFocusedWindowGeometry(
-            previous: focusedGeometryState,
-            currentWindowID: snapshot.id,
-            currentFrame: snapshot.frame,
-            tolerance: Self.frameTolerance
-        )
-        focusedGeometryState = poll.state
-        guard let event = poll.event else { return }
-        guard !echoSuppressor.isExpectedEcho(event) else {
-            reporter.info("Suppressed expected AX echo for \(snapshot.id.description)")
-            return
+    }
+
+    private func handleFocusedObservationEffects(
+        _ effects: [FocusedWindowObservationEffect],
+        snapshot: FocusedWindowSnapshot?
+    ) {
+        for effect in effects {
+            switch effect {
+            case .emit(let event):
+                guard !echoSuppressor.isExpectedEcho(event) else {
+                    if let snapshot {
+                        reporter.info("Suppressed expected AX echo for \(snapshot.id.description)")
+                    }
+                    continue
+                }
+                emit(event, snapshot)
+            case .focusedWindowUnavailable:
+                focusedWindowUnavailable()
+            }
         }
-        emit(event, snapshot)
     }
 
     private func syncWindowInventory() {

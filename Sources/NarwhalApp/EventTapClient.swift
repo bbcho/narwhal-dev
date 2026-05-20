@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import NarwhalAppSupport
 import NarwhalCore
 
 final class EventTapClient {
@@ -10,8 +11,7 @@ final class EventTapClient {
     private let drop: (CGPoint) -> Void
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var dragCandidate = false
-    private var hasDragged = false
+    private var dragState = DragGestureState.empty
 
     init(
         modifier: ModifierSet,
@@ -58,8 +58,8 @@ final class EventTapClient {
     }
 
     func updateModifier(_ modifier: ModifierSet) {
+        applyDragInput(.cancel)
         self.modifier = modifier
-        resetDrag()
         reporter.info("Updated drag-zone modifier to \(describe(modifier))")
     }
 
@@ -72,7 +72,7 @@ final class EventTapClient {
             CFMachPortInvalidate(eventTap)
             self.eventTap = nil
         }
-        resetDrag()
+        applyDragInput(.cancel)
     }
 
     private func handle(type: CGEventType, location: CGPoint, flagsRaw: UInt64) {
@@ -82,40 +82,42 @@ final class EventTapClient {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
                 reporter.error("Drag-zone event tap was disabled by timeout; re-enabled")
             }
-            dragEnded()
+            applyDragInput(.cancel)
         case .tapDisabledByUserInput:
             reporter.error("Drag-zone event tap disabled by user input")
-            dragEnded()
+            applyDragInput(.cancel)
         case .leftMouseDown:
-            dragCandidate = modifiers(from: flagsRaw) == modifier
-            hasDragged = false
-            if dragCandidate {
-                dragChanged(location)
-            }
+            applyDragInput(.mouseDown(location: location, modifiers: modifiers(from: flagsRaw)))
         case .leftMouseDragged:
-            guard dragCandidate else { return }
-            if modifiers(from: flagsRaw) == modifier {
-                hasDragged = true
-                dragChanged(location)
-            } else {
-                resetDrag()
-                dragEnded()
-            }
+            applyDragInput(.mouseDragged(location: location, modifiers: modifiers(from: flagsRaw)))
         case .leftMouseUp:
-            let shouldDrop = dragCandidate && hasDragged
-            resetDrag()
-            dragEnded()
-            if shouldDrop {
-                drop(location)
-            }
+            applyDragInput(.mouseUp(location: location))
         default:
             break
         }
     }
 
-    private func resetDrag() {
-        dragCandidate = false
-        hasDragged = false
+    private func applyDragInput(_ input: DragGestureInput) {
+        let transition = reduceDragGesture(
+            state: dragState,
+            input: input,
+            requiredModifier: modifier
+        )
+        dragState = transition.state
+        applyDragEffects(transition.effects)
+    }
+
+    private func applyDragEffects(_ effects: [DragGestureEffect]) {
+        for effect in effects {
+            switch effect {
+            case .preview(let location):
+                dragChanged(location)
+            case .endPreview:
+                dragEnded()
+            case .drop(let location):
+                drop(location)
+            }
+        }
     }
 
     private static let eventTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
