@@ -1,4 +1,5 @@
 import CoreGraphics
+import NarwhalAppSupport
 import NarwhalCore
 
 struct CommandPlanResult: Sendable {
@@ -28,8 +29,7 @@ struct EnvironmentRefreshResult: Sendable {
 actor WorldActor {
     private var world: World
     private var nextGeneration: UInt64 = 1
-    private var undoWorld: World?
-    private var focusHistory: [WindowID] = []
+    private var runtimeState = WorldRuntimeState.empty
 
     init(config: Config = .default) {
         self.world = World(
@@ -113,18 +113,7 @@ actor WorldActor {
     }
 
     func focusedWindowFallback() -> WindowMetadata? {
-        if let active = activeFocusedWindow(in: world) {
-            return active
-        }
-        let visible = activeObservedVisibleWindowIDs(in: world)
-        for windowID in focusHistory.reversed() {
-            guard visible.isEmpty || visible.contains(windowID),
-                  let metadata = world.windows[windowID],
-                  !metadata.isMinimized
-            else { continue }
-            return metadata
-        }
-        return nil
+        runtimeFocusedWindowFallback(in: world, runtime: runtimeState)
     }
 
     func removeWindowFromActiveSpace(_ windowID: WindowID) {
@@ -274,7 +263,7 @@ actor WorldActor {
     }
 
     func planUndoLastLayout() -> Result<CommandPlanResult?, CommandError> {
-        guard let undoWorld else { return .success(nil) }
+        guard let undoWorld = runtimeState.undoWorld else { return .success(nil) }
         return makePlan(from: world, to: undoWorld, focusedWindowID: undoWorld.spaces[undoWorld.activeSpace ?? SpaceID(raw: 0)]?.focused, undoWorld: world)
             .map(Optional.some)
     }
@@ -506,9 +495,11 @@ actor WorldActor {
         case .failure:
             activeWindowIDs = []
         }
-        guard let targetWindowID = focusHistory.reversed().first(where: { windowID in
-            windowID != current && activeWindowIDs.contains(windowID) && world.windows[windowID] != nil
-        }) else {
+        guard let targetWindowID = previousFocusTarget(
+            in: world,
+            runtime: runtimeState,
+            activeWindowIDs: activeWindowIDs
+        ) else {
             return .failure(.windowNotFound(current ?? WindowID(raw: 0)))
         }
         return planFocus(targetWindowID)
@@ -550,8 +541,7 @@ actor WorldActor {
         case .failure:
             world = resetTilingState(in: world)
         }
-        undoWorld = nil
-        focusHistory = []
+        runtimeState = .empty
     }
 
     func restoreSnapshot() -> StoredWorld {
@@ -559,7 +549,7 @@ actor WorldActor {
     }
 
     func commit(_ result: CommandPlanResult, appliedFrames: [WindowID: CGRect]) {
-        undoWorld = result.undoWorld
+        runtimeState = worldRuntimeBySettingUndo(result.undoWorld, in: runtimeState)
         if let focusedWindowID = result.focusedWindowID {
             recordFocus(focusedWindowID)
         }
@@ -607,22 +597,12 @@ actor WorldActor {
     }
 
     private func recordFocus(_ windowID: WindowID) {
-        guard focusHistory.last != windowID else { return }
-        focusHistory.append(windowID)
-        if focusHistory.count > 16 {
-            focusHistory.removeFirst(focusHistory.count - 16)
-        }
+        runtimeState = worldRuntimeByRecordingFocus(windowID, in: runtimeState)
     }
 
     private func pruneRuntimeState() {
         let liveWindowIDs = Set(world.windows.keys)
-        focusHistory.removeAll { !liveWindowIDs.contains($0) }
-        if let undo = undoWorld {
-            let undoWindowIDs = Set(undo.windows.keys)
-            if !undoWindowIDs.isSubset(of: liveWindowIDs) {
-                undoWorld = nil
-            }
-        }
+        runtimeState = prunedWorldRuntimeState(liveWindowIDs: liveWindowIDs, in: runtimeState)
     }
 }
 
