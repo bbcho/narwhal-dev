@@ -116,6 +116,97 @@ struct WindowRuleIntegrationTests {
         #expect(next.spaces[space]?.displays[display]?.floating == [window])
     }
 
+    @Test("Pending tile rule application tiles active floating windows and clears applied rules")
+    func pendingTileRuleApplicationTilesActiveFloatingWindows() {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 50)
+        let metadata = metadata(window, bundleID: "com.example.pending")
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: .void, floating: [window])],
+                    focused: nil
+                )
+            ],
+            windows: [window: metadata],
+            windowDisplay: [window: display],
+            windowConstraints: [:],
+            pendingRules: [window: .tileToZone(ZoneID(raw: "center"))],
+            config: .default
+        )
+
+        guard case .success(.some(let plan)) = applyingPendingTileRules(in: world) else {
+            Issue.record("Expected pending tile rule application to succeed")
+            return
+        }
+
+        #expect(plan.focusedWindowID == window)
+        #expect(plan.world.pendingRules.isEmpty)
+        #expect(plan.world.spaces[space]?.displays[display]?.floating == [])
+        let tree: Node? = plan.world.spaces[space]?.displays[display]?.tree
+        #expect(tree.map { occupiedWindows(in: $0) } == [window])
+    }
+
+    @Test("Pending tile rule application ignores inactive pending windows")
+    func pendingTileRuleApplicationIgnoresInactiveWindows() {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 60)
+        let metadata = metadata(window, bundleID: "com.example.inactive")
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: .void, floating: [])],
+                    focused: nil
+                )
+            ],
+            windows: [window: metadata],
+            windowDisplay: [window: display],
+            windowConstraints: [:],
+            pendingRules: [window: .tileToZone(ZoneID(raw: "center"))],
+            config: .default
+        )
+
+        guard case .success(nil) = applyingPendingTileRules(in: world) else {
+            Issue.record("Expected inactive pending rule to produce no plan")
+            return
+        }
+    }
+
+    @Test("Pending tile rule application returns command failures explicitly")
+    func pendingTileRuleApplicationReturnsCommandFailures() {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let window = WindowID(raw: 70)
+        let metadata = metadata(window, bundleID: "com.example.bad-zone")
+        let missingZone = ZoneID(raw: "missing")
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: .void, floating: [window])],
+                    focused: nil
+                )
+            ],
+            windows: [window: metadata],
+            windowDisplay: [window: display],
+            windowConstraints: [:],
+            pendingRules: [window: .tileToZone(missingZone)],
+            config: .default
+        )
+
+        #expect(applyingPendingTileRules(in: world) == .failure(.zoneNotFound(missingZone)))
+    }
+
     @Test("Window closed command prunes metadata, ownership, pending rules, constraints, focus, and tree leaves")
     func windowClosedPrunesWorldState() {
         let display = DisplayID(raw: 1)

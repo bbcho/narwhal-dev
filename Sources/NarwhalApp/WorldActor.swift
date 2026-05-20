@@ -230,30 +230,15 @@ actor WorldActor {
     }
 
     func planPendingTileRules() -> Result<CommandPlanResult?, CommandError> {
-        let pending: [(WindowID, ZoneID)]
-        switch pendingTileRuleApplications(in: world) {
-        case .success(let value):
-            pending = value
-        case .failure(let unsatisfiable):
-            return .failure(.layoutUnsatisfiable(unsatisfiable))
+        switch applyingPendingTileRules(in: world) {
+        case .success(.some(let plan)):
+            return makePlan(from: world, to: plan.world, focusedWindowID: plan.focusedWindowID, undoWorld: world)
+                .map(Optional.some)
+        case .success(nil):
+            return .success(nil)
+        case .failure(let error):
+            return .failure(error)
         }
-        guard !pending.isEmpty else { return .success(nil) }
-
-        var plannedWorld = world
-        var focusedWindowID: WindowID?
-        for (windowID, zoneID) in pending {
-            guard let displayID = plannedWorld.windowDisplay[windowID] else { continue }
-            switch apply(.dropAtZone(windowID, displayID, zoneID), to: plannedWorld) {
-            case .success(let next):
-                plannedWorld = next.clearingPendingRule(for: windowID)
-                focusedWindowID = windowID
-            case .failure(let error):
-                return .failure(error)
-            }
-        }
-        guard plannedWorld != world else { return .success(nil) }
-        return makePlan(from: world, to: plannedWorld, focusedWindowID: focusedWindowID, undoWorld: world)
-            .map(Optional.some)
     }
 
     private func planLayoutCommand(
@@ -540,26 +525,6 @@ private extension World {
         var spaces = spaces
         let space = spaces[key.spaceID] ?? SpaceState(id: key.spaceID, displays: [:], focused: nil)
         spaces[key.spaceID] = SpaceState(id: space.id, displays: space.displays, focused: windowID)
-        return World(
-            displays: displays,
-            activeSpace: activeSpace,
-            activeSpaceByDisplay: activeSpaceByDisplay,
-            spaces: spaces,
-            windows: windows,
-            windowDisplay: windowDisplay,
-            windowSpace: windowSpace,
-            observedVisibleWindows: observedVisibleWindows,
-            windowConstraints: windowConstraints,
-            pendingRules: pendingRules,
-            config: config
-        )
-    }
-}
-
-private extension World {
-    func clearingPendingRule(for windowID: WindowID) -> World {
-        var pendingRules = self.pendingRules
-        pendingRules.removeValue(forKey: windowID)
         return World(
             displays: displays,
             activeSpace: activeSpace,

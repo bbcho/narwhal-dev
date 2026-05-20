@@ -98,6 +98,47 @@ public func pendingTileRuleApplications(in world: World) -> Result<[(WindowID, Z
     }
 }
 
+public struct PendingTileRuleApplicationPlan: Equatable, Sendable {
+    public let world: World
+    public let focusedWindowID: WindowID?
+
+    public init(world: World, focusedWindowID: WindowID?) {
+        self.world = world
+        self.focusedWindowID = focusedWindowID
+    }
+}
+
+public func applyingPendingTileRules(
+    in world: World
+) -> Result<PendingTileRuleApplicationPlan?, CommandError> {
+    let pending: [(WindowID, ZoneID)]
+    switch pendingTileRuleApplications(in: world) {
+    case .success(let value):
+        pending = value
+    case .failure(let unsatisfiable):
+        return .failure(.layoutUnsatisfiable(unsatisfiable))
+    }
+    guard !pending.isEmpty else { return .success(nil) }
+
+    var plannedWorld = world
+    var focusedWindowID: WindowID?
+    for (windowID, zoneID) in pending {
+        guard let displayID = plannedWorld.windowDisplay[windowID] else { continue }
+        switch apply(.dropAtZone(windowID, displayID, zoneID), to: plannedWorld) {
+        case .success(let next):
+            plannedWorld = next.clearingPendingRule(for: windowID)
+            focusedWindowID = windowID
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+    guard plannedWorld != world else { return .success(nil) }
+    return .success(PendingTileRuleApplicationPlan(
+        world: plannedWorld,
+        focusedWindowID: focusedWindowID
+    ))
+}
+
 private func framesByWindow(in node: Node, frame: CGRect, innerGap: Double) -> [WindowID: CGRect] {
     switch node {
     case .void:
@@ -110,6 +151,26 @@ private func framesByWindow(in node: Node, frame: CGRect, innerGap: Double) -> [
             let childFrames = framesByWindow(in: pair.0.node, frame: pair.1, innerGap: innerGap)
             result.merge(childFrames) { _, next in next }
         }
+    }
+}
+
+private extension World {
+    func clearingPendingRule(for windowID: WindowID) -> World {
+        var pendingRules = self.pendingRules
+        pendingRules.removeValue(forKey: windowID)
+        return World(
+            displays: displays,
+            activeSpace: activeSpace,
+            activeSpaceByDisplay: activeSpaceByDisplay,
+            spaces: spaces,
+            windows: windows,
+            windowDisplay: windowDisplay,
+            windowSpace: windowSpace,
+            observedVisibleWindows: observedVisibleWindows,
+            windowConstraints: windowConstraints,
+            pendingRules: pendingRules,
+            config: config
+        )
     }
 }
 
