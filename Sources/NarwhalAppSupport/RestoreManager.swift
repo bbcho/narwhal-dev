@@ -31,22 +31,7 @@ public struct RestoreManager: Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
 
         let data = try Data(contentsOf: url)
-        let stored: StoredWorld
-        do {
-            stored = try JSONDecoder().decode(StoredWorld.self, from: data)
-        } catch {
-            throw RestoreManagerError.decodeFailed(String(describing: error))
-        }
-
-        guard stored.schemaVersion == StoredWorld.currentSchemaVersion else {
-            return nil
-        }
-        switch validateStoredWorld(stored) {
-        case .success(let validated):
-            return validated
-        case .failure(.invalidStoredWorld(let message)):
-            throw RestoreManagerError.invalidStoredWorld(message)
-        }
+        return try decodeStoredWorldRestoreData(data).get()
     }
 
     public func save(_ stored: StoredWorld) throws {
@@ -55,11 +40,33 @@ public struct RestoreManager: Sendable {
             withIntermediateDirectories: true
         )
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(stored)
-        try data.write(to: url, options: [.atomic])
+        try encodeStoredWorldRestoreData(stored).write(to: url, options: [.atomic])
     }
+}
+
+func decodeStoredWorldRestoreData(_ data: Data) -> Result<StoredWorld?, RestoreManagerError> {
+    let stored: StoredWorld
+    do {
+        stored = try JSONDecoder().decode(StoredWorld.self, from: data)
+    } catch {
+        return .failure(.decodeFailed(String(describing: error)))
+    }
+
+    guard stored.schemaVersion == StoredWorld.currentSchemaVersion else {
+        return .success(nil)
+    }
+    switch validateStoredWorld(stored) {
+    case .success(let validated):
+        return .success(validated)
+    case .failure(.invalidStoredWorld(let message)):
+        return .failure(.invalidStoredWorld(message))
+    }
+}
+
+func encodeStoredWorldRestoreData(_ stored: StoredWorld) throws -> Data {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    return try encoder.encode(stored)
 }
 
 public struct RestoreSaveSuccess: Equatable, Sendable {
@@ -262,20 +269,28 @@ public final class RestoreSaveScheduler {
     private func saveAndObserve(_ request: RestoreSaveRequest) {
         do {
             try save(request.stored)
-            observe(.saved(RestoreSaveSuccess(
-                generation: request.generation,
-                reason: request.reason,
-                urlPath: urlPath
-            )))
+            observe(restoreSaveSuccessEvent(for: request, urlPath: urlPath))
         } catch {
-            observe(.failed(RestoreSaveFailure(
-                generation: request.generation,
-                reason: request.reason,
-                urlPath: urlPath,
-                message: String(describing: error)
-            )))
+            observe(restoreSaveFailureEvent(for: request, urlPath: urlPath, message: String(describing: error)))
         }
     }
+}
+
+func restoreSaveSuccessEvent(for request: RestoreSaveRequest, urlPath: String) -> RestoreSaveEvent {
+    .saved(RestoreSaveSuccess(
+        generation: request.generation,
+        reason: request.reason,
+        urlPath: urlPath
+    ))
+}
+
+func restoreSaveFailureEvent(for request: RestoreSaveRequest, urlPath: String, message: String) -> RestoreSaveEvent {
+    .failed(RestoreSaveFailure(
+        generation: request.generation,
+        reason: request.reason,
+        urlPath: urlPath,
+        message: message
+    ))
 }
 
 @MainActor

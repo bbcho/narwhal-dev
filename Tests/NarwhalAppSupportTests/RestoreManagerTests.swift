@@ -92,6 +92,43 @@ struct RestoreManagerTests {
         #expect(savedJSON.contains(#""displayFingerprint" : "main-display""#))
     }
 
+    @Test("Restore JSON codec validates data without file I/O")
+    func restoreJSONCodecValidatesDataWithoutFileIO() throws {
+        let stored = storedWorldFixture()
+        let encoded = try encodeStoredWorldRestoreData(stored)
+
+        #expect(try decodeStoredWorldRestoreData(encoded).get() == stored)
+
+        let unsupported = StoredWorld(
+            schemaVersion: StoredWorld.currentSchemaVersion + 1,
+            activeSpace: nil,
+            pendingRules: []
+        )
+        #expect(try decodeStoredWorldRestoreData(try encodeStoredWorldRestoreData(unsupported)).get() == nil)
+        #expect(decodeStoredWorldRestoreData(Data("not-json".utf8)).failureDescription?.hasPrefix("restore JSON decode failed:") == true)
+    }
+
+    @Test("Restore save events are pure request projections")
+    func restoreSaveEventsArePureRequestProjections() {
+        let request = RestoreSaveRequest(generation: 42, stored: storedWorldFixture(), reason: "manual")
+
+        #expect(restoreSaveSuccessEvent(for: request, urlPath: "/tmp/state.json") == .saved(RestoreSaveSuccess(
+            generation: 42,
+            reason: "manual",
+            urlPath: "/tmp/state.json"
+        )))
+        #expect(restoreSaveFailureEvent(
+            for: request,
+            urlPath: "/tmp/state.json",
+            message: "boom"
+        ) == .failed(RestoreSaveFailure(
+            generation: 42,
+            reason: "manual",
+            urlPath: "/tmp/state.json",
+            message: "boom"
+        )))
+    }
+
     @Test("Restore save scheduling keeps latest pending request")
     func restoreSaveSchedulingKeepsLatestPendingRequest() {
         let first = storedWorldFixture(title: "first")
@@ -365,5 +402,12 @@ private enum FakeRestoreSaveError: Error, CustomStringConvertible {
 
     var description: String {
         "boom"
+    }
+}
+
+private extension Result where Failure == RestoreManagerError {
+    var failureDescription: String? {
+        guard case .failure(let error) = self else { return nil }
+        return error.description
     }
 }
