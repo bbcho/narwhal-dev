@@ -69,4 +69,45 @@ struct AXEchoTests {
         #expect(!result.isEcho)
         #expect(result.state == .empty)
     }
+
+    @Test("Consuming middle frame echo preserves surrounding order")
+    func consumingMiddleFrameEchoPreservesSurroundingOrder() {
+        let first = WindowID(raw: 10)
+        let middle = WindowID(raw: 11)
+        let last = WindowID(raw: 12)
+        let target = CGRect(x: 1, y: 2, width: 300, height: 400)
+        let state = [
+            first,
+            middle,
+            last
+        ].reduce(AXEchoState.empty) { state, windowID in
+            expectFrameEcho(windowID: windowID, targetFrame: target, now: 100, ttl: 5, in: state)
+        }
+
+        let result = consumeExpectedEcho(.windowMoved(middle, target), now: 101, tolerance: 1, in: state)
+
+        #expect(result.isEcho)
+        #expect(result.state.frameEchoes.map(\.windowID) == [first, middle, last])
+        #expect(result.state.frameEchoes[1].expectsMove == false)
+        #expect(result.state.frameEchoes[1].expectsResize == true)
+    }
+
+    @Test("Consuming middle focus echo removes only that echo")
+    func consumingMiddleFocusEchoRemovesOnlyThatEcho() {
+        let first = WindowID(raw: 20)
+        let middle = WindowID(raw: 21)
+        let last = WindowID(raw: 22)
+        let state = [
+            first,
+            middle,
+            last
+        ].reduce(AXEchoState.empty) { state, windowID in
+            expectFocusEcho(windowID: windowID, now: 100, ttl: 5, in: state)
+        }
+
+        let result = consumeExpectedEcho(.windowFocused(middle), now: 101, tolerance: 1, in: state)
+
+        #expect(result.isEcho)
+        #expect(result.state.focusEchoes.map(\.windowID) == [first, last])
+    }
 }

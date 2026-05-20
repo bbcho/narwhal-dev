@@ -147,22 +147,26 @@ private func consumeFrameEcho(
         return AXEchoConsumeResult(isEcho: false, state: state)
     }
 
-    var echoes = state.frameEchoes
-    let echo = echoes.remove(at: index)
-    let updated = echoByConsuming(component, in: echo)
-    if updated.expectsMove || updated.expectsResize {
-        echoes.insert(updated, at: index)
-    }
-    return AXEchoConsumeResult(isEcho: true, state: AXEchoState(frameEchoes: echoes, focusEchoes: state.focusEchoes))
+    return AXEchoConsumeResult(
+        isEcho: true,
+        state: AXEchoState(
+            frameEchoes: echoesByConsumingFrameComponent(at: index, component: component, in: state.frameEchoes),
+            focusEchoes: state.focusEchoes
+        )
+    )
 }
 
 private func consumeFocusEcho(windowID: WindowID, in state: AXEchoState) -> AXEchoConsumeResult {
     guard let index = state.focusEchoes.firstIndex(where: { $0.windowID == windowID }) else {
         return AXEchoConsumeResult(isEcho: false, state: state)
     }
-    var echoes = state.focusEchoes
-    echoes.remove(at: index)
-    return AXEchoConsumeResult(isEcho: true, state: AXEchoState(frameEchoes: state.frameEchoes, focusEchoes: echoes))
+    return AXEchoConsumeResult(
+        isEcho: true,
+        state: AXEchoState(
+            frameEchoes: state.frameEchoes,
+            focusEchoes: echoesByRemoving(at: index, from: state.focusEchoes)
+        )
+    )
 }
 
 private func pruneExpiredEchoes(in state: AXEchoState, now: TimeInterval) -> AXEchoState {
@@ -200,6 +204,27 @@ private func echoByConsuming(_ component: FrameEchoComponent, in echo: AXExpecte
             expectsResize: false
         )
     }
+}
+
+private func echoesByConsumingFrameComponent(
+    at index: Int,
+    component: FrameEchoComponent,
+    in echoes: [AXExpectedFrameEcho]
+) -> [AXExpectedFrameEcho] {
+    let updated = echoByConsuming(component, in: echoes[index])
+    let prefix = echoes.prefix(index)
+    let suffix = echoes.dropFirst(index + 1)
+    guard updated.expectsMove || updated.expectsResize else {
+        return Array(prefix + suffix)
+    }
+    return Array(prefix + [updated] + suffix)
+}
+
+private func echoesByRemoving<Echo>(
+    at index: Int,
+    from echoes: [Echo]
+) -> [Echo] {
+    Array(echoes.prefix(index) + echoes.dropFirst(index + 1))
 }
 
 private func originsApproximatelyMatch(_ lhs: CGPoint, _ rhs: CGPoint, tolerance: CGFloat) -> Bool {
