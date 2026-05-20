@@ -7,10 +7,16 @@ final class AXEchoSuppressor {
     private var state = AXEchoState.empty
     private let ttl: TimeInterval
     private let tolerance: CGFloat
+    private let now: () -> TimeInterval
 
-    init(ttl: TimeInterval = 1.5, tolerance: CGFloat = 2) {
+    init(
+        ttl: TimeInterval = 1.5,
+        tolerance: CGFloat = 2,
+        now: @escaping () -> TimeInterval = { Date().timeIntervalSinceReferenceDate }
+    ) {
         self.ttl = ttl
         self.tolerance = tolerance
+        self.now = now
     }
 
     func expectFrame(windowID: WindowID, targetFrame: CGRect) {
@@ -33,7 +39,4 @@ final class AXEchoSuppressor {
         return result.isEcho
     }
 
-    private func now() -> TimeInterval {
-        Date().timeIntervalSinceReferenceDate
-    }
 }
