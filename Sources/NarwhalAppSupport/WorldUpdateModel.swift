@@ -52,35 +52,28 @@ public func worldByUpsertingActiveWindow(
         return .failure(.activeSpaceUnavailable)
     }
 
-    var windows = world.windows
-    windows[metadata.id] = metadata
-
-    var windowDisplay = world.windowDisplay
-    windowDisplay[metadata.id] = displayID
-
-    var windowSpace = world.windowSpace
-    windowSpace[metadata.id] = activeSpace
-
     let workspaceKey = WorkspaceKey(displayID: displayID, spaceID: activeSpace)
-    var observedVisibleWindows = world.observedVisibleWindows
-    observedVisibleWindows[workspaceKey, default: []].insert(metadata.id)
-
-    var spaces = world.spaces
-    let space = spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
-    var displayStates = space.displays
-    let existing = displayStates[displayID] ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
-    displayStates[displayID] = displayStateByUpsertingFloatingWindow(metadata.id, in: existing)
-    spaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: space.focused)
+    let space = world.spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
+    let existingDisplayState = space.displays[displayID]
+        ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
+    let displayState = displayStateByUpsertingFloatingWindow(metadata.id, in: existingDisplayState)
+    let displayStates = space.displays.merging([displayID: displayState]) { _, replacement in replacement }
+    let spaces = world.spaces.merging([
+        activeSpace: SpaceState(id: activeSpace, displays: displayStates, focused: space.focused)
+    ]) { _, replacement in replacement }
+    let visibleWindows = (world.observedVisibleWindows[workspaceKey] ?? []).union([metadata.id])
 
     return .success(World(
         displays: displays,
         activeSpace: world.activeSpace ?? activeSpace,
         activeSpaceByDisplay: world.activeSpaceByDisplay,
         spaces: sanitizedSpaces(spaces),
-        windows: windows,
-        windowDisplay: windowDisplay,
-        windowSpace: windowSpace,
-        observedVisibleWindows: observedVisibleWindows,
+        windows: world.windows.merging([metadata.id: metadata]) { _, replacement in replacement },
+        windowDisplay: world.windowDisplay.merging([metadata.id: displayID]) { _, replacement in replacement },
+        windowSpace: world.windowSpace.merging([metadata.id: activeSpace]) { _, replacement in replacement },
+        observedVisibleWindows: world.observedVisibleWindows.merging(
+            [workspaceKey: visibleWindows]
+        ) { _, replacement in replacement },
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config
