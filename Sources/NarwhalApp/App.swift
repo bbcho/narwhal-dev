@@ -1848,71 +1848,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         replanAfterClamp: () async -> Result<CommandPlanResult, CommandError>
     ) async -> Bool {
         let applyResult = LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
-        if applyResult.succeeded {
-            await worldActor.commit(result, appliedFrames: applyResult.applied)
+        switch plannedLayoutApplyDecision(plan: result, applyResult: applyResult, retryOnClamp: retryOnClamp) {
+        case .commit(let appliedFrames, let focusUpdate):
+            await worldActor.commit(result, appliedFrames: appliedFrames)
             reporter.info("\(operation) completed")
             await updateTiledBordersFromWorld()
-            if let focusedWindowID = result.focusedWindowID,
-               let frame = applyResult.applied[focusedWindowID] ?? result.desiredLayout.layout.tiled[focusedWindowID] {
+            switch focusUpdate {
+            case .target(let focusedWindowID, let frame):
                 if showFocusBorder {
                     let target = focusBorderTarget(windowID: focusedWindowID, frame: frame, windows: result.windows)
                     setFocusBorder(target)
                 } else {
                     suppressFocusBorder(for: focusedWindowID, frame: frame)
                 }
-            } else if result.focusedWindowID != nil {
+            case .clear:
                 setFocusBorder(nil)
+            case nil:
+                break
             }
             showOperatorFeedback("\(operation) completed", tone: .success, showsHUD: false)
             await persistRestore(reason: persistReason)
             return true
-        }
 
-        await worldActor.recordAppliedFrames(applyResult.applied)
-        if !applyResult.clamps.isEmpty {
-            await worldActor.recordObservedConstraints(applyResult.observedConstraints)
-        }
-
-        if !applyResult.failures.isEmpty {
-            let failureSummary = applyResult.failures
-                .map { "\($0.windowID.description) target=\($0.targetFrame.debugDescription) error=\($0.message)" }
-                .joined(separator: "; ")
+        case .fail(let appliedFrames, let failureCount, let summary):
+            await worldActor.recordAppliedFrames(appliedFrames)
             reporter.error(
-                "\(operation) failed applying \(applyResult.failures.count) window(s); planned layout was not committed: \(failureSummary)"
+                "\(operation) failed applying \(failureCount) window(s); planned layout was not committed: \(summary)"
             )
             showOperatorFeedback("\(operation) failed applying windows", tone: .error)
             return false
-        }
 
-        let clampSummary = applyResult.clamps
-            .map {
-                "\($0.windowID.description) target=\($0.targetFrame.debugDescription) actual=\($0.actualFrame.debugDescription) observed=\($0.observed.debugDescription)"
+        case .clamp(let appliedFrames, let observedConstraints, let shouldRetry, let summary):
+            await worldActor.recordAppliedFrames(appliedFrames)
+            if !observedConstraints.isEmpty {
+                await worldActor.recordObservedConstraints(observedConstraints)
             }
-            .joined(separator: "; ")
 
-        guard retryOnClamp else {
-            reporter.error(
-                "\(operation) still clamped after min-size re-solve; planned layout was not committed: \(clampSummary)"
-            )
-            showOperatorFeedback("\(operation) clamped by app minimum size", tone: .warning)
-            return false
-        }
+            guard shouldRetry else {
+                reporter.error(
+                    "\(operation) still clamped after min-size re-solve; planned layout was not committed: \(summary)"
+                )
+                showOperatorFeedback("\(operation) clamped by app minimum size", tone: .warning)
+                return false
+            }
 
-        reporter.info("\(operation) observed app min-size clamp; re-solving once: \(clampSummary)")
-        showOperatorFeedback("\(operation) re-solving after size clamp", tone: .warning)
-        switch await replanAfterClamp() {
-        case .success(let retry):
-            return await applyPlannedLayout(
-                retry,
-                operation: operation,
-                persistReason: persistReason,
-                retryOnClamp: false,
-                replanAfterClamp: replanAfterClamp
-            )
-        case .failure(let error):
-            reporter.error("\(operation) rejected after min-size observation: \(error.message)")
-            showOperatorFeedback("\(operation) failed after clamp: \(error.message)", tone: .error)
-            return false
+            reporter.info("\(operation) observed app min-size clamp; re-solving once: \(summary)")
+            showOperatorFeedback("\(operation) re-solving after size clamp", tone: .warning)
+            switch await replanAfterClamp() {
+            case .success(let retry):
+                return await applyPlannedLayout(
+                    retry,
+                    operation: operation,
+                    persistReason: persistReason,
+                    retryOnClamp: false,
+                    replanAfterClamp: replanAfterClamp
+                )
+            case .failure(let error):
+                reporter.error("\(operation) rejected after min-size observation: \(error.message)")
+                showOperatorFeedback("\(operation) failed after clamp: \(error.message)", tone: .error)
+                return false
+            }
         }
     }
 

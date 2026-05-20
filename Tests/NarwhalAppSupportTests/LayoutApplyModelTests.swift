@@ -122,4 +122,97 @@ struct LayoutApplyModelTests {
             window: WindowConstraints(minWidth: 180, minHeight: 140)
         ])
     }
+
+    @Test("Planned layout apply decision commits with focused applied frame")
+    func plannedLayoutApplyDecisionCommitsWithFocusedAppliedFrame() {
+        let focused = WindowID(raw: 50)
+        let desiredFrame = CGRect(x: 0, y: 0, width: 300, height: 200)
+        let appliedFrame = CGRect(x: 0, y: 0, width: 300, height: 199)
+        let plan = commandPlanFixture(focused: focused, tiled: [focused: desiredFrame])
+        let applyResult = LayoutApplyResult(applied: [focused: appliedFrame], clamps: [], failures: [])
+
+        let decision = plannedLayoutApplyDecision(plan: plan, applyResult: applyResult, retryOnClamp: true)
+
+        #expect(decision == .commit(
+            appliedFrames: [focused: appliedFrame],
+            focusUpdate: .target(windowID: focused, frame: appliedFrame)
+        ))
+    }
+
+    @Test("Planned layout apply decision clears missing focused frame")
+    func plannedLayoutApplyDecisionClearsMissingFocusedFrame() {
+        let focused = WindowID(raw: 60)
+        let plan = commandPlanFixture(focused: focused, tiled: [:])
+        let applyResult = LayoutApplyResult(applied: [:], clamps: [], failures: [])
+
+        let decision = plannedLayoutApplyDecision(plan: plan, applyResult: applyResult, retryOnClamp: true)
+
+        #expect(decision == .commit(appliedFrames: [:], focusUpdate: .clear))
+    }
+
+    @Test("Planned layout apply decision reports failures without retry")
+    func plannedLayoutApplyDecisionReportsFailuresWithoutRetry() {
+        let failed = WindowID(raw: 70)
+        let target = CGRect(x: 10, y: 20, width: 300, height: 200)
+        let plan = commandPlanFixture(focused: nil, tiled: [failed: target])
+        let applyResult = LayoutApplyResult(
+            applied: [:],
+            clamps: [],
+            failures: [LayoutApplyFailure(windowID: failed, targetFrame: target, message: "AX failed")]
+        )
+
+        let decision = plannedLayoutApplyDecision(plan: plan, applyResult: applyResult, retryOnClamp: true)
+
+        guard case .fail(let appliedFrames, let failureCount, let summary) = decision else {
+            Issue.record("Expected failure decision")
+            return
+        }
+        #expect(appliedFrames == [:])
+        #expect(failureCount == 1)
+        #expect(summary.contains(failed.description))
+        #expect(summary.contains("AX failed"))
+    }
+
+    @Test("Planned layout apply decision carries clamp retry data")
+    func plannedLayoutApplyDecisionCarriesClampRetryData() {
+        let clamped = WindowID(raw: 80)
+        let target = CGRect(x: 10, y: 20, width: 300, height: 200)
+        let actual = CGRect(x: 10, y: 20, width: 180, height: 200)
+        let observed = WindowConstraints(minWidth: 180)
+        let plan = commandPlanFixture(focused: nil, tiled: [clamped: target])
+        let applyResult = LayoutApplyResult(
+            applied: [WindowID(raw: 79): CGRect(x: 0, y: 0, width: 100, height: 100)],
+            clamps: [LayoutApplyClamp(windowID: clamped, targetFrame: target, actualFrame: actual, observed: observed)],
+            failures: []
+        )
+
+        let decision = plannedLayoutApplyDecision(plan: plan, applyResult: applyResult, retryOnClamp: false)
+
+        guard case .clamp(let appliedFrames, let observedConstraints, let shouldRetry, let summary) = decision else {
+            Issue.record("Expected clamp decision")
+            return
+        }
+        #expect(appliedFrames == applyResult.applied)
+        #expect(observedConstraints == [clamped: observed])
+        #expect(!shouldRetry)
+        #expect(summary.contains(clamped.description))
+        #expect(summary.contains("minWidth=180.0"))
+    }
+
+    private func commandPlanFixture(
+        focused: WindowID?,
+        tiled: [WindowID: CGRect]
+    ) -> CommandPlanResult {
+        CommandPlanResult(
+            focusedWindowID: focused,
+            desiredLayout: DesiredLayout(
+                generation: LayoutGeneration(raw: 1),
+                layout: Layout(tiled: tiled, floatingZOrder: [], hidden: []),
+                delta: LayoutDelta(moves: tiled, raises: [], hides: [], shows: Set(tiled.keys))
+            ),
+            windows: [:],
+            plannedWorld: .empty,
+            undoWorld: nil
+        )
+    }
 }

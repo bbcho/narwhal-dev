@@ -60,6 +60,50 @@ public struct LayoutApplyResult: Equatable, Sendable {
     }
 }
 
+public enum PlannedLayoutFocusUpdate: Equatable, Sendable {
+    case target(windowID: WindowID, frame: CGRect)
+    case clear
+}
+
+public enum PlannedLayoutApplyDecision: Equatable, Sendable {
+    case commit(appliedFrames: [WindowID: CGRect], focusUpdate: PlannedLayoutFocusUpdate?)
+    case fail(appliedFrames: [WindowID: CGRect], failureCount: Int, summary: String)
+    case clamp(
+        appliedFrames: [WindowID: CGRect],
+        observedConstraints: [WindowID: WindowConstraints],
+        shouldRetry: Bool,
+        summary: String
+    )
+}
+
+public func plannedLayoutApplyDecision(
+    plan: CommandPlanResult,
+    applyResult: LayoutApplyResult,
+    retryOnClamp: Bool
+) -> PlannedLayoutApplyDecision {
+    if applyResult.succeeded {
+        return .commit(
+            appliedFrames: applyResult.applied,
+            focusUpdate: plannedLayoutFocusUpdate(plan: plan, appliedFrames: applyResult.applied)
+        )
+    }
+
+    if !applyResult.failures.isEmpty {
+        return .fail(
+            appliedFrames: applyResult.applied,
+            failureCount: applyResult.failures.count,
+            summary: layoutApplyFailureSummary(applyResult.failures)
+        )
+    }
+
+    return .clamp(
+        appliedFrames: applyResult.applied,
+        observedConstraints: applyResult.observedConstraints,
+        shouldRetry: retryOnClamp,
+        summary: layoutApplyClampSummary(applyResult.clamps)
+    )
+}
+
 public enum LayoutFrameWriteObservation: Equatable, Sendable {
     case converged(actual: CGRect)
     case clamped(actual: CGRect, observed: WindowConstraints)
@@ -79,6 +123,35 @@ public struct LayoutApplyProgress: Equatable, Sendable {
         self.result = result
         self.decision = decision
     }
+}
+
+private func plannedLayoutFocusUpdate(
+    plan: CommandPlanResult,
+    appliedFrames: [WindowID: CGRect]
+) -> PlannedLayoutFocusUpdate? {
+    guard let focusedWindowID = plan.focusedWindowID else { return nil }
+    guard let frame = appliedFrames[focusedWindowID] ?? plan.desiredLayout.layout.tiled[focusedWindowID] else {
+        return .clear
+    }
+    return .target(windowID: focusedWindowID, frame: frame)
+}
+
+private func layoutApplyFailureSummary(_ failures: [LayoutApplyFailure]) -> String {
+    failures
+        .map { "\($0.windowID.description) target=\($0.targetFrame.debugDescription) error=\($0.message)" }
+        .joined(separator: "; ")
+}
+
+private func layoutApplyClampSummary(_ clamps: [LayoutApplyClamp]) -> String {
+    clamps
+        .map {
+            "\($0.windowID.description) target=\($0.targetFrame.debugDescription) actual=\($0.actualFrame.debugDescription) observed=\(windowConstraintsDebugDescription($0.observed))"
+        }
+        .joined(separator: "; ")
+}
+
+private func windowConstraintsDebugDescription(_ constraints: WindowConstraints) -> String {
+    "minWidth=\(constraints.minWidth.map { String($0) } ?? "nil") minHeight=\(constraints.minHeight.map { String($0) } ?? "nil")"
 }
 
 public func recordLayoutFrameWrite(
