@@ -179,22 +179,21 @@ private func solvedFrames(
             ))
         }
 
-        var tiled: [WindowID: CGRect] = [:]
-        for (cell, childFrame) in zip(split.cells, splitFrames(frame, axis: split.axis, lengths: lengths)) {
-            switch solvedFrames(
-                in: cell.node,
-                frame: childFrame,
-                innerGap: innerGap,
-                constraints: constraints,
-                displayID: displayID
-            ) {
-            case .success(let childFrames):
-                tiled.merge(childFrames) { _, next in next }
-            case .failure(let unsatisfiable):
-                return .failure(unsatisfiable)
+        return zip(split.cells, splitFrames(frame, axis: split.axis, lengths: lengths)).reduce(
+            Result<[WindowID: CGRect], UnsatisfiableLayout>.success([:])
+        ) { result, entry in
+            result.flatMap { tiled in
+                solvedFrames(
+                    in: entry.0.node,
+                    frame: entry.1,
+                    innerGap: innerGap,
+                    constraints: constraints,
+                    displayID: displayID
+                ).map { childFrames in
+                    tiled.merging(childFrames) { _, next in next }
+                }
             }
         }
-        return .success(tiled)
     }
 }
 
@@ -294,60 +293,111 @@ private func unsatisfiableLeaf(
     return nil
 }
 
+private struct LengthAllocationState {
+    let result: [Double]
+    let remaining: Set<Int>
+    let remainingTotal: Double
+}
+
 private func constrainedLengths(total: Double, weights: [Double], minimums: [Double]) -> [Double]? {
     guard weights.count == minimums.count, total.isFinite, total >= 0 else { return nil }
     guard minimums.allSatisfy({ $0.isFinite && $0 >= 0 }) else { return nil }
     guard minimums.reduce(0, +) <= total + layoutTolerance else { return nil }
 
-    var result = Array(repeating: 0.0, count: weights.count)
-    var remaining = Set(weights.indices)
-    var remainingTotal = total
+    return allocateConstrainedLengths(
+        LengthAllocationState(
+            result: Array(repeating: 0.0, count: weights.count),
+            remaining: Set(weights.indices),
+            remainingTotal: total
+        ),
+        weights: weights,
+        minimums: minimums
+    )
+}
 
-    while !remaining.isEmpty {
-        let remainingWeight = remaining.reduce(0.0) { $0 + weights[$1] }
-        guard remainingWeight > 0 else { return nil }
+private func allocateConstrainedLengths(
+    _ state: LengthAllocationState,
+    weights: [Double],
+    minimums: [Double]
+) -> [Double]? {
+    guard !state.remaining.isEmpty else { return state.result }
 
-        let binding = remaining.filter { index in
-            let proposed = remainingTotal * weights[index] / remainingWeight
-            return proposed + layoutTolerance < minimums[index]
-        }
+    let remainingWeight = state.remaining.reduce(0.0) { $0 + weights[$1] }
+    guard remainingWeight > 0 else { return nil }
 
-        guard !binding.isEmpty else {
-            let ordered = remaining.sorted()
-            var used = 0.0
-            for (offset, index) in ordered.enumerated() {
-                let value = offset == ordered.count - 1
-                    ? remainingTotal - used
-                    : remainingTotal * weights[index] / remainingWeight
-                result[index] = max(0, value)
-                used += result[index]
-            }
-            return result
-        }
-
-        for index in binding {
-            result[index] = minimums[index]
-            remainingTotal -= minimums[index]
-            remaining.remove(index)
-        }
+    let binding = state.remaining.filter { index in
+        let proposed = state.remainingTotal * weights[index] / remainingWeight
+        return proposed + layoutTolerance < minimums[index]
     }
 
-    return result
+    guard !binding.isEmpty else {
+        return fillRemainingLengths(state, weights: weights, remainingWeight: remainingWeight)
+    }
+
+    let bound = binding.reduce(state) { state, index in
+        LengthAllocationState(
+            result: state.result.setting(index, to: minimums[index]),
+            remaining: state.remaining.subtracting([index]),
+            remainingTotal: state.remainingTotal - minimums[index]
+        )
+    }
+    return allocateConstrainedLengths(bound, weights: weights, minimums: minimums)
+}
+
+private struct FilledLengthAccumulator {
+    let result: [Double]
+    let used: Double
+}
+
+private func fillRemainingLengths(
+    _ state: LengthAllocationState,
+    weights: [Double],
+    remainingWeight: Double
+) -> [Double] {
+    let ordered = state.remaining.sorted()
+    return ordered.enumerated().reduce(FilledLengthAccumulator(result: state.result, used: 0.0)) { filled, entry in
+        let (offset, index) = entry
+        let value = offset == ordered.count - 1
+            ? state.remainingTotal - filled.used
+            : state.remainingTotal * weights[index] / remainingWeight
+        let allocated = max(0, value)
+        return FilledLengthAccumulator(
+            result: filled.result.setting(index, to: allocated),
+            used: filled.used + allocated
+        )
+    }.result
+}
+
+private struct SplitFrameAccumulator {
+    let offset: Double
+    let frames: [CGRect]
 }
 
 private func splitFrames(_ frame: CGRect, axis: Axis, lengths: [Double]) -> [CGRect] {
-    var offset = 0.0
-    return lengths.enumerated().map { index, length in
+    lengths.enumerated().reduce(SplitFrameAccumulator(offset: 0, frames: [])) { state, entry in
+        let (index, length) = entry
         let isLast = index == lengths.count - 1
         switch axis {
         case .horizontal:
-            let width = isLast ? Double(frame.width) - offset : length
-            defer { offset += width }
-            return CGRect(x: frame.minX + offset, y: frame.minY, width: width, height: frame.height)
+            let width = isLast ? Double(frame.width) - state.offset : length
+            return SplitFrameAccumulator(
+                offset: state.offset + width,
+                frames: state.frames + [CGRect(x: frame.minX + state.offset, y: frame.minY, width: width, height: frame.height)]
+            )
         case .vertical:
-            let height = isLast ? Double(frame.height) - offset : length
-            defer { offset += height }
-            return CGRect(x: frame.minX, y: frame.minY + offset, width: frame.width, height: height)
+            let height = isLast ? Double(frame.height) - state.offset : length
+            return SplitFrameAccumulator(
+                offset: state.offset + height,
+                frames: state.frames + [CGRect(x: frame.minX, y: frame.minY + state.offset, width: frame.width, height: height)]
+            )
+        }
+    }.frames
+}
+
+private extension Array {
+    func setting(_ index: Index, to value: Element) -> [Element] {
+        enumerated().map { currentIndex, element in
+            currentIndex == index ? value : element
         }
     }
 }
