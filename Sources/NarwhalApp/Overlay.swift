@@ -233,8 +233,10 @@ final class Overlay {
 
     private func showCommandOverlay(bindings: [HotkeyBinding], dragModifier: ModifierSet, zones: [Zone]) {
         let sections = commandOverlaySections(for: bindings, dragModifier: dragModifier, zones: zones)
-        let metrics = CommandOverlayMetrics(sections: sections)
-        let frame = commandOverlayFrame(on: commandOverlayScreen(), contentSize: metrics.contentSize)
+        let visibleFrame = commandOverlayVisibleFrame(on: commandOverlayScreen())
+        let availableSize = CommandOverlayLayout.availableOverlaySize(in: visibleFrame)
+        let metrics = CommandOverlayMetrics.fitting(sections: sections, availableSize: availableSize)
+        let frame = CommandOverlayLayout.overlayFrame(in: visibleFrame, contentSize: metrics.contentSize)
         let window = commandWindow ?? makeCommandWindow(frame: frame)
         let overlayView = CommandOverlayView(
             columns: metrics.columns,
@@ -348,19 +350,8 @@ final class Overlay {
         return NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main ?? NSScreen.screens.first
     }
 
-    private func commandOverlayFrame(on screen: NSScreen?, contentSize: CGSize) -> CGRect {
-        let visibleFrame = screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 900, height: 700)
-        let availableWidth = max(1, visibleFrame.width - CommandOverlayLayout.screenMargin * 2)
-        let availableHeight = max(1, visibleFrame.height - CommandOverlayLayout.screenMargin * 2)
-        let scrollBarAllowance = contentSize.height > availableHeight ? CommandOverlayLayout.scrollBarGutterWidth : 0
-        let width = min(contentSize.width + scrollBarAllowance, availableWidth)
-        let height = min(contentSize.height, availableHeight)
-        return CGRect(
-            x: visibleFrame.midX - width / 2,
-            y: visibleFrame.midY - height / 2,
-            width: width,
-            height: height
-        )
+    private func commandOverlayVisibleFrame(on screen: NSScreen?) -> CGRect {
+        screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 900, height: 700)
     }
 
     private func hudFrame(on screen: NSScreen?, message: String) -> CGRect {
@@ -1035,7 +1026,38 @@ private struct CommandOverlayMetrics {
     let rowsHeight: CGFloat
 
     init(sections: [CommandOverlaySection]) {
-        columns = CommandOverlayLayout.semanticColumns(sections)
+        self.init(sections: sections, columns: CommandOverlayLayout.semanticColumns(sections))
+    }
+
+    static func fitting(sections: [CommandOverlaySection], availableSize: CGSize) -> CommandOverlayMetrics {
+        let expanded = CommandOverlayMetrics(sections: sections)
+        let expandedWidth = CommandOverlayLayout.windowWidth(
+            forContentSize: expanded.contentSize,
+            availableHeight: availableSize.height
+        )
+        guard expandedWidth > availableSize.width else {
+            return expanded
+        }
+
+        let compactRowsWidth = max(
+            1,
+            availableSize.width
+                - CommandOverlayLayout.horizontalPadding * 2
+                - CommandOverlayLayout.scrollBarGutterWidth
+        )
+        return CommandOverlayMetrics(
+            sections: sections,
+            columns: CommandOverlayLayout.singleColumn(sections),
+            maximumRowContentWidth: compactRowsWidth
+        )
+    }
+
+    private init(
+        sections: [CommandOverlaySection],
+        columns: [[CommandOverlaySection]],
+        maximumRowContentWidth: CGFloat? = nil
+    ) {
+        self.columns = columns
         let rows = sections.flatMap(\.rows)
         let keyTexts = rows.map(\.key)
         let commandTexts = rows.map(\.command)
@@ -1056,11 +1078,11 @@ private struct CommandOverlayMetrics {
             CommandOverlayLayout.measure($0.purpose, font: CommandOverlayLayout.sectionPurposeFont).width
         }.max() ?? 0
 
-        keyColumnWidth = ceil(min(
+        let preferredKeyColumnWidth = ceil(min(
             CommandOverlayLayout.maximumKeyColumnWidth,
             max(CommandOverlayLayout.minimumKeyColumnWidth, measuredKeyWidth)
         ))
-        commandColumnWidth = ceil(min(
+        let preferredCommandColumnWidth = ceil(min(
             CommandOverlayLayout.maximumCommandColumnWidth,
             max(
                 CommandOverlayLayout.minimumCommandColumnWidth,
@@ -1068,6 +1090,13 @@ private struct CommandOverlayMetrics {
                 measuredDetailWidth + CommandOverlayLayout.textFitPadding
             )
         ))
+        let resolvedWidths = CommandOverlayLayout.commandRowColumnWidths(
+            preferredKeyWidth: preferredKeyColumnWidth,
+            preferredCommandWidth: preferredCommandColumnWidth,
+            maximumRowContentWidth: maximumRowContentWidth
+        )
+        keyColumnWidth = resolvedWidths.key
+        commandColumnWidth = resolvedWidths.command
         rowsHeight = columns.map(CommandOverlayLayout.sectionsHeight).max() ?? 0
 
         let titleWidth = CommandOverlayLayout.measure(
@@ -1129,6 +1158,8 @@ private enum CommandOverlayLayout {
     static let maximumKeyColumnWidth: CGFloat = 220
     static let minimumCommandColumnWidth: CGFloat = 260
     static let maximumCommandColumnWidth: CGFloat = 580
+    static let minimumCompactKeyColumnWidth: CGFloat = 72
+    static let minimumCompactCommandColumnWidth: CGFloat = 120
     static let textFitPadding: CGFloat = 12
     static let titleFont = NSFont.systemFont(ofSize: 24, weight: .semibold)
     static let subtitleFont = NSFont.systemFont(ofSize: 13, weight: .regular)
@@ -1191,6 +1222,10 @@ private enum CommandOverlayLayout {
         return [left, right + unassigned]
     }
 
+    static func singleColumn(_ sections: [CommandOverlaySection]) -> [[CommandOverlaySection]] {
+        sections.isEmpty ? [] : [sections]
+    }
+
     static func columnsSeparatorWidth(columnCount: Int) -> CGFloat {
         guard columnCount > 1 else { return 0 }
         return centerGutter * 2 + columnSeparatorWidth
@@ -1214,6 +1249,58 @@ private enum CommandOverlayLayout {
     static func lineHeight(font: NSFont) -> CGFloat {
         ceil(font.ascender - font.descender + font.leading)
     }
+
+    static func availableOverlaySize(in visibleFrame: CGRect) -> CGSize {
+        CGSize(
+            width: max(1, visibleFrame.width - screenMargin * 2),
+            height: max(1, visibleFrame.height - screenMargin * 2)
+        )
+    }
+
+    static func windowWidth(forContentSize contentSize: CGSize, availableHeight: CGFloat) -> CGFloat {
+        let scrollBarAllowance = contentSize.height > availableHeight ? scrollBarGutterWidth : 0
+        return contentSize.width + scrollBarAllowance
+    }
+
+    static func windowSize(forContentSize contentSize: CGSize, availableSize: CGSize) -> CGSize {
+        CGSize(
+            width: min(windowWidth(forContentSize: contentSize, availableHeight: availableSize.height), availableSize.width),
+            height: min(contentSize.height, availableSize.height)
+        )
+    }
+
+    static func overlayFrame(in visibleFrame: CGRect, contentSize: CGSize) -> CGRect {
+        let availableSize = availableOverlaySize(in: visibleFrame)
+        let windowSize = windowSize(forContentSize: contentSize, availableSize: availableSize)
+        return CGRect(
+            x: visibleFrame.midX - windowSize.width / 2,
+            y: visibleFrame.midY - windowSize.height / 2,
+            width: windowSize.width,
+            height: windowSize.height
+        )
+    }
+
+    static func commandRowColumnWidths(
+        preferredKeyWidth: CGFloat,
+        preferredCommandWidth: CGFloat,
+        maximumRowContentWidth: CGFloat?
+    ) -> (key: CGFloat, command: CGFloat) {
+        guard let maximumRowContentWidth else {
+            return (preferredKeyWidth, preferredCommandWidth)
+        }
+
+        let rowBudget = max(1, maximumRowContentWidth - rowGap)
+        var keyWidth = min(
+            preferredKeyWidth,
+            max(minimumCompactKeyColumnWidth, floor(rowBudget * 0.34))
+        )
+        var commandWidth = min(preferredCommandWidth, max(1, rowBudget - keyWidth))
+        if commandWidth < minimumCompactCommandColumnWidth {
+            keyWidth = min(keyWidth, max(1, rowBudget - minimumCompactCommandColumnWidth))
+            commandWidth = max(1, rowBudget - keyWidth)
+        }
+        return (ceil(keyWidth), ceil(commandWidth))
+    }
 }
 
 @MainActor
@@ -1224,7 +1311,8 @@ enum CommandOverlayVerification {
             dragModifier: Config.default.dragModifier,
             zones: Config.default.zones
         )
-        let metrics = CommandOverlayMetrics(sections: sections)
+        let regularAvailableSize = CGSize(width: 2200, height: 760)
+        let metrics = CommandOverlayMetrics.fitting(sections: sections, availableSize: regularAvailableSize)
         guard metrics.columns.count == 2 else {
             return (false, "expected 2 semantic command groups, got \(metrics.columns.count)")
         }
@@ -1249,29 +1337,12 @@ enum CommandOverlayVerification {
             )
         }
 
-        let viewHeight = min(ceil(metrics.contentSize.height), 760)
-        let scrollBarAllowance = metrics.contentSize.height > viewHeight ? CommandOverlayLayout.scrollBarGutterWidth : 0
-        let viewSize = CGSize(
-            width: ceil(metrics.contentSize.width + scrollBarAllowance),
-            height: viewHeight
+        let viewSize = CommandOverlayLayout.windowSize(
+            forContentSize: metrics.contentSize,
+            availableSize: regularAvailableSize
         )
-        let view = CommandOverlayView(
-            columns: metrics.columns,
-            keyColumnWidth: metrics.keyColumnWidth,
-            commandColumnWidth: metrics.commandColumnWidth,
-            rowsHeight: metrics.rowsHeight
-        )
-        let window = NSWindow(
-            contentRect: CGRect(origin: .zero, size: viewSize),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.contentView = view
-        view.frame = CGRect(origin: .zero, size: viewSize)
-        view.prepareForFirstDisplay()
 
-        guard let snapshot = view.debugLayoutSnapshot() else {
+        guard let snapshot = debugSnapshot(metrics: metrics, viewSize: viewSize) else {
             return (false, "command overlay did not produce a debug layout snapshot")
         }
         guard snapshot.titleText == CommandOverlayLayout.titleText else {
@@ -1327,14 +1398,89 @@ enum CommandOverlayVerification {
         else {
             return (
                 false,
-                "command overlay scrollbar is not visible on first layout: hidden=\(snapshot.scrollBarHidden) scrollable=\(snapshot.scrollBarScrollable) frame=\(snapshot.scrollBarFrame.debugDescription) rowsHeight=\(metrics.rowsHeight) viewHeight=\(viewHeight) viewport=\(snapshot.viewportBounds.debugDescription) document=\(snapshot.documentBounds.debugDescription)"
+                "command overlay scrollbar is not visible on first layout: hidden=\(snapshot.scrollBarHidden) scrollable=\(snapshot.scrollBarScrollable) frame=\(snapshot.scrollBarFrame.debugDescription) rowsHeight=\(metrics.rowsHeight) viewHeight=\(viewSize.height) viewport=\(snapshot.viewportBounds.debugDescription) document=\(snapshot.documentBounds.debugDescription)"
+            )
+        }
+
+        let compactAvailableSize = CGSize(width: 760, height: 760)
+        let regularWidthOnCompactScreen = CommandOverlayLayout.windowWidth(
+            forContentSize: CommandOverlayMetrics(sections: sections).contentSize,
+            availableHeight: compactAvailableSize.height
+        )
+        guard regularWidthOnCompactScreen > compactAvailableSize.width else {
+            return (
+                false,
+                "compact verification width is too wide to trigger compact mode: required=\(regularWidthOnCompactScreen) available=\(compactAvailableSize.width)"
+            )
+        }
+        let compactMetrics = CommandOverlayMetrics.fitting(sections: sections, availableSize: compactAvailableSize)
+        guard compactMetrics.columns.count == 1 else {
+            return (false, "narrow command overlay should use one column, got \(compactMetrics.columns.count)")
+        }
+        let compactViewSize = CommandOverlayLayout.windowSize(
+            forContentSize: compactMetrics.contentSize,
+            availableSize: compactAvailableSize
+        )
+        guard let compactSnapshot = debugSnapshot(metrics: compactMetrics, viewSize: compactViewSize) else {
+            return (false, "compact command overlay did not produce a debug layout snapshot")
+        }
+        guard compactSnapshot.separatorFrame == nil,
+              compactSnapshot.columnFrames.count == 1,
+              let compactColumn = compactSnapshot.columnFrames.first
+        else {
+            return (
+                false,
+                "compact command overlay should render one column with no separator: columns=\(compactSnapshot.columnFrames.count) separator=\(String(describing: compactSnapshot.separatorFrame))"
+            )
+        }
+        let compactRowWidth = compactMetrics.keyColumnWidth
+            + CommandOverlayLayout.rowGap
+            + compactMetrics.commandColumnWidth
+        guard compactSnapshot.documentBounds.width <= compactSnapshot.viewportBounds.width + 1,
+              compactColumn.maxX <= compactSnapshot.viewportBounds.maxX + 1,
+              compactRowWidth <= compactColumn.width + 1
+        else {
+            return (
+                false,
+                "compact command overlay clips horizontally: viewport=\(compactSnapshot.viewportBounds.debugDescription) document=\(compactSnapshot.documentBounds.debugDescription) column=\(compactColumn.debugDescription) rowWidth=\(compactRowWidth)"
+            )
+        }
+        guard !compactSnapshot.scrollBarHidden,
+              compactSnapshot.scrollBarScrollable,
+              compactSnapshot.scrollBarFrame.minX >= compactSnapshot.scrollViewFrame.maxX + CommandOverlayLayout.scrollBarGap - 1
+        else {
+            return (
+                false,
+                "compact command overlay scrollbar is missing or overlapping: hidden=\(compactSnapshot.scrollBarHidden) scrollable=\(compactSnapshot.scrollBarScrollable) scrollView=\(compactSnapshot.scrollViewFrame.debugDescription) scrollBar=\(compactSnapshot.scrollBarFrame.debugDescription)"
             )
         }
 
         return (
             true,
-            "command overlay title and split verified: title=\(snapshot.titleFrame.debugDescription) viewport=\(snapshot.viewportBounds.debugDescription) document=\(snapshot.documentBounds.debugDescription) left=\(left.debugDescription) separator=\(separator.debugDescription) right=\(right.debugDescription)"
+            "command overlay regular and compact layouts verified: regularViewport=\(snapshot.viewportBounds.debugDescription) compactViewport=\(compactSnapshot.viewportBounds.debugDescription) compactColumn=\(compactColumn.debugDescription)"
         )
+    }
+
+    private static func debugSnapshot(
+        metrics: CommandOverlayMetrics,
+        viewSize: CGSize
+    ) -> CommandOverlayDebugLayoutSnapshot? {
+        let view = CommandOverlayView(
+            columns: metrics.columns,
+            keyColumnWidth: metrics.keyColumnWidth,
+            commandColumnWidth: metrics.commandColumnWidth,
+            rowsHeight: metrics.rowsHeight
+        )
+        let window = NSWindow(
+            contentRect: CGRect(origin: .zero, size: viewSize),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = view
+        view.frame = CGRect(origin: .zero, size: viewSize)
+        view.prepareForFirstDisplay()
+        return view.debugLayoutSnapshot()
     }
 }
 
