@@ -350,7 +350,8 @@ final class Overlay {
         let visibleFrame = screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 900, height: 700)
         let availableWidth = max(1, visibleFrame.width - CommandOverlayLayout.screenMargin * 2)
         let availableHeight = max(1, visibleFrame.height - CommandOverlayLayout.screenMargin * 2)
-        let width = min(contentSize.width, availableWidth)
+        let scrollBarAllowance = contentSize.height > availableHeight ? CommandOverlayLayout.verticalScrollerWidth : 0
+        let width = min(contentSize.width + scrollBarAllowance, availableWidth)
         let height = min(contentSize.height, availableHeight)
         return CGRect(
             x: visibleFrame.midX - width / 2,
@@ -576,9 +577,12 @@ private final class CommandOverlayView: NSView {
         guard let scrollView, let rowsDocumentView else { return }
         let viewportHeight = scrollView.contentView.bounds.height
         let fallbackWidth = max(0, bounds.width - CommandOverlayLayout.horizontalPadding * 2)
+        let scrollable = rowsHeight > viewportHeight + 1
+        scrollView.hasVerticalScroller = scrollable
+        let scrollViewWidth = scrollView.bounds.width > 0 ? scrollView.bounds.width : fallbackWidth
         let viewportWidth = max(
-            scrollView.contentView.bounds.width,
-            max(scrollView.bounds.width, fallbackWidth)
+            0,
+            scrollViewWidth - (scrollable ? CommandOverlayLayout.verticalScrollerWidth : 0)
         )
         let documentSize = NSSize(
             width: viewportWidth,
@@ -1008,6 +1012,10 @@ private enum CommandOverlayLayout {
     static let stackSpacing: CGFloat = 16
     static let centerGutter: CGFloat = 56
     static let columnSeparatorWidth: CGFloat = 2
+    static let verticalScrollerWidth = NSScroller.scrollerWidth(
+        for: .regular,
+        scrollerStyle: .legacy
+    )
     static let sectionSpacing: CGFloat = 18
     static let sectionHeaderSpacing: CGFloat = 8
     static let sectionPurposeGap: CGFloat = 10
@@ -1127,9 +1135,11 @@ enum CommandOverlayVerification {
             return (false, "default command overlay does not place System commands at the top of the right column")
         }
 
+        let viewHeight = min(ceil(metrics.contentSize.height), 760)
+        let scrollBarAllowance = metrics.contentSize.height > viewHeight ? CommandOverlayLayout.verticalScrollerWidth : 0
         let viewSize = CGSize(
-            width: ceil(metrics.contentSize.width),
-            height: min(ceil(metrics.contentSize.height), 760)
+            width: ceil(metrics.contentSize.width + scrollBarAllowance),
+            height: viewHeight
         )
         let view = CommandOverlayView(
             columns: metrics.columns,
@@ -1181,6 +1191,14 @@ enum CommandOverlayVerification {
             return (
                 false,
                 "bad command overlay split: bounds=\(snapshot.columnsBounds.debugDescription) left=\(left.debugDescription) separator=\(separator.debugDescription) right=\(right.debugDescription)"
+            )
+        }
+        guard snapshot.documentBounds.width <= snapshot.viewportBounds.width + 1,
+              right.maxX <= snapshot.viewportBounds.maxX + 1
+        else {
+            return (
+                false,
+                "command overlay content clips horizontally: viewport=\(snapshot.viewportBounds.debugDescription) document=\(snapshot.documentBounds.debugDescription) right=\(right.debugDescription)"
             )
         }
 
