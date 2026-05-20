@@ -139,6 +139,38 @@ struct LayoutApplyModelTests {
         ))
     }
 
+    @Test("Frame write intents are pure ordered metadata projections")
+    func frameWriteIntentsArePureOrderedMetadataProjections() {
+        let focused = WindowID(raw: 50)
+        let other = WindowID(raw: 51)
+        let missing = WindowID(raw: 52)
+        let focusedFrame = CGRect(x: 0, y: 0, width: 300, height: 200)
+        let otherFrame = CGRect(x: 300, y: 0, width: 300, height: 200)
+        let missingFrame = CGRect(x: 600, y: 0, width: 300, height: 200)
+        let focusedMetadata = windowMetadata(id: focused, frame: focusedFrame)
+        let otherMetadata = windowMetadata(id: other, frame: otherFrame)
+        let plan = commandPlanFixture(
+            focused: focused,
+            tiled: [
+                focused: focusedFrame,
+                other: otherFrame,
+                missing: missingFrame
+            ],
+            windows: [
+                focused: focusedMetadata,
+                other: otherMetadata
+            ]
+        )
+
+        let intents = layoutFrameWriteIntents(for: plan)
+
+        #expect(intents == [
+            .write(windowID: other, metadata: otherMetadata, targetFrame: otherFrame),
+            .missingMetadata(windowID: missing, targetFrame: missingFrame),
+            .write(windowID: focused, metadata: focusedMetadata, targetFrame: focusedFrame)
+        ])
+    }
+
     @Test("Planned layout apply decision clears missing focused frame")
     func plannedLayoutApplyDecisionClearsMissingFocusedFrame() {
         let focused = WindowID(raw: 60)
@@ -201,7 +233,8 @@ struct LayoutApplyModelTests {
 
     private func commandPlanFixture(
         focused: WindowID?,
-        tiled: [WindowID: CGRect]
+        tiled: [WindowID: CGRect],
+        windows: [WindowID: WindowMetadata] = [:]
     ) -> CommandPlanResult {
         CommandPlanResult(
             focusedWindowID: focused,
@@ -210,9 +243,22 @@ struct LayoutApplyModelTests {
                 layout: Layout(tiled: tiled, floatingZOrder: [], hidden: []),
                 delta: LayoutDelta(moves: tiled, raises: [], hides: [], shows: Set(tiled.keys))
             ),
-            windows: [:],
+            windows: windows,
             plannedWorld: .empty,
             undoWorld: nil
+        )
+    }
+
+    private func windowMetadata(id: WindowID, frame: CGRect) -> WindowMetadata {
+        WindowMetadata(
+            id: id,
+            bundleID: BundleID(raw: "com.example"),
+            title: "Window \(id.raw)",
+            role: "AXWindow",
+            pid: ProcessID(42),
+            frame: frame,
+            isResizable: true,
+            isMinimized: false
         )
     }
 }

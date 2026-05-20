@@ -1,4 +1,5 @@
 import Foundation
+import NarwhalAppSupport
 import os
 
 struct StartupReporter {
@@ -6,29 +7,34 @@ struct StartupReporter {
 
     private let logger = Logger(subsystem: "ca.quantim.narwhal", category: "app")
     private let sink: FileLogSink
+    private let timestamp: () -> String
 
-    init(logPath: String = StartupReporter.defaultLogPath) {
+    init(
+        logPath: String = StartupReporter.defaultLogPath,
+        timestamp: @escaping () -> String = StartupReporter.currentTimestamp
+    ) {
         sink = FileLogSink(path: logPath)
+        self.timestamp = timestamp
     }
 
     func info(_ message: String) {
         logger.info("\(message, privacy: .public)")
-        write(level: "info", message: message)
+        write(level: .info, message: message)
     }
 
     func error(_ message: String) {
         logger.error("\(message, privacy: .public)")
-        write(level: "error", message: message)
+        write(level: .error, message: message)
     }
 
-    private func write(level: String, message: String) {
-        let line = "\(timestamp()) \(level): \(message)\n"
+    private func write(level: LogLineLevel, message: String) {
+        let line = formattedLogLine(timestamp: timestamp(), level: level, message: message)
         guard let data = line.data(using: .utf8) else { return }
         FileHandle.standardError.write(data)
         sink.write(data)
     }
 
-    private func timestamp() -> String {
+    private static func currentTimestamp() -> String {
         ISO8601DateFormatter().string(from: Date())
     }
 }

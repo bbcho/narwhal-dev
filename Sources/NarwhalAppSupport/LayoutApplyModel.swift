@@ -112,6 +112,11 @@ public enum LayoutFrameWriteObservation: Equatable, Sendable {
     case failed(message: String)
 }
 
+public enum LayoutFrameWriteIntent: Equatable, Sendable {
+    case write(windowID: WindowID, metadata: WindowMetadata, targetFrame: CGRect)
+    case missingMetadata(windowID: WindowID, targetFrame: CGRect)
+}
+
 public enum LayoutApplyProgressDecision: Equatable, Sendable {
     case continueApplying
     case stopApplying
@@ -124,6 +129,16 @@ public struct LayoutApplyProgress: Equatable, Sendable {
     public init(result: LayoutApplyResult, decision: LayoutApplyProgressDecision) {
         self.result = result
         self.decision = decision
+    }
+}
+
+public func layoutFrameWriteIntents(for plan: CommandPlanResult) -> [LayoutFrameWriteIntent] {
+    frameWriteOrder(for: plan.desiredLayout.layout, focused: plan.focusedWindowID).compactMap { windowID in
+        guard let frame = plan.desiredLayout.layout.tiled[windowID] else { return nil }
+        guard let metadata = plan.windows[windowID] else {
+            return .missingMetadata(windowID: windowID, targetFrame: frame)
+        }
+        return .write(windowID: windowID, metadata: metadata, targetFrame: frame)
     }
 }
 
