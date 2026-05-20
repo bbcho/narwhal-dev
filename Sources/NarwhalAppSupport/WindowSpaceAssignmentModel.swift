@@ -1,6 +1,17 @@
 import CoreGraphics
 import NarwhalCore
 
+public func spaceTopologyByMergingWindowSpaces(
+    _ topology: SpaceTopology,
+    windowSpaces: [WindowID: SpaceID]
+) -> SpaceTopology {
+    SpaceTopology(
+        activeSpaceByDisplay: topology.activeSpaceByDisplay,
+        windowSpace: topology.windowSpace.merging(windowSpaces) { _, live in live },
+        quality: topology.quality
+    )
+}
+
 public func selectedWindowSpace(
     for metadata: WindowMetadata,
     candidateSpaces: [SpaceID],

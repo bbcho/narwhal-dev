@@ -5,41 +5,33 @@ public func focusTarget(in layout: Layout, from focused: WindowID, direction: Di
 }
 
 public func focusTarget(windows: [WindowMetadata], from focused: WindowID, direction: Direction) -> WindowID? {
-    let frames = windows
-        .filter { !$0.isMinimized }
-        .reduce(into: [WindowID: CGRect]()) { result, metadata in
-            result[metadata.id] = metadata.frame
-        }
+    let frames = Dictionary(
+        windows
+            .filter { !$0.isMinimized }
+            .map { ($0.id, $0.frame) },
+        uniquingKeysWith: { _, replacement in replacement }
+    )
     return focusTarget(in: frames, from: focused, direction: direction)
 }
 
 private func focusTarget(in frames: [WindowID: CGRect], from focused: WindowID, direction: Direction) -> WindowID? {
     guard let sourceFrame = frames[focused] else { return nil }
 
-    var best: FocusCandidate?
-    for (windowID, frame) in frames {
-        guard windowID != focused,
-              frame.isFinitePositive,
-              isCandidate(frame, from: sourceFrame, direction: direction)
-        else {
-            continue
-        }
-
-        let candidate = FocusCandidate(
-            windowID: windowID,
-            score: focusScore(frame, from: sourceFrame, direction: direction)
-        )
-        if let currentBest = best {
-            if candidate.score < currentBest.score
-                || (candidate.score == currentBest.score && candidate.windowID.raw < currentBest.windowID.raw) {
-                best = candidate
+    return frames
+        .compactMap { windowID, frame -> FocusCandidate? in
+            guard windowID != focused,
+                  frame.isFinitePositive,
+                  isCandidate(frame, from: sourceFrame, direction: direction)
+            else {
+                return nil
             }
-        } else {
-            best = candidate
+            return FocusCandidate(
+                windowID: windowID,
+                score: focusScore(frame, from: sourceFrame, direction: direction)
+            )
         }
-    }
-
-    return best?.windowID
+        .min()?
+        .windowID
 }
 
 public func focusCycleTarget(
@@ -69,9 +61,16 @@ public func focusCycleCandidates(
     return Array(traversal.dropFirst(currentIndex + 1)) + Array(traversal.prefix(currentIndex + 1))
 }
 
-private struct FocusCandidate {
+private struct FocusCandidate: Equatable, Comparable {
     let windowID: WindowID
     let score: FocusScore
+
+    static func < (lhs: FocusCandidate, rhs: FocusCandidate) -> Bool {
+        if lhs.score != rhs.score {
+            return lhs.score < rhs.score
+        }
+        return lhs.windowID.raw < rhs.windowID.raw
+    }
 }
 
 private struct FocusScore: Equatable, Comparable {

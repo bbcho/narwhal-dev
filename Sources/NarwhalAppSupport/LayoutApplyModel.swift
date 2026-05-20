@@ -54,8 +54,10 @@ public struct LayoutApplyResult: Equatable, Sendable {
     }
 
     public var observedConstraints: [WindowID: WindowConstraints] {
-        clamps.reduce(into: [:]) { result, clamp in
-            result[clamp.windowID] = (result[clamp.windowID] ?? WindowConstraints()).merged(with: clamp.observed)
+        clamps.reduce([WindowID: WindowConstraints]()) { constraints, clamp in
+            constraints.merging([
+                clamp.windowID: (constraints[clamp.windowID] ?? WindowConstraints()).merged(with: clamp.observed)
+            ]) { _, replacement in replacement }
         }
     }
 }
@@ -162,11 +164,9 @@ public func recordLayoutFrameWrite(
 ) -> LayoutApplyProgress {
     switch observation {
     case .converged(let actual):
-        var applied = result.applied
-        applied[windowID] = actual
         return LayoutApplyProgress(
             result: LayoutApplyResult(
-                applied: applied,
+                applied: result.applied.merging([windowID: actual]) { _, replacement in replacement },
                 clamps: result.clamps,
                 failures: result.failures
             ),

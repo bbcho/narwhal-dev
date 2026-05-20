@@ -5,6 +5,33 @@ import NarwhalCore
 
 @Suite("Window Space assignment model")
 struct WindowSpaceAssignmentModelTests {
+    @Test("Space topology merge keeps display state and lets live window mapping win")
+    func spaceTopologyMergeKeepsDisplayStateAndLetsLiveWindowMappingWin() {
+        let display = DisplayID(raw: 1)
+        let window = WindowID(raw: 10)
+        let extraWindow = WindowID(raw: 11)
+        let topology = SpaceTopology(
+            activeSpaceByDisplay: [display: SpaceID(raw: 3)],
+            windowSpace: [window: SpaceID(raw: 3)],
+            quality: .managedDisplaySpaces
+        )
+
+        let merged = spaceTopologyByMergingWindowSpaces(
+            topology,
+            windowSpaces: [
+                window: SpaceID(raw: 7),
+                extraWindow: SpaceID(raw: 9)
+            ]
+        )
+
+        #expect(merged.activeSpaceByDisplay == topology.activeSpaceByDisplay)
+        #expect(merged.windowSpace == [
+            window: SpaceID(raw: 7),
+            extraWindow: SpaceID(raw: 9)
+        ])
+        #expect(merged.quality == .managedDisplaySpaces)
+    }
+
     @Test("Selected window Space returns nil for empty candidates and exact Space for single candidate")
     func selectedWindowSpaceHandlesEmptyAndSingleCandidates() {
         let metadata = windowFixture(frame: CGRect(x: 10, y: 10, width: 100, height: 100))

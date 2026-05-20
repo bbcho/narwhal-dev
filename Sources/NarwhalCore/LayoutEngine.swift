@@ -38,30 +38,14 @@ public func flattenedLayout(of world: World) -> Result<Layout, UnsatisfiableLayo
         return .success(Layout(tiled: [:], floatingZOrder: [], hidden: []))
     }
 
-    var tiled: [WindowID: CGRect] = [:]
-    var floating: [WindowID] = []
-    for key in workspaceKeys {
-        guard let display = world.displays[key.displayID],
-              let space = world.spaces[key.spaceID]
-        else { continue }
-        let displayLayout: Layout
-        switch solveLayout(
-            spaceState: space,
-            displayID: key.displayID,
-            frame: display.visibleFrame,
-            gaps: world.config.gaps,
-            constraints: world.windowConstraints
-        ) {
-        case .solved(let layout, _):
-            displayLayout = layout
-        case .unsatisfiable(let unsatisfiable):
-            return .failure(unsatisfiable)
+    return workspaceKeys
+        .reduce(Result<FlattenedLayoutAccumulator, UnsatisfiableLayout>.success(.empty)) { result, key in
+            result.flatMap { accumulator in
+                activeWorkspaceLayout(for: key, in: world)
+                    .map { accumulator.adding($0) }
+            }
         }
-        tiled.merge(displayLayout.tiled) { _, next in next }
-        floating.append(contentsOf: displayLayout.floatingZOrder)
-    }
-
-    return .success(Layout(tiled: tiled, floatingZOrder: floating, hidden: []))
+        .map(\.layout)
 }
 
 public func tiledBorderTargets(of world: World) -> Result<[FocusBorderTarget], UnsatisfiableLayout> {
@@ -120,23 +104,24 @@ public func applyingPendingTileRules(
     }
     guard !pending.isEmpty else { return .success(nil) }
 
-    var plannedWorld = world
-    var focusedWindowID: WindowID?
-    for (windowID, zoneID) in pending {
-        guard let displayID = plannedWorld.windowDisplay[windowID] else { continue }
-        switch apply(.dropAtZone(windowID, displayID, zoneID), to: plannedWorld) {
-        case .success(let next):
-            plannedWorld = next.clearingPendingRule(for: windowID)
-            focusedWindowID = windowID
-        case .failure(let error):
-            return .failure(error)
+    let result = pending.reduce(
+        Result<PendingTileRuleApplicationAccumulator, CommandError>.success(.initial(world))
+    ) { partial, application in
+        partial.flatMap { accumulator in
+            accumulator.applying(windowID: application.0, zoneID: application.1)
         }
     }
-    guard plannedWorld != world else { return .success(nil) }
-    return .success(PendingTileRuleApplicationPlan(
-        world: plannedWorld,
-        focusedWindowID: focusedWindowID
-    ))
+
+    switch result {
+    case .success(let accumulator):
+        guard accumulator.world != world else { return .success(nil) }
+        return .success(PendingTileRuleApplicationPlan(
+            world: accumulator.world,
+            focusedWindowID: accumulator.focusedWindowID
+        ))
+    case .failure(let error):
+        return .failure(error)
+    }
 }
 
 private func framesByWindow(in node: Node, frame: CGRect, innerGap: Double) -> [WindowID: CGRect] {
@@ -147,17 +132,81 @@ private func framesByWindow(in node: Node, frame: CGRect, innerGap: Double) -> [
         return [id: frame.insetBy(dx: innerGap / 2, dy: innerGap / 2).standardized]
     case .split(let split):
         let rects = splitFrames(frame, axis: split.axis, weights: split.cells.map(\.weight))
-        return zip(split.cells, rects).reduce(into: [:]) { result, pair in
-            let childFrames = framesByWindow(in: pair.0.node, frame: pair.1, innerGap: innerGap)
-            result.merge(childFrames) { _, next in next }
+        return zip(split.cells, rects).reduce([WindowID: CGRect]()) { result, pair in
+            result.merging(
+                framesByWindow(in: pair.0.node, frame: pair.1, innerGap: innerGap)
+            ) { _, next in next }
         }
+    }
+}
+
+private struct FlattenedLayoutAccumulator {
+    let tiled: [WindowID: CGRect]
+    let floatingZOrder: [WindowID]
+
+    static let empty = FlattenedLayoutAccumulator(tiled: [:], floatingZOrder: [])
+
+    var layout: Layout {
+        Layout(tiled: tiled, floatingZOrder: floatingZOrder, hidden: [])
+    }
+
+    func adding(_ layout: Layout) -> FlattenedLayoutAccumulator {
+        FlattenedLayoutAccumulator(
+            tiled: tiled.merging(layout.tiled) { _, next in next },
+            floatingZOrder: floatingZOrder + layout.floatingZOrder
+        )
+    }
+}
+
+private func activeWorkspaceLayout(
+    for key: WorkspaceKey,
+    in world: World
+) -> Result<Layout, UnsatisfiableLayout> {
+    guard let display = world.displays[key.displayID],
+          let space = world.spaces[key.spaceID]
+    else {
+        return .success(Layout(tiled: [:], floatingZOrder: [], hidden: []))
+    }
+
+    switch solveLayout(
+        spaceState: space,
+        displayID: key.displayID,
+        frame: display.visibleFrame,
+        gaps: world.config.gaps,
+        constraints: world.windowConstraints
+    ) {
+    case .solved(let layout, _):
+        return .success(layout)
+    case .unsatisfiable(let unsatisfiable):
+        return .failure(unsatisfiable)
+    }
+}
+
+private struct PendingTileRuleApplicationAccumulator {
+    let world: World
+    let focusedWindowID: WindowID?
+
+    static func initial(_ world: World) -> PendingTileRuleApplicationAccumulator {
+        PendingTileRuleApplicationAccumulator(world: world, focusedWindowID: nil)
+    }
+
+    func applying(windowID: WindowID, zoneID: ZoneID) -> Result<PendingTileRuleApplicationAccumulator, CommandError> {
+        guard let displayID = world.windowDisplay[windowID] else {
+            return .success(self)
+        }
+
+        return apply(.dropAtZone(windowID, displayID, zoneID), to: world)
+            .map { next in
+                PendingTileRuleApplicationAccumulator(
+                    world: next.clearingPendingRule(for: windowID),
+                    focusedWindowID: windowID
+                )
+            }
     }
 }
 
 private extension World {
     func clearingPendingRule(for windowID: WindowID) -> World {
-        var pendingRules = self.pendingRules
-        pendingRules.removeValue(forKey: windowID)
         return World(
             displays: displays,
             activeSpace: activeSpace,
@@ -168,7 +217,7 @@ private extension World {
             windowSpace: windowSpace,
             observedVisibleWindows: observedVisibleWindows,
             windowConstraints: windowConstraints,
-            pendingRules: pendingRules,
+            pendingRules: pendingRules.filter { $0.key != windowID },
             config: config
         )
     }
@@ -178,20 +227,29 @@ private func splitFrames(_ frame: CGRect, axis: Axis, weights: [Double]) -> [CGR
     let total = weights.reduce(0, +)
     guard total > 0 else { return [] }
 
-    var offset: CGFloat = 0
-    return weights.enumerated().map { index, weight in
-        let isLast = index == weights.count - 1
+    let lengths = splitLengths(
+        extent: axis == .horizontal ? frame.width : frame.height,
+        weights: weights,
+        totalWeight: total
+    )
+    return zip(splitOffsets(for: lengths), lengths).map { offset, length in
         switch axis {
         case .horizontal:
-            let width = isLast ? frame.width - offset : frame.width * CGFloat(weight / total)
-            defer { offset += width }
-            return CGRect(x: frame.minX + offset, y: frame.minY, width: width, height: frame.height)
+            return CGRect(x: frame.minX + offset, y: frame.minY, width: length, height: frame.height)
         case .vertical:
-            let height = isLast ? frame.height - offset : frame.height * CGFloat(weight / total)
-            defer { offset += height }
-            return CGRect(x: frame.minX, y: frame.minY + offset, width: frame.width, height: height)
+            return CGRect(x: frame.minX, y: frame.minY + offset, width: frame.width, height: length)
         }
     }
+}
+
+private func splitLengths(extent: CGFloat, weights: [Double], totalWeight: Double) -> [CGFloat] {
+    guard !weights.isEmpty else { return [] }
+    let leading = weights.dropLast().map { extent * CGFloat($0 / totalWeight) }
+    return leading + [extent - leading.reduce(0, +)]
+}
+
+private func splitOffsets(for lengths: [CGFloat]) -> [CGFloat] {
+    lengths.indices.map { lengths.prefix($0).reduce(0, +) }
 }
 
 private func applyOuterGaps(_ gaps: Insets, to frame: CGRect) -> CGRect {

@@ -55,22 +55,17 @@ struct SpaceClient {
             .flatMap { ManagedDisplaySpacesParser.parse($0, displays: displays) }
             ?? SpaceTopology.replicated(activeSpace: tryActiveSpaceID(), displays: displays)
 
-        var windowSpace = activeTopology.windowSpace
-        if let copySpacesForWindows = symbols.copySpacesForWindows {
-            windowSpace.merge(windowSpaces(
+        let liveWindowSpace = symbols.copySpacesForWindows.map { copySpacesForWindows in
+            windowSpaces(
                 for: windows,
                 displays: displays,
                 activeSpaceByDisplay: activeTopology.activeSpaceByDisplay,
                 connectionID: connectionID,
                 copySpacesForWindows: copySpacesForWindows
-            )) { _, live in live }
-        }
+            )
+        } ?? [:]
 
-        return SpaceTopology(
-            activeSpaceByDisplay: activeTopology.activeSpaceByDisplay,
-            windowSpace: windowSpace,
-            quality: activeTopology.quality
-        )
+        return spaceTopologyByMergingWindowSpaces(activeTopology, windowSpaces: liveWindowSpace)
     }
 
     private func tryActiveSpaceID() -> SpaceID? {
