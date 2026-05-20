@@ -122,8 +122,11 @@ public func pollWindowFrameInventory(
               !framesEqual(oldFrame, newFrame, tolerance: tolerance)
         else { return nil }
 
-        if sizesEqual(oldFrame.size, newFrame.size, tolerance: tolerance) {
+        if !originsEqual(oldFrame.origin, newFrame.origin, tolerance: tolerance) {
             return .windowMoved(windowID, newFrame)
+        }
+        if sizesEqual(oldFrame.size, newFrame.size, tolerance: tolerance) {
+            return nil
         }
         return .windowResized(windowID, newFrame.size)
     }
@@ -134,9 +137,13 @@ public func pollWindowFrameInventory(
 }
 
 private func framesEqual(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {
-    abs(lhs.origin.x - rhs.origin.x) <= tolerance
-        && abs(lhs.origin.y - rhs.origin.y) <= tolerance
+    originsEqual(lhs.origin, rhs.origin, tolerance: tolerance)
         && sizesEqual(lhs.size, rhs.size, tolerance: tolerance)
+}
+
+private func originsEqual(_ lhs: CGPoint, _ rhs: CGPoint, tolerance: CGFloat) -> Bool {
+    abs(lhs.x - rhs.x) <= tolerance
+        && abs(lhs.y - rhs.y) <= tolerance
 }
 
 private func sizesEqual(_ lhs: CGSize, _ rhs: CGSize, tolerance: CGFloat) -> Bool {

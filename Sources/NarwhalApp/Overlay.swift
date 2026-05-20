@@ -1597,8 +1597,25 @@ enum FocusBorderVerification {
         overlay.stop()
 
         let tiledOverlay = Overlay(border: border, hud: Config.default.hud)
-        let firstTiled = WindowID(raw: 911)
-        let secondTiled = WindowID(raw: 912)
+        let firstTargetWindow = makeVerificationWindow(
+            frame: CGRect(x: 10, y: 10, width: 420, height: 320),
+            color: .systemGray
+        )
+        let secondTargetWindow = makeVerificationWindow(
+            frame: CGRect(x: 460, y: 10, width: 420, height: 320),
+            color: .systemBlue
+        )
+        defer {
+            firstTargetWindow.orderOut(nil)
+            secondTargetWindow.orderOut(nil)
+        }
+        firstTargetWindow.orderFrontRegardless()
+        secondTargetWindow.orderFrontRegardless()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+
+        let firstTiled = WindowID(raw: CGWindowID(firstTargetWindow.windowNumber))
+        let secondTiled = WindowID(raw: CGWindowID(secondTargetWindow.windowNumber))
+        let expectedTiledIDs = [firstTiled, secondTiled].sorted { $0.raw < $1.raw }
         tiledOverlay.updateTiledBorders([
             FocusBorderTarget(
                 windowID: firstTiled,
@@ -1611,12 +1628,16 @@ enum FocusBorderVerification {
                 cornerRadius: dialogRadius
             )
         ])
-        guard tiledOverlay.debugTiledBorderWindowIDs() == [firstTiled, secondTiled],
+        guard tiledOverlay.debugTiledBorderWindowIDs() == expectedTiledIDs,
               tiledOverlay.debugVisibleTiledBorderCount() == 2 else {
             tiledOverlay.stop()
             return (false, "tiled border overlay did not show both tiled windows")
         }
 
+        guard let initialSecondFrame = tiledOverlay.debugTiledBorderFrame(for: secondTiled) else {
+            tiledOverlay.stop()
+            return (false, "tiled border overlay did not expose the initial second tiled border frame")
+        }
         let updatedSecondFrame = CGRect(x: 500, y: 30, width: 520, height: 280)
         tiledOverlay.updateTiledBorders([
             FocusBorderTarget(
@@ -1631,10 +1652,15 @@ enum FocusBorderVerification {
             )
         ])
         guard let renderedSecondFrame = tiledOverlay.debugTiledBorderFrame(for: secondTiled),
+              renderedSecondFrame.minX == updatedSecondFrame.minX - 1,
+              renderedSecondFrame.minX != initialSecondFrame.minX,
               renderedSecondFrame.width == updatedSecondFrame.width + 2,
               renderedSecondFrame.height == updatedSecondFrame.height + 2 else {
             tiledOverlay.stop()
-            return (false, "tiled border overlay did not resize an existing tiled border")
+            return (
+                false,
+                "tiled border overlay did not move and resize an existing tiled border: rendered=\(String(describing: tiledOverlay.debugTiledBorderFrame(for: secondTiled))) expectedTarget=\(updatedSecondFrame.debugDescription)"
+            )
         }
 
         tiledOverlay.hideTiledBorder(ifVisibleFor: firstTiled)
@@ -1663,7 +1689,7 @@ enum FocusBorderVerification {
                 cornerRadius: dialogRadius
             )
         ])
-        guard tiledOverlay.debugTiledBorderWindowIDs() == [firstTiled, secondTiled],
+        guard tiledOverlay.debugTiledBorderWindowIDs() == expectedTiledIDs,
               tiledOverlay.debugVisibleTiledBorderCount() == 2 else {
             tiledOverlay.stop()
             return (false, "tiled border overlay did not show tiled windows after a clear")

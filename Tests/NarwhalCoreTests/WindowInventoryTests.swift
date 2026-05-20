@@ -196,6 +196,38 @@ struct WindowInventoryTests {
         ])
     }
 
+    @Test("Frame inventory reports edge resize with origin change as full-frame move")
+    func frameInventoryReportsEdgeResizeWithOriginChangeAsFullFrameMove() {
+        let window = metadata(WindowID(raw: 30))
+        let previous = WindowFrameInventoryState(framesByWindowID: [
+            window.id: window.frame
+        ])
+        let edgeResizedWindow = WindowMetadata(
+            id: window.id,
+            bundleID: window.bundleID,
+            title: window.title,
+            role: window.role,
+            pid: window.pid,
+            frame: CGRect(
+                x: window.frame.minX - 40,
+                y: window.frame.minY,
+                width: window.frame.width + 40,
+                height: window.frame.height
+            ),
+            isResizable: true,
+            isMinimized: false
+        )
+
+        let poll = pollWindowFrameInventory(previous: previous, current: [edgeResizedWindow], tolerance: 1)
+
+        #expect(poll.events == [
+            .windowMoved(window.id, edgeResizedWindow.frame)
+        ])
+        #expect(poll.state.framesByWindowID == [
+            window.id: edgeResizedWindow.frame
+        ])
+    }
+
     private func metadata(_ id: WindowID) -> WindowMetadata {
         WindowMetadata(
             id: id,
