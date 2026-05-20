@@ -1,34 +1,6 @@
 import CoreGraphics
+import NarwhalAppSupport
 import NarwhalCore
-
-struct LayoutApplyFailure: Sendable {
-    let windowID: WindowID
-    let targetFrame: CGRect
-    let message: String
-}
-
-struct LayoutApplyClamp: Sendable {
-    let windowID: WindowID
-    let targetFrame: CGRect
-    let actualFrame: CGRect
-    let observed: WindowConstraints
-}
-
-struct LayoutApplyResult: Sendable {
-    let applied: [WindowID: CGRect]
-    let clamps: [LayoutApplyClamp]
-    let failures: [LayoutApplyFailure]
-
-    var succeeded: Bool {
-        clamps.isEmpty && failures.isEmpty
-    }
-
-    var observedConstraints: [WindowID: WindowConstraints] {
-        clamps.reduce(into: [:]) { result, clamp in
-            result[clamp.windowID] = (result[clamp.windowID] ?? WindowConstraints()).merged(with: clamp.observed)
-        }
-    }
-}
 
 @MainActor
 struct LayoutApplier {
@@ -43,20 +15,19 @@ struct LayoutApplier {
     }
 
     func apply(_ result: CommandPlanResult) -> LayoutApplyResult {
-        var applied: [WindowID: CGRect] = [:]
-        var clamps: [LayoutApplyClamp] = []
-        var failures: [LayoutApplyFailure] = []
+        var applyResult = LayoutApplyResult.empty
         reporter.info("Applying layout generation=\(result.desiredLayout.generation.raw) tiledCount=\(result.desiredLayout.layout.tiled.count)")
 
         applyLoop: for windowID in frameWriteOrder(for: result.desiredLayout.layout, focused: result.focusedWindowID) {
             guard let frame = result.desiredLayout.layout.tiled[windowID] else { continue }
             guard let metadata = result.windows[windowID] else {
                 reporter.error("No metadata for \(windowID.description); skipping frame write")
-                failures.append(LayoutApplyFailure(
+                applyResult = recordLayoutFrameWrite(
                     windowID: windowID,
                     targetFrame: frame,
-                    message: "missing window metadata"
-                ))
+                    observation: .failed(message: "missing window metadata"),
+                    in: applyResult
+                ).result
                 break applyLoop
             }
 
@@ -67,30 +38,36 @@ struct LayoutApplier {
             switch writeResult {
             case .converged(let actual):
                 reporter.info("Applied \(windowID.description) target=\(frame.debugDescription) actual=\(actual.debugDescription)")
-                applied[windowID] = actual
+                applyResult = recordLayoutFrameWrite(
+                    windowID: windowID,
+                    targetFrame: frame,
+                    observation: .converged(actual: actual),
+                    in: applyResult
+                ).result
             case .clamped(let actual, let observed):
                 reporter.info(
                     "Clamped \(windowID.description) target=\(frame.debugDescription) actual=\(actual.debugDescription) observed=\(observed.debugDescription)"
                 )
-                clamps.append(LayoutApplyClamp(
+                applyResult = recordLayoutFrameWrite(
                     windowID: windowID,
                     targetFrame: frame,
-                    actualFrame: actual,
-                    observed: observed
-                ))
+                    observation: .clamped(actual: actual, observed: observed),
+                    in: applyResult
+                ).result
                 break applyLoop
             case .failed(let error):
                 reporter.error("Failed applying \(windowID.description): \(error.description)")
-                failures.append(LayoutApplyFailure(
+                applyResult = recordLayoutFrameWrite(
                     windowID: windowID,
                     targetFrame: frame,
-                    message: error.description
-                ))
+                    observation: .failed(message: error.description),
+                    in: applyResult
+                ).result
                 break applyLoop
             }
         }
 
-        return LayoutApplyResult(applied: applied, clamps: clamps, failures: failures)
+        return applyResult
     }
 }
 
