@@ -15,24 +15,15 @@ public func shuffledResetLayout<Generator: RandomNumberGenerator>(
     }
 
     let windowsByDisplay = resizableVisibleWindowsByDisplay(in: world)
-    var tiled: [WindowID: CGRect] = [:]
-    for displayID in windowsByDisplay.keys.sorted(by: { $0.raw < $1.raw }) {
-        guard let display = world.displays[displayID],
-              let windows = windowsByDisplay[displayID],
-              !windows.isEmpty
-        else { continue }
-
-        let frame = applyingOuterGaps(world.config.gaps.outer, to: display.visibleFrame)
+    let tiled = resetLayoutTiledFrames(in: world, windowsByDisplay: windowsByDisplay) { windows, frame, innerGap in
         let shuffled = randomScreenOrder(windows, using: &generator)
         let frames = randomQuarterFrames(
             count: shuffled.count,
             in: frame,
-            innerGap: world.config.gaps.inner,
+            innerGap: innerGap,
             using: &generator
         )
-        for (window, cell) in zip(shuffled, frames) {
-            tiled[window.id] = cell
-        }
+        return resetFrameAssignments(windows: shuffled, frames: frames)
     }
 
     return .success(Layout(tiled: tiled, floatingZOrder: [], hidden: []))
@@ -44,19 +35,10 @@ public func cascadeResetLayout(in world: World) -> Result<Layout, CommandError> 
     }
 
     let windowsByDisplay = resizableVisibleWindowsByDisplay(in: world)
-    var tiled: [WindowID: CGRect] = [:]
-    for displayID in windowsByDisplay.keys.sorted(by: { $0.raw < $1.raw }) {
-        guard let display = world.displays[displayID],
-              let windows = windowsByDisplay[displayID],
-              !windows.isEmpty
-        else { continue }
-
-        let frame = applyingOuterGaps(world.config.gaps.outer, to: display.visibleFrame)
+    let tiled = resetLayoutTiledFrames(in: world, windowsByDisplay: windowsByDisplay) { windows, frame, innerGap in
         let ordered = screenOrdered(windows)
-        let frames = cascadedQuarterFrames(count: ordered.count, in: frame, innerGap: world.config.gaps.inner)
-        for (window, cell) in zip(ordered, frames) {
-            tiled[window.id] = cell
-        }
+        let frames = cascadedQuarterFrames(count: ordered.count, in: frame, innerGap: innerGap)
+        return resetFrameAssignments(windows: ordered, frames: frames)
     }
 
     return .success(Layout(tiled: tiled, floatingZOrder: [], hidden: []))
@@ -87,18 +69,47 @@ private func resizableVisibleWindowsByDisplay(in world: World) -> [DisplayID: [W
     let observedActiveWindowIDs = activeObservedVisibleWindowIDs(in: world)
     let activeWindowIDs = observedActiveWindowIDs.isEmpty ? activeSpaceWindowIDs(in: world) : observedActiveWindowIDs
     let activeSpaceIDs = Set(activeWorkspaceKeys(in: world).map(\.spaceID))
-    return world.windows.values.reduce(into: [DisplayID: [WindowMetadata]]()) { result, window in
+    let displayWindows = world.windows.values.compactMap { window -> (DisplayID, WindowMetadata)? in
         guard activeWindowIDs.contains(window.id),
               window.isResizable,
               !window.isMinimized,
               let displayID = world.windowDisplay[window.id],
               world.displays[displayID] != nil
-        else { return }
+        else { return nil }
         if let mappedSpaceID = world.windowSpace[window.id],
            !activeSpaceIDs.contains(mappedSpaceID) {
-            return
+            return nil
         }
-        result[displayID, default: []].append(window)
+        return (displayID, window)
+    }
+    return Dictionary(grouping: displayWindows, by: \.0).mapValues { entries in
+        entries.map(\.1)
+    }
+}
+
+private func resetLayoutTiledFrames(
+    in world: World,
+    windowsByDisplay: [DisplayID: [WindowMetadata]],
+    assignmentsForDisplay: ([WindowMetadata], CGRect, Double) -> [(WindowID, CGRect)]
+) -> [WindowID: CGRect] {
+    windowsByDisplay.keys.sorted(by: { $0.raw < $1.raw }).reduce([WindowID: CGRect]()) { tiled, displayID in
+        guard let display = world.displays[displayID],
+              let windows = windowsByDisplay[displayID],
+              !windows.isEmpty
+        else { return tiled }
+
+        let frame = applyingOuterGaps(world.config.gaps.outer, to: display.visibleFrame)
+        let assignments = assignmentsForDisplay(windows, frame, world.config.gaps.inner)
+        return tiled.merging(
+            Dictionary(assignments, uniquingKeysWith: { _, replacement in replacement }),
+            uniquingKeysWith: { _, replacement in replacement }
+        )
+    }
+}
+
+private func resetFrameAssignments(windows: [WindowMetadata], frames: [CGRect]) -> [(WindowID, CGRect)] {
+    zip(windows, frames).map { window, frame in
+        (window.id, frame)
     }
 }
 
