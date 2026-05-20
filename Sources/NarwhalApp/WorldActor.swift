@@ -137,7 +137,8 @@ actor WorldActor {
     }
 
     func planShuffleActiveSpace() -> Result<CommandPlanResult, CommandError> {
-        switch shuffledResetLayout(in: world) {
+        var generator = SystemRandomNumberGenerator()
+        switch shuffledResetLayout(in: world, using: &generator) {
         case .success(let layout):
             return makeCustomLayoutPlan(
                 from: world,

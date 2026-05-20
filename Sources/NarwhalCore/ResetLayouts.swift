@@ -1,11 +1,6 @@
 import CoreGraphics
 import Foundation
 
-public func shuffledResetLayout(in world: World) -> Result<Layout, CommandError> {
-    var generator = SystemRandomNumberGenerator()
-    return shuffledResetLayout(in: world, using: &generator)
-}
-
 public func shuffledResetLayout<Generator: RandomNumberGenerator>(
     in world: World,
     using generator: inout Generator

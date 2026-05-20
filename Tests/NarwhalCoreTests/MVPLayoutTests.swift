@@ -2434,7 +2434,8 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let shuffled) = shuffledResetLayout(in: world) else {
+        var generator = SeededGenerator(seed: 1)
+        guard case .success(let shuffled) = shuffledResetLayout(in: world, using: &generator) else {
             Issue.record("Expected shuffled reset layout to succeed")
             return
         }
@@ -2626,7 +2627,8 @@ struct MVPLayoutTests {
         )
         #expect(focusedSpaceFour.spaces[spaceFour]?.focused == spaceFourFloating)
 
-        guard case .success(let spaceFourShuffle) = shuffledResetLayout(in: focusedSpaceFour) else {
+        var shuffleGenerator = SeededGenerator(seed: 2)
+        guard case .success(let spaceFourShuffle) = shuffledResetLayout(in: focusedSpaceFour, using: &shuffleGenerator) else {
             Issue.record("Expected Space 4 shuffle plan to succeed")
             return
         }
@@ -3564,6 +3566,19 @@ struct MVPLayoutTests {
         case .failure:
             Issue.record("\(message)")
             throw TestAbort()
+        }
+    }
+
+    private struct SeededGenerator: RandomNumberGenerator {
+        var state: UInt64
+
+        init(seed: UInt64) {
+            self.state = seed
+        }
+
+        mutating func next() -> UInt64 {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return state
         }
     }
 
