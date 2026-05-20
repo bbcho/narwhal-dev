@@ -2,30 +2,6 @@ import CoreGraphics
 import NarwhalAppSupport
 import NarwhalCore
 
-struct CommandPlanResult: Sendable {
-    let focusedWindowID: WindowID?
-    let desiredLayout: DesiredLayout
-    let windows: [WindowID: WindowMetadata]
-    let plannedWorld: World
-    let undoWorld: World?
-}
-
-struct FocusPlanResult: Sendable {
-    let window: WindowMetadata
-    let frame: CGRect
-}
-
-struct EnvironmentRefreshResult: Sendable {
-    let snapshot: EnvironmentSnapshot
-    let activeSpace: SpaceID?
-    let displayCount: Int
-    let windowCount: Int
-    let quality: AXSnapshotQuality
-    let preservedSpaceLayouts: Bool
-    let observedWindowCount: Int
-    let mappedWindowCount: Int
-}
-
 actor WorldActor {
     private var world: World
     private var nextGeneration: UInt64 = 1
@@ -209,7 +185,7 @@ actor WorldActor {
         case .success(let layout):
             return makeCustomLayoutPlan(
                 from: world,
-                to: resetActiveSpaceTilingState(in: world).settingFocus(windowID),
+                to: worldBySettingFocus(windowID, in: resetActiveSpaceTilingState(in: world)),
                 layout: layout,
                 focusedWindowID: windowID,
                 undoWorld: nil
@@ -259,33 +235,12 @@ actor WorldActor {
         focusedWindowID: WindowID?,
         undoWorld: World?
     ) -> Result<CommandPlanResult, CommandError> {
-        let oldLayout: Layout
-        switch flattenedLayout(of: oldWorld) {
-        case .success(let layout):
-            oldLayout = layout
-        case .failure(let unsatisfiable):
-            return .failure(.layoutUnsatisfiable(unsatisfiable))
-        }
-
-        let newLayout: Layout
-        switch flattenedLayout(of: newWorld) {
-        case .success(let layout):
-            newLayout = layout
-        case .failure(let unsatisfiable):
-            return .failure(.layoutUnsatisfiable(unsatisfiable))
-        }
-        let desired = DesiredLayout(
-            generation: LayoutGeneration(raw: nextGeneration),
-            layout: newLayout,
-            delta: diff(old: oldLayout, new: newLayout)
-        )
-        nextGeneration += 1
-        return .success(CommandPlanResult(
+        advanceLayoutGeneration(onSuccess: commandPlan(
+            from: oldWorld,
+            to: newWorld,
             focusedWindowID: focusedWindowID,
-            desiredLayout: desired,
-            windows: newWorld.windows,
-            plannedWorld: newWorld,
-            undoWorld: undoWorld
+            undoWorld: undoWorld,
+            generation: LayoutGeneration(raw: nextGeneration)
         ))
     }
 
@@ -296,173 +251,45 @@ actor WorldActor {
         focusedWindowID: WindowID?,
         undoWorld: World?
     ) -> Result<CommandPlanResult, CommandError> {
-        let oldLayout: Layout
-        switch flattenedLayout(of: oldWorld) {
-        case .success(let layout):
-            oldLayout = layout
-        case .failure(let unsatisfiable):
-            return .failure(.layoutUnsatisfiable(unsatisfiable))
-        }
-
-        let desired = DesiredLayout(
-            generation: LayoutGeneration(raw: nextGeneration),
+        advanceLayoutGeneration(onSuccess: customLayoutCommandPlan(
+            from: oldWorld,
+            to: newWorld,
             layout: newLayout,
-            delta: diff(old: oldLayout, new: newLayout)
-        )
-        nextGeneration += 1
-        return .success(CommandPlanResult(
             focusedWindowID: focusedWindowID,
-            desiredLayout: desired,
-            windows: newWorld.windows,
-            plannedWorld: newWorld,
-            undoWorld: undoWorld
+            undoWorld: undoWorld,
+            generation: LayoutGeneration(raw: nextGeneration)
         ))
     }
 
     func planCurrentLayout() -> Result<CommandPlanResult?, CommandError> {
-        let newLayout: Layout
-        switch flattenedLayout(of: world) {
-        case .success(let layout):
-            newLayout = layout
-        case .failure(let unsatisfiable):
-            return .failure(.layoutUnsatisfiable(unsatisfiable))
+        let result = currentLayoutCommandPlan(in: world, generation: LayoutGeneration(raw: nextGeneration))
+        if case .success(.some) = result {
+            nextGeneration += 1
         }
-        guard !newLayout.tiled.isEmpty else {
-            return .success(nil)
-        }
-
-        let desired = DesiredLayout(
-            generation: LayoutGeneration(raw: nextGeneration),
-            layout: newLayout,
-            delta: LayoutDelta(
-                moves: newLayout.tiled,
-                raises: [],
-                hides: [],
-                shows: Set(newLayout.tiled.keys)
-            )
-        )
-        nextGeneration += 1
-        return .success(CommandPlanResult(
-            focusedWindowID: nil,
-            desiredLayout: desired,
-            windows: world.windows,
-            plannedWorld: world,
-            undoWorld: nil
-        ))
+        return result
     }
 
     func planFocusDirection(from focusedWindowID: WindowID, direction: Direction) -> Result<FocusPlanResult, CommandError> {
-        guard world.windows[focusedWindowID] != nil else {
-            return .failure(.windowNotFound(focusedWindowID))
-        }
-        let currentLayout: Layout
-        switch flattenedLayout(of: world) {
-        case .success(let layout):
-            currentLayout = layout
-        case .failure(let unsatisfiable):
-            return .failure(.layoutUnsatisfiable(unsatisfiable))
-        }
-        let targetWindowID = focusTarget(in: currentLayout, from: focusedWindowID, direction: direction)
-            ?? focusTarget(
-                windows: activeLayoutWindows(in: currentLayout),
-                from: focusedWindowID,
-                direction: direction
-            )
-        guard let targetWindowID else {
-            return .failure(.noNeighbor(direction))
-        }
-        guard let target = world.windows[targetWindowID] else {
-            return .failure(.windowNotFound(targetWindowID))
-        }
-        return .success(FocusPlanResult(window: target, frame: currentLayout.tiled[targetWindowID] ?? target.frame))
+        focusDirectionPlan(in: world, from: focusedWindowID, direction: direction)
     }
 
     func planFocusCycle(from focusedWindowID: WindowID?, direction: FocusCycleDirection) -> Result<FocusPlanResult, CommandError> {
-        guard let targetWindowID = focusCycleTarget(
-            windows: focusCycleWindows(in: world, focusedWindowID: focusedWindowID),
-            from: focusedWindowID,
-            direction: direction
-        ) else {
-            return .failure(.windowNotFound(focusedWindowID ?? WindowID(raw: 0)))
-        }
-        guard let target = world.windows[targetWindowID] else {
-            return .failure(.windowNotFound(targetWindowID))
-        }
-        let targetFrame: CGRect
-        switch flattenedLayout(of: world) {
-        case .success(let layout):
-            targetFrame = layout.tiled[targetWindowID] ?? target.frame
-        case .failure:
-            targetFrame = target.frame
-        }
-        return .success(FocusPlanResult(window: target, frame: targetFrame))
+        focusCyclePlan(in: world, from: focusedWindowID, direction: direction)
     }
 
     func planFocusCycleCandidates(
         from focusedWindowID: WindowID?,
         direction: FocusCycleDirection
     ) -> Result<[FocusPlanResult], CommandError> {
-        let candidateIDs = focusCycleCandidates(
-            windows: focusCycleWindows(in: world, focusedWindowID: focusedWindowID),
-            from: focusedWindowID,
-            direction: direction
-        )
-        guard !candidateIDs.isEmpty else {
-            return .failure(.windowNotFound(focusedWindowID ?? WindowID(raw: 0)))
-        }
-        let layout: Layout?
-        switch flattenedLayout(of: world) {
-        case .success(let value):
-            layout = value
-        case .failure:
-            layout = nil
-        }
-        let candidates = candidateIDs.compactMap { windowID -> FocusPlanResult? in
-            guard let target = world.windows[windowID] else { return nil }
-            return FocusPlanResult(window: target, frame: layout?.tiled[windowID] ?? target.frame)
-        }
-        guard !candidates.isEmpty else {
-            return .failure(.windowNotFound(focusedWindowID ?? WindowID(raw: 0)))
-        }
-        return .success(candidates)
-    }
-
-    private func activeLayoutWindows(in layout: Layout) -> [WindowMetadata] {
-        let activeWindowIDs = Set(layout.tiled.keys).union(layout.floatingZOrder)
-        return activeWindowIDs.compactMap { world.windows[$0] }
+        focusCycleCandidatePlans(in: world, from: focusedWindowID, direction: direction)
     }
 
     func planFocusPrevious() -> Result<FocusPlanResult, CommandError> {
-        let current = world.activeSpace.flatMap { world.spaces[$0]?.focused }
-        let activeWindowIDs: Set<WindowID>
-        switch flattenedLayout(of: world) {
-        case .success(let layout):
-            activeWindowIDs = Set(layout.tiled.keys).union(layout.floatingZOrder)
-        case .failure:
-            activeWindowIDs = []
-        }
-        guard let targetWindowID = previousFocusTarget(
-            in: world,
-            runtime: runtimeState,
-            activeWindowIDs: activeWindowIDs
-        ) else {
-            return .failure(.windowNotFound(current ?? WindowID(raw: 0)))
-        }
-        return planFocus(targetWindowID)
+        focusPreviousPlan(in: world, runtime: runtimeState)
     }
 
     func planFocus(_ windowID: WindowID) -> Result<FocusPlanResult, CommandError> {
-        guard let target = world.windows[windowID] else {
-            return .failure(.windowNotFound(windowID))
-        }
-        let targetFrame: CGRect
-        switch flattenedLayout(of: world) {
-        case .success(let layout):
-            targetFrame = layout.tiled[windowID] ?? target.frame
-        case .failure:
-            targetFrame = target.frame
-        }
-        return .success(FocusPlanResult(window: target, frame: targetFrame))
+        focusPlan(in: world, windowID: windowID)
     }
 
     func tiledBorderTargets() -> Result<[FocusBorderTarget], CommandError> {
@@ -475,9 +302,7 @@ actor WorldActor {
     }
 
     func recordObservedConstraints(_ observations: [WindowID: WindowConstraints]) {
-        for (windowID, constraints) in observations {
-            world = NarwhalCore.recordObservedConstraints(constraints, for: windowID, in: world)
-        }
+        world = worldByRecordingObservedConstraints(observations, in: world)
     }
 
     func resetLayoutMemory() {
@@ -517,26 +342,13 @@ actor WorldActor {
         let liveWindowIDs = Set(world.windows.keys)
         runtimeState = prunedWorldRuntimeState(liveWindowIDs: liveWindowIDs, in: runtimeState)
     }
-}
 
-private extension World {
-    func settingFocus(_ windowID: WindowID) -> World {
-        guard let key = workspaceKey(forWindow: windowID, in: self) else { return self }
-        var spaces = spaces
-        let space = spaces[key.spaceID] ?? SpaceState(id: key.spaceID, displays: [:], focused: nil)
-        spaces[key.spaceID] = SpaceState(id: space.id, displays: space.displays, focused: windowID)
-        return World(
-            displays: displays,
-            activeSpace: activeSpace,
-            activeSpaceByDisplay: activeSpaceByDisplay,
-            spaces: spaces,
-            windows: windows,
-            windowDisplay: windowDisplay,
-            windowSpace: windowSpace,
-            observedVisibleWindows: observedVisibleWindows,
-            windowConstraints: windowConstraints,
-            pendingRules: pendingRules,
-            config: config
-        )
+    private func advanceLayoutGeneration<T>(
+        onSuccess result: Result<T, CommandError>
+    ) -> Result<T, CommandError> {
+        if case .success = result {
+            nextGeneration += 1
+        }
+        return result
     }
 }
