@@ -236,13 +236,15 @@ final class Overlay {
         let metrics = CommandOverlayMetrics(sections: sections)
         let frame = commandOverlayFrame(on: commandOverlayScreen(), contentSize: metrics.contentSize)
         let window = commandWindow ?? makeCommandWindow(frame: frame)
-        window.contentView = CommandOverlayView(
+        let overlayView = CommandOverlayView(
             columns: metrics.columns,
             keyColumnWidth: metrics.keyColumnWidth,
             commandColumnWidth: metrics.commandColumnWidth,
             rowsHeight: metrics.rowsHeight
         )
-        window.setFrame(frame, display: true)
+        window.contentView = overlayView
+        window.setFrame(frame, display: false)
+        overlayView.prepareForFirstDisplay()
         window.orderFrontRegardless()
         commandWindow = window
     }
@@ -575,29 +577,23 @@ private final class CommandOverlayView: NSView {
 
     override func layout() {
         super.layout()
-        guard let scrollView, let rowsDocumentView else { return }
-        let viewportHeight = scrollView.contentView.bounds.height
-        let fallbackWidth = max(0, bounds.width - CommandOverlayLayout.horizontalPadding * 2)
-        let scrollable = rowsHeight > viewportHeight + 1
-        let viewportWidth = scrollView.contentView.bounds.width > 0
-            ? scrollView.contentView.bounds.width
-            : max(0, fallbackWidth - CommandOverlayLayout.scrollBarGutterWidth)
-        let documentSize = NSSize(
-            width: viewportWidth,
-            height: max(rowsHeight, viewportHeight)
-        )
-        rowsDocumentView.setFrameSize(documentSize)
-        rowsContentView?.frame = CGRect(origin: .zero, size: documentSize)
-        rowsContentView?.needsLayout = true
-        rowsContentView?.needsDisplay = true
-        scrollBarView?.isHidden = !scrollable
+        updateDocumentGeometry()
+        updateScrollState()
+    }
+
+    func prepareForFirstDisplay() {
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        updateDocumentGeometry()
         updateScrollState()
     }
 
     func scroll(_ direction: CommandOverlayScrollDirection) {
         guard let scrollView, let rowsDocumentView else { return }
         let clipView = scrollView.contentView
-        let maxY = max(0, rowsDocumentView.bounds.height - clipView.bounds.height)
+        let viewportHeight = max(clipView.bounds.height, scrollView.bounds.height)
+        let documentHeight = max(rowsHeight, rowsDocumentView.bounds.height, viewportHeight)
+        let maxY = max(0, documentHeight - viewportHeight)
         let step = max(90, clipView.bounds.height * 0.55)
         let delta = direction == .down ? step : -step
         let nextY = min(max(0, clipView.bounds.origin.y + delta), maxY)
@@ -624,6 +620,8 @@ private final class CommandOverlayView: NSView {
             titleFrame: convert(titleLabel.bounds, from: titleLabel),
             scrollViewFrame: convert(scrollView.bounds, from: scrollView),
             scrollBarFrame: convert(scrollBarView.bounds, from: scrollBarView),
+            scrollBarHidden: scrollBarView.isHidden,
+            scrollBarScrollable: scrollBarView.isScrollableForDebug,
             viewportBounds: scrollView.contentView.bounds,
             documentBounds: rowsDocumentView.bounds,
             columnsBounds: columnsView.bounds,
@@ -666,7 +664,6 @@ private final class CommandOverlayView: NSView {
 
         let scrollBarView = CommandOverlayScrollBarView()
         scrollBarView.translatesAutoresizingMaskIntoConstraints = false
-        scrollBarView.isHidden = true
         self.scrollBarView = scrollBarView
 
         let rowsFrame = NSStackView(views: [scrollView, scrollBarView])
@@ -700,16 +697,34 @@ private final class CommandOverlayView: NSView {
         NSLayoutConstraint.activate(constraints)
     }
 
+    private func updateDocumentGeometry() {
+        guard let scrollView, let rowsDocumentView else { return }
+        let viewportHeight = max(scrollView.contentView.bounds.height, scrollView.bounds.height)
+        let fallbackWidth = max(0, bounds.width - CommandOverlayLayout.horizontalPadding * 2)
+        let viewportWidth = scrollView.contentView.bounds.width > 0
+            ? scrollView.contentView.bounds.width
+            : max(0, fallbackWidth - CommandOverlayLayout.scrollBarGutterWidth)
+        let documentHeight = max(rowsHeight, viewportHeight)
+        let documentSize = NSSize(
+            width: viewportWidth,
+            height: documentHeight
+        )
+        rowsDocumentView.setFrameSize(documentSize)
+        rowsContentView?.frame = CGRect(origin: .zero, size: documentSize)
+        rowsContentView?.needsLayout = true
+        rowsContentView?.needsDisplay = true
+    }
+
     private func updateScrollState() {
-        guard let scrollView, let scrollBarView, let rowsDocumentView else { return }
+        guard let scrollView, let scrollBarView else { return }
         let clipView = scrollView.contentView
-        let viewportHeight = clipView.bounds.height
-        let maxY = max(0, rowsDocumentView.bounds.height - viewportHeight)
+        let viewportHeight = max(clipView.bounds.height, scrollView.bounds.height)
+        let documentHeight = max(rowsHeight, viewportHeight)
+        let maxY = max(0, documentHeight - viewportHeight)
         let scrollable = maxY > 1
-        scrollBarView.isHidden = !scrollable
         scrollBarView.update(
             viewportHeight: viewportHeight,
-            documentHeight: rowsDocumentView.bounds.height,
+            documentHeight: documentHeight,
             contentOffsetY: clipView.bounds.origin.y
         )
         scrollHintLabel?.isHidden = !scrollable
@@ -732,6 +747,8 @@ private struct CommandOverlayDebugLayoutSnapshot {
     let titleFrame: CGRect
     let scrollViewFrame: CGRect
     let scrollBarFrame: CGRect
+    let scrollBarHidden: Bool
+    let scrollBarScrollable: Bool
     let viewportBounds: CGRect
     let documentBounds: CGRect
     let columnsBounds: CGRect
@@ -754,6 +771,10 @@ private final class CommandOverlayScrollBarView: NSView {
 
     required init?(coder: NSCoder) {
         nil
+    }
+
+    var isScrollableForDebug: Bool {
+        viewportHeight > 1 && documentHeight > viewportHeight + 1
     }
 
     func update(viewportHeight: CGFloat, documentHeight: CGFloat, contentOffsetY: CGFloat) {
@@ -1248,7 +1269,7 @@ enum CommandOverlayVerification {
         )
         window.contentView = view
         view.frame = CGRect(origin: .zero, size: viewSize)
-        view.layoutSubtreeIfNeeded()
+        view.prepareForFirstDisplay()
 
         guard let snapshot = view.debugLayoutSnapshot() else {
             return (false, "command overlay did not produce a debug layout snapshot")
@@ -1298,6 +1319,15 @@ enum CommandOverlayVerification {
             return (
                 false,
                 "command overlay scrollbar overlaps text area: scrollView=\(snapshot.scrollViewFrame.debugDescription) scrollBar=\(snapshot.scrollBarFrame.debugDescription)"
+            )
+        }
+        guard !snapshot.scrollBarHidden,
+              snapshot.scrollBarScrollable,
+              snapshot.scrollBarFrame.width >= CommandOverlayLayout.scrollBarWidth - 1
+        else {
+            return (
+                false,
+                "command overlay scrollbar is not visible on first layout: hidden=\(snapshot.scrollBarHidden) scrollable=\(snapshot.scrollBarScrollable) frame=\(snapshot.scrollBarFrame.debugDescription) rowsHeight=\(metrics.rowsHeight) viewHeight=\(viewHeight) viewport=\(snapshot.viewportBounds.debugDescription) document=\(snapshot.documentBounds.debugDescription)"
             )
         }
 
