@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let instance = AppDelegate()
     private static let environmentRefreshCoalescingDelay: TimeInterval = 0.10
     private static let activeSpaceTransitionPreserveDuration: TimeInterval = 1.25
+    private static let activeSpaceSettledRefreshDelays: [TimeInterval] = [0.35, 0.80]
     private static let restoreSaveDebounceInterval: TimeInterval = 0.25
 
     private let axClient = AXClient()
@@ -65,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var environmentRefreshCoalescingTimerGeneration: UInt64?
     private var spaceSettledRefreshTimers: [Timer] = []
     private var spaceTransitionPreserveTimer: Timer?
-    private var isPreservingSpaceTransitionLayouts = false
+    private var spaceTransitionPreservation = SpaceTransitionPreservationState.empty
     private var runningServices: RunningServices?
     private var servicesStarted = false
     private var isPaused = false
@@ -2059,12 +2060,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func activeSpaceChanged() {
         cancelSpaceTransitionTimers()
-        isPreservingSpaceTransitionLayouts = true
+        let preservation = beginSpaceTransitionPreservation(
+            in: spaceTransitionPreservation,
+            settledRefreshDelays: Self.activeSpaceSettledRefreshDelays,
+            preserveEndDelay: Self.activeSpaceTransitionPreserveDuration
+        )
+        spaceTransitionPreservation = preservation.state
         clearBorderOverlays()
         scheduleCoalescedEnvironmentRefresh(.spaceSettled)
-        scheduleDelayedSpaceSettledRefresh(after: 0.35)
-        scheduleDelayedSpaceSettledRefresh(after: 0.80)
-        scheduleSpaceTransitionPreserveEnd(after: Self.activeSpaceTransitionPreserveDuration)
+        preservation.settledRefreshDelays.forEach { delay in
+            scheduleDelayedSpaceSettledRefresh(after: delay)
+        }
+        scheduleSpaceTransitionPreserveEnd(
+            after: preservation.preserveEndDelay,
+            generation: preservation.generation
+        )
     }
 
     @MainActor
@@ -2080,13 +2090,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func scheduleSpaceTransitionPreserveEnd(after delay: TimeInterval) {
+    private func scheduleSpaceTransitionPreserveEnd(after delay: TimeInterval, generation: UInt64) {
         let timer = Timer(timeInterval: delay, repeats: false) { [weak self] timer in
             Task { @MainActor in
                 guard self?.spaceTransitionPreserveTimer === timer else { return }
                 self?.spaceTransitionPreserveTimer = nil
-                self?.isPreservingSpaceTransitionLayouts = false
-                self?.scheduleCoalescedEnvironmentRefresh(.spaceTransitionEnded)
+                guard let self else { return }
+                let completion = completeSpaceTransitionPreservation(
+                    generation: generation,
+                    in: self.spaceTransitionPreservation
+                )
+                self.spaceTransitionPreservation = completion.state
+                guard completion.decision == .scheduleRefresh else { return }
+                self.scheduleCoalescedEnvironmentRefresh(.spaceTransitionEnded)
             }
         }
         spaceTransitionPreserveTimer = timer
@@ -2099,7 +2115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         spaceSettledRefreshTimers.removeAll()
         spaceTransitionPreserveTimer?.invalidate()
         spaceTransitionPreserveTimer = nil
-        isPreservingSpaceTransitionLayouts = false
+        spaceTransitionPreservation = cancelSpaceTransitionPreservation(in: spaceTransitionPreservation)
     }
 
     @MainActor
@@ -2116,7 +2132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let preserveSpaceLayouts = shouldPreserveSpaceLayouts(
             for: request.reasons,
-            duringSpaceTransition: isPreservingSpaceTransitionLayouts
+            duringSpaceTransition: spaceTransitionPreservation.isPreservingSpaceLayouts
         )
         let environment = await refreshEnvironment(
             reason: "coalesced \(request.description)",
