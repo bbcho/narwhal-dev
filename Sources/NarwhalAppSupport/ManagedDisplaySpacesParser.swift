@@ -2,48 +2,102 @@ import CoreGraphics
 import Foundation
 import NarwhalCore
 
+public struct ManagedDisplaySpace: Equatable, Sendable {
+    public let id: SpaceID
+    public let windowIDs: [WindowID]
+
+    public init(id: SpaceID, windowIDs: [WindowID]) {
+        self.id = id
+        self.windowIDs = windowIDs
+    }
+}
+
+public struct ManagedDisplaySpacesDisplayRow: Equatable, Sendable {
+    public let fingerprint: String?
+    public let activeSpace: SpaceID?
+    public let spaces: [ManagedDisplaySpace]
+
+    public init(fingerprint: String?, activeSpace: SpaceID?, spaces: [ManagedDisplaySpace]) {
+        self.fingerprint = fingerprint
+        self.activeSpace = activeSpace
+        self.spaces = spaces
+    }
+}
+
+public func managedDisplaySpacesTopology(
+    rows: [ManagedDisplaySpacesDisplayRow],
+    displays: [DisplayID: DisplayInfo]
+) -> SpaceTopology? {
+    let displaysByFingerprint = Dictionary(
+        uniqueKeysWithValues: displays.compactMap { displayID, display -> (String, DisplayID)? in
+            guard let fingerprint = display.fingerprint?.lowercased() else { return nil }
+            return (fingerprint, displayID)
+        }
+    )
+    let displaysBySlot = displays.values.sorted { lhs, rhs in
+        if lhs.slot != rhs.slot { return lhs.slot < rhs.slot }
+        return lhs.id.raw < rhs.id.raw
+    }
+    let displayRows: [(DisplayID, ManagedDisplaySpacesDisplayRow)] = rows.enumerated().compactMap { index, row in
+        let displayID = row.fingerprint.flatMap { displaysByFingerprint[$0.lowercased()] }
+            ?? displaysBySlot[safe: index]?.id
+        guard let displayID else { return nil }
+        return (displayID, row)
+    }
+    let activeSpaceByDisplay = Dictionary(
+        displayRows.compactMap { displayID, row in
+            row.activeSpace.map { (displayID, $0) }
+        },
+        uniquingKeysWith: { _, latest in latest }
+    )
+    guard !activeSpaceByDisplay.isEmpty else { return nil }
+
+    let windowSpace = Dictionary(
+        displayRows.flatMap { _, row in
+            row.spaces.flatMap { space in
+                space.windowIDs.map { windowID in (windowID, space.id) }
+            }
+        },
+        uniquingKeysWith: { _, latest in latest }
+    )
+    return SpaceTopology(
+        activeSpaceByDisplay: activeSpaceByDisplay,
+        windowSpace: windowSpace,
+        quality: .managedDisplaySpaces
+    )
+}
+
 public enum ManagedDisplaySpacesParser {
     public static func parse(_ raw: CFArray, displays: [DisplayID: DisplayInfo]) -> SpaceTopology? {
         let displayRows = raw as NSArray
-        let displaysByFingerprint = Dictionary(
-            uniqueKeysWithValues: displays.compactMap { displayID, display -> (String, DisplayID)? in
-                guard let fingerprint = display.fingerprint?.lowercased() else { return nil }
-                return (fingerprint, displayID)
+        let rows = (0..<displayRows.count).map { index -> ManagedDisplaySpacesDisplayRow in
+            guard let row = displayRows[index] as? NSDictionary else {
+                return ManagedDisplaySpacesDisplayRow(fingerprint: nil, activeSpace: nil, spaces: [])
             }
-        )
-        let displaysBySlot = displays.values.sorted { lhs, rhs in
-            if lhs.slot != rhs.slot { return lhs.slot < rhs.slot }
-            return lhs.id.raw < rhs.id.raw
+            return displayRow(from: row)
         }
+        return managedDisplaySpacesTopology(rows: rows, displays: displays)
+    }
 
-        var activeSpaceByDisplay: [DisplayID: SpaceID] = [:]
-        var windowSpace: [WindowID: SpaceID] = [:]
-
-        for index in 0..<displayRows.count {
-            guard let row = displayRows[index] as? NSDictionary else { continue }
-            let displayID = displayIdentifier(in: row).flatMap { displaysByFingerprint[$0.lowercased()] }
-                ?? displaysBySlot[safe: index]?.id
-            guard let displayID else { continue }
-
-            if let activeSpace = spaceID(from: dictionaryValue(in: row, keys: ["Current Space", "current_space"])) {
-                activeSpaceByDisplay[displayID] = activeSpace
-            }
-
-            guard let spaces = arrayValue(in: row, keys: ["Spaces", "spaces"]) else { continue }
-            for case let space as NSDictionary in spaces {
-                guard let spaceID = spaceID(from: space) else { continue }
-                for windowID in windowIDs(inSpaceDictionary: space) {
-                    windowSpace[windowID] = spaceID
-                }
-            }
-        }
-
-        guard !activeSpaceByDisplay.isEmpty else { return nil }
-        return SpaceTopology(
-            activeSpaceByDisplay: activeSpaceByDisplay,
-            windowSpace: windowSpace,
-            quality: .managedDisplaySpaces
+    private static func displayRow(from row: NSDictionary) -> ManagedDisplaySpacesDisplayRow {
+        ManagedDisplaySpacesDisplayRow(
+            fingerprint: displayIdentifier(in: row),
+            activeSpace: spaceID(from: dictionaryValue(in: row, keys: ["Current Space", "current_space"])),
+            spaces: managedSpaces(in: row)
         )
+    }
+
+    private static func managedSpaces(in row: NSDictionary) -> [ManagedDisplaySpace] {
+        guard let spaces = arrayValue(in: row, keys: ["Spaces", "spaces"]) else { return [] }
+        return spaces.compactMap { rawSpace -> ManagedDisplaySpace? in
+            guard let space = rawSpace as? NSDictionary,
+                  let spaceID = spaceID(from: space)
+            else { return nil }
+            return ManagedDisplaySpace(
+                id: spaceID,
+                windowIDs: windowIDs(inSpaceDictionary: space)
+            )
+        }
     }
 
     private static func displayIdentifier(in row: NSDictionary) -> String? {
@@ -74,14 +128,12 @@ public enum ManagedDisplaySpacesParser {
     }
 
     private static func windowIDs(inSpaceDictionary dictionary: NSDictionary) -> [WindowID] {
-        var result: [WindowID] = []
-        for key in dictionary.allKeys {
+        dictionary.allKeys.flatMap { key -> [WindowID] in
             guard let keyString = key as? String,
                   keyString.lowercased().contains("window")
-            else { continue }
-            result.append(contentsOf: windowIDs(in: dictionary[key]))
+            else { return [] }
+            return windowIDs(in: dictionary[key])
         }
-        return result
     }
 
     private static func windowIDs(in value: Any?) -> [WindowID] {

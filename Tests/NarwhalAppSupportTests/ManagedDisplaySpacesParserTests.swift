@@ -6,6 +6,91 @@ import NarwhalCore
 
 @Suite("Managed display spaces parser")
 struct ManagedDisplaySpacesParserTests {
+    @Test("Topology builder maps immutable rows by fingerprint and slot")
+    func topologyBuilderMapsRowsByFingerprintAndSlot() throws {
+        let firstDisplay = DisplayID(raw: 10)
+        let secondDisplay = DisplayID(raw: 20)
+        let topology = try #require(managedDisplaySpacesTopology(
+            rows: [
+                ManagedDisplaySpacesDisplayRow(
+                    fingerprint: "SECOND-FINGERPRINT",
+                    activeSpace: SpaceID(raw: 8),
+                    spaces: [
+                        ManagedDisplaySpace(
+                            id: SpaceID(raw: 8),
+                            windowIDs: [WindowID(raw: 8001), WindowID(raw: 8002)]
+                        )
+                    ]
+                ),
+                ManagedDisplaySpacesDisplayRow(
+                    fingerprint: nil,
+                    activeSpace: SpaceID(raw: 7),
+                    spaces: [
+                        ManagedDisplaySpace(id: SpaceID(raw: 7), windowIDs: [WindowID(raw: 7001)])
+                    ]
+                )
+            ],
+            displays: [
+                secondDisplay: display(secondDisplay, slot: 0, fingerprint: "second-fingerprint"),
+                firstDisplay: display(firstDisplay, slot: 1, fingerprint: nil)
+            ]
+        ))
+
+        #expect(topology.quality == .managedDisplaySpaces)
+        #expect(topology.activeSpaceByDisplay == [
+            secondDisplay: SpaceID(raw: 8),
+            firstDisplay: SpaceID(raw: 7)
+        ])
+        #expect(topology.windowSpace == [
+            WindowID(raw: 8001): SpaceID(raw: 8),
+            WindowID(raw: 8002): SpaceID(raw: 8),
+            WindowID(raw: 7001): SpaceID(raw: 7)
+        ])
+    }
+
+    @Test("Topology builder uses latest row order for duplicate window ownership")
+    func topologyBuilderUsesLatestRowOrderForDuplicateWindowOwnership() throws {
+        let displayID = DisplayID(raw: 11)
+        let windowID = WindowID(raw: 9001)
+        let topology = try #require(managedDisplaySpacesTopology(
+            rows: [
+                ManagedDisplaySpacesDisplayRow(
+                    fingerprint: nil,
+                    activeSpace: SpaceID(raw: 1),
+                    spaces: [
+                        ManagedDisplaySpace(id: SpaceID(raw: 1), windowIDs: [windowID]),
+                        ManagedDisplaySpace(id: SpaceID(raw: 2), windowIDs: [windowID])
+                    ]
+                )
+            ],
+            displays: [
+                displayID: display(displayID, slot: 0, fingerprint: nil)
+            ]
+        ))
+
+        #expect(topology.windowSpace == [windowID: SpaceID(raw: 2)])
+    }
+
+    @Test("Topology builder rejects rows without any active Space")
+    func topologyBuilderRejectsRowsWithoutAnyActiveSpace() {
+        let topology = managedDisplaySpacesTopology(
+            rows: [
+                ManagedDisplaySpacesDisplayRow(
+                    fingerprint: nil,
+                    activeSpace: nil,
+                    spaces: [
+                        ManagedDisplaySpace(id: SpaceID(raw: 1), windowIDs: [WindowID(raw: 100)])
+                    ]
+                )
+            ],
+            displays: [
+                DisplayID(raw: 1): display(DisplayID(raw: 1), slot: 0, fingerprint: nil)
+            ]
+        )
+
+        #expect(topology == nil)
+    }
+
     @Test("Parser maps active Spaces and nested window IDs by display fingerprint")
     func parserMapsActiveSpacesAndNestedWindowIDsByDisplayFingerprint() throws {
         let mainDisplay = DisplayID(raw: 3)
@@ -68,6 +153,31 @@ struct ManagedDisplaySpacesParserTests {
 
         #expect(topology.activeSpaceByDisplay == [
             firstDisplay: SpaceID(raw: 7),
+            secondDisplay: SpaceID(raw: 8)
+        ])
+    }
+
+    @Test("Parser preserves raw row position for slot fallback when rows are malformed")
+    func parserPreservesRawRowPositionForSlotFallbackWhenRowsAreMalformed() throws {
+        let firstDisplay = DisplayID(raw: 10)
+        let secondDisplay = DisplayID(raw: 20)
+        let raw = [
+            "not a display row",
+            [
+                "current_space": ["ID": NSNumber(value: 8)],
+                "spaces": [["ID": NSNumber(value: 8)]]
+            ]
+        ] as NSArray as CFArray
+
+        let topology = try #require(ManagedDisplaySpacesParser.parse(
+            raw,
+            displays: [
+                secondDisplay: display(secondDisplay, slot: 1, fingerprint: nil),
+                firstDisplay: display(firstDisplay, slot: 0, fingerprint: nil)
+            ]
+        ))
+
+        #expect(topology.activeSpaceByDisplay == [
             secondDisplay: SpaceID(raw: 8)
         ])
     }
