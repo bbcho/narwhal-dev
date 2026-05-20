@@ -274,18 +274,16 @@ private struct ConfigParser {
     }
 
     private func parseModifiers(_ value: LuaValue, key: String) throws -> ModifierSet {
-        var result = ModifierSet()
-        let values = try array(value, key: key).enumerated()
-        for (index, item) in values {
+        try array(value, key: key).enumerated().reduce(ModifierSet()) { modifiers, entry in
+            let (index, item) = entry
             let path = "\(key)[\(index + 1)]"
             let name = try string(item, key: path)
             let modifier = try modifier(named: name, key: path)
-            guard !result.contains(modifier) else {
+            guard !modifiers.contains(modifier) else {
                 throw ConfigError.invalidValue(key: path, reason: "duplicate modifier '\(name)'")
             }
-            result.insert(modifier)
+            return modifiers.union(modifier)
         }
-        return result
     }
 
     private func parseDirection(_ value: LuaValue, key: String) throws -> Direction {
