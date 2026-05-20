@@ -31,6 +31,16 @@ public func workspaceWindowIDs(_ key: WorkspaceKey, in world: World) -> Set<Wind
     return windowIDs(in: displayState)
 }
 
+public func observedVisibleWindowIDs(_ key: WorkspaceKey, in world: World) -> Set<WindowID> {
+    world.observedVisibleWindows[key, default: []]
+}
+
+public func activeObservedVisibleWindowIDs(in world: World) -> Set<WindowID> {
+    activeWorkspaceKeys(in: world).reduce(into: Set<WindowID>()) { result, key in
+        result.formUnion(observedVisibleWindowIDs(key, in: world))
+    }
+}
+
 public func activeSpaceWindowIDs(in world: World) -> Set<WindowID> {
     activeWorkspaceKeys(in: world).reduce(into: Set<WindowID>()) { result, key in
         result.formUnion(workspaceWindowIDs(key, in: world))
@@ -71,13 +81,16 @@ public func focusCycleWindows(
     in world: World,
     focusedWindowID: WindowID?
 ) -> [WindowMetadata] {
-    guard let key = focusedWindowID.flatMap({ workspaceKey(forWindow: $0, in: world) })
+    guard let key = focusedWindowID.flatMap({ observedWorkspaceKey(forVisibleWindow: $0, in: world) })
+        ?? focusedWindowID.flatMap({ workspaceKey(forWindow: $0, in: world) })
         ?? activeWorkspaceKeys(in: world).first
     else { return [] }
 
-    guard let displayState = world.spaces[key.spaceID]?.displays[key.displayID] else { return [] }
-    let tiled = Set(occupiedWindows(in: displayState.tree))
-    let rememberedFloating = Set(sanitizedFloatingIDs(in: displayState))
+    let displayState = world.spaces[key.spaceID]?.displays[key.displayID]
+    let tiled = displayState.map { Set(occupiedWindows(in: $0.tree)) } ?? []
+    let rememberedFloating = displayState.map { Set(sanitizedFloatingIDs(in: $0)) } ?? []
+    let observedVisible = observedVisibleWindowIDs(key, in: world)
+    let hasObservedVisibleWindows = !observedVisible.isEmpty
 
     return world.windows.values.filter { metadata in
         guard !metadata.isMinimized,
@@ -85,11 +98,32 @@ public func focusCycleWindows(
               world.windowDisplay[metadata.id] == key.displayID
         else { return false }
 
+        if hasObservedVisibleWindows, !observedVisible.contains(metadata.id) {
+            return false
+        }
         if let spaceID = world.windowSpace[metadata.id] {
             return spaceID == key.spaceID
         }
+        if hasObservedVisibleWindows {
+            return true
+        }
         return rememberedFloating.contains(metadata.id)
     }
+}
+
+public func activeFocusedWindow(in world: World) -> WindowMetadata? {
+    let activeKeys = activeWorkspaceKeys(in: world)
+    for key in activeKeys {
+        guard let focused = world.spaces[key.spaceID]?.focused,
+              let metadata = world.windows[focused],
+              world.windowDisplay[focused] == key.displayID
+        else { continue }
+        let observed = observedVisibleWindowIDs(key, in: world)
+        if observed.isEmpty || observed.contains(focused) {
+            return metadata
+        }
+    }
+    return nil
 }
 
 public func isWindowTiled(_ windowID: WindowID, in world: World) -> Bool {
@@ -127,6 +161,12 @@ private func displayContainingWindow(_ windowID: WindowID, in spaces: [SpaceID: 
         }
     }
     return nil
+}
+
+public func observedWorkspaceKey(forVisibleWindow windowID: WindowID, in world: World) -> WorkspaceKey? {
+    activeWorkspaceKeys(in: world).first { key in
+        observedVisibleWindowIDs(key, in: world).contains(windowID)
+    }
 }
 
 private func spaceContainingWindow(_ windowID: WindowID, in spaces: [SpaceID: SpaceState]) -> SpaceID? {

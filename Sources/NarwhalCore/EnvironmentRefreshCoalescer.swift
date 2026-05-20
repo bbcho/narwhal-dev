@@ -148,10 +148,9 @@ public func shouldPreserveSpaceLayouts(
     for reasons: [EnvironmentRefreshReason],
     duringSpaceTransition: Bool
 ) -> Bool {
-    if reasons.contains(.spaceTransitionEnded) {
-        return duringSpaceTransition
-    }
-    return duringSpaceTransition || reasons.contains(.spaceSettled)
+    duringSpaceTransition
+        || reasons.contains(.spaceSettled)
+        || reasons.contains(.spaceTransitionEnded)
 }
 
 public func shouldPersistRestoreAfterEnvironmentRefresh(
@@ -159,10 +158,8 @@ public func shouldPersistRestoreAfterEnvironmentRefresh(
     preservedSpaceLayouts: Bool = false
 ) -> Bool {
     guard !preservedSpaceLayouts else { return false }
-    if reasons.contains(.spaceTransitionEnded) {
-        return true
-    }
     return !reasons.contains(.spaceSettled)
+        && !reasons.contains(.spaceTransitionEnded)
 }
 
 public func shouldApplyPendingTileRulesAfterEnvironmentRefresh(

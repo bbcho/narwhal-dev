@@ -83,6 +83,12 @@ public enum SpaceTopologyQuality: String, Equatable, Codable, Sendable {
     case unavailable
 }
 
+public enum EnvironmentReconciliationMode: String, Equatable, Codable, Sendable {
+    case observeOnly
+    case preserveLayouts
+    case activeWorkspaceCleanup
+}
+
 public struct SpaceTopology: Equatable, Codable, Sendable {
     public let activeSpaceByDisplay: [DisplayID: SpaceID]
     public let windowSpace: [WindowID: SpaceID]
@@ -122,6 +128,7 @@ public struct World: Equatable, Sendable {
     public let windows: [WindowID: WindowMetadata]
     public let windowDisplay: [WindowID: DisplayID]
     public let windowSpace: [WindowID: SpaceID]
+    public let observedVisibleWindows: [WorkspaceKey: Set<WindowID>]
     public let windowConstraints: [WindowID: WindowConstraints]
     public let pendingRules: [WindowID: RuleAction]
     public let config: Config
@@ -134,6 +141,7 @@ public struct World: Equatable, Sendable {
         windows: [WindowID: WindowMetadata],
         windowDisplay: [WindowID: DisplayID],
         windowSpace: [WindowID: SpaceID] = [:],
+        observedVisibleWindows: [WorkspaceKey: Set<WindowID>] = [:],
         windowConstraints: [WindowID: WindowConstraints],
         pendingRules: [WindowID: RuleAction],
         config: Config
@@ -151,6 +159,7 @@ public struct World: Equatable, Sendable {
         self.windows = windows
         self.windowDisplay = windowDisplay
         self.windowSpace = windowSpace
+        self.observedVisibleWindows = observedVisibleWindows
         self.windowConstraints = windowConstraints
         self.pendingRules = pendingRules
         self.config = config
@@ -164,6 +173,7 @@ public struct World: Equatable, Sendable {
         windows: [:],
         windowDisplay: [:],
         windowSpace: [:],
+        observedVisibleWindows: [:],
         windowConstraints: [:],
         pendingRules: [:],
         config: .default
@@ -206,13 +216,15 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
     public let windowSpace: [WindowID: SpaceID]
     public let topologyQuality: SpaceTopologyQuality
     public let preserveSpaceLayouts: Bool
+    public let reconciliationMode: EnvironmentReconciliationMode
 
     public init(
         activeSpace: SpaceID?,
         displays: [DisplayID: DisplayInfo],
         axSnapshot: AXWindowSnapshot,
         spaceTopology: SpaceTopology? = nil,
-        preserveSpaceLayouts: Bool = false
+        preserveSpaceLayouts: Bool = false,
+        reconciliationMode: EnvironmentReconciliationMode = .activeWorkspaceCleanup
     ) {
         let topology = spaceTopology ?? SpaceTopology.replicated(activeSpace: activeSpace, displays: displays)
         self.activeSpace = activeSpace
@@ -222,6 +234,35 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         self.windowSpace = topology.windowSpace
         self.topologyQuality = topology.quality
         self.preserveSpaceLayouts = preserveSpaceLayouts
+        self.reconciliationMode = reconciliationMode
+    }
+
+    public var observedWindowIDs: Set<WindowID> {
+        Set(axSnapshot.windows.map(\.id))
+    }
+
+    public var observedWindowCount: Int {
+        observedWindowIDs.count
+    }
+
+    public var mappedWindowCount: Int {
+        observedWindowIDs.intersection(windowSpace.keys).count
+    }
+
+    public var unmappedWindowIDs: Set<WindowID> {
+        observedWindowIDs.subtracting(windowSpace.keys)
+    }
+
+    public var topologyCoverageRatio: Double {
+        guard observedWindowCount > 0 else { return 1 }
+        return Double(mappedWindowCount) / Double(observedWindowCount)
+    }
+
+    public var hasLowTopologyCoverage: Bool {
+        topologyQuality == .managedDisplaySpaces
+            && observedWindowCount > 0
+            && mappedWindowCount < observedWindowCount
+            && topologyCoverageRatio < 0.80
     }
 }
 

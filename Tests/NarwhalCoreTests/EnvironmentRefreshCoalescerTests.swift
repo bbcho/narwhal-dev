@@ -122,7 +122,7 @@ struct EnvironmentRefreshCoalescerTests {
             for: [.windowClosed(WindowID(raw: 44)), .windowOpened(WindowID(raw: 45))],
             duringSpaceTransition: false
         ))
-        #expect(!shouldPreserveSpaceLayouts(
+        #expect(shouldPreserveSpaceLayouts(
             for: [.spaceSettled, .spaceTransitionEnded],
             duringSpaceTransition: false
         ))
@@ -136,8 +136,8 @@ struct EnvironmentRefreshCoalescerTests {
             .windowClosed(WindowID(raw: 44)),
             .spaceSettled
         ]))
-        #expect(shouldPersistRestoreAfterEnvironmentRefresh(reasons: [.spaceTransitionEnded]))
-        #expect(shouldPersistRestoreAfterEnvironmentRefresh(reasons: [
+        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(reasons: [.spaceTransitionEnded]))
+        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(reasons: [
             .spaceSettled,
             .spaceTransitionEnded
         ]))

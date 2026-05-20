@@ -87,6 +87,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print(result.message)
             Darwin.exit(result.passed ? 0 : 1)
         }
+        if ProcessInfo.processInfo.arguments.contains("--verify-observation-replay") {
+            let result = ObservationReplayVerification.verifyPartialTopologyReplay()
+            print(result.message)
+            Darwin.exit(result.passed ? 0 : 1)
+        }
         app.delegate = instance
         app.run()
     }
@@ -288,7 +293,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refreshEnvironment(
         reason: String,
         displays providedDisplays: [DisplayID: DisplayInfo]? = nil,
-        preserveSpaceLayouts: Bool = false
+        preserveSpaceLayouts: Bool = false,
+        reconciliationMode: EnvironmentReconciliationMode = .activeWorkspaceCleanup
     ) async -> EnvironmentRefreshResult {
         let displays = providedDisplays ?? displayClient.currentDisplays()
         let axSnapshot = axClient.windowSnapshot()
@@ -308,12 +314,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             displays: displays,
             axSnapshot: axSnapshot,
             spaceTopology: topology,
-            preserveSpaceLayouts: preserveSpaceLayouts
+            preserveSpaceLayouts: preserveSpaceLayouts,
+            reconciliationMode: preserveSpaceLayouts ? .preserveLayouts : reconciliationMode
         )
         let result = await worldActor.refreshEnvironment(snapshot)
         let preserved = result.preservedSpaceLayouts ? " preservedSpaceLayouts=true" : ""
         reporter.info(
-            "Environment refreshed (\(reason)): activeSpace=\(result.activeSpace?.raw.description ?? "nil") displays=\(result.displayCount) windows=\(result.windowCount) quality=\(describe(result.quality)) topology=\(topology.quality.rawValue) spaceWindows=\(topology.windowSpace.count)\(preserved)"
+            "Environment refreshed (\(reason)): activeSpace=\(result.activeSpace?.raw.description ?? "nil") displays=\(result.displayCount) windows=\(result.windowCount) quality=\(describe(result.quality)) topology=\(topology.quality.rawValue) mode=\(snapshot.reconciliationMode.rawValue) mapped=\(result.mappedWindowCount)/\(result.observedWindowCount) spaceWindows=\(topology.windowSpace.count)\(preserved)"
         )
         updateOperatingStatus { status in
             status.activeSpace = result.activeSpace
@@ -879,26 +886,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let snapshot: FocusedWindowSnapshot
+        let axFocusedWindowID: WindowID?
+        let axFocusError: AXClientError?
         switch axClient.focusedWindowSnapshot() {
         case .success(let value):
-            snapshot = value
+            axFocusedWindowID = value.id
+            axFocusError = nil
         case .failure(let error):
-            reporter.error("Focus \(direction.rawValue) failed reading focused window: \(error.description)")
-            showOperatorFeedback("Focus failed: no focused window", tone: .error)
-            return false
+            axFocusedWindowID = nil
+            axFocusError = error
         }
 
         let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(reason: "pre-focus \(direction.rawValue)", displays: displays)
+        let environment = await refreshEnvironment(
+            reason: "pre-focus \(direction.rawValue)",
+            displays: displays,
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             reporter.error("Focus \(direction.rawValue) rejected before planning: active Space unavailable")
             showOperatorFeedback("Focus failed: active Space unavailable", tone: .error)
             return false
         }
-        await worldActor.recordExternalFocus(snapshot.id)
+        let focusedWindowID: WindowID
+        if let axFocusedWindowID {
+            focusedWindowID = axFocusedWindowID
+            await worldActor.recordExternalFocus(axFocusedWindowID)
+        } else if let fallback = await worldActor.focusedWindowFallback() {
+            focusedWindowID = fallback.id
+            reporter.info("Focus \(direction.rawValue) using stored focus fallback \(fallback.id.description) after AX focus read failed: \(axFocusError?.description ?? "unknown")")
+        } else {
+            reporter.error("Focus \(direction.rawValue) failed reading focused window: \(axFocusError?.description ?? "unknown")")
+            showOperatorFeedback("Focus failed: no focused window", tone: .error)
+            return false
+        }
 
-        switch await worldActor.planFocusDirection(from: snapshot.id, direction: direction) {
+        switch await worldActor.planFocusDirection(from: focusedWindowID, direction: direction) {
         case .success(let result):
             return await focusWindow(result, reason: "focus \(direction.rawValue)")
         case .failure(let error):
@@ -922,7 +945,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let focusedWindowID: WindowID?
+        var focusedWindowID: WindowID?
         switch axClient.focusedWindowSnapshot() {
         case .success(let value):
             focusedWindowID = value.id
@@ -930,7 +953,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             focusedWindowID = nil
         }
 
-        let environment = await refreshEnvironment(reason: "pre-focus-cycle \(direction.rawValue)")
+        let environment = await refreshEnvironment(
+            reason: "pre-focus-cycle \(direction.rawValue)",
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             reporter.error("Focus cycle \(direction.rawValue) rejected before planning: active Space unavailable")
             showOperatorFeedback("Focus cycle failed: active Space unavailable", tone: .error)
@@ -938,10 +964,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let focusedWindowID {
             await worldActor.recordExternalFocus(focusedWindowID)
+        } else if let fallback = await worldActor.focusedWindowFallback() {
+            focusedWindowID = fallback.id
+            await worldActor.recordExternalFocus(fallback.id)
         }
 
         switch await worldActor.planFocusCycleCandidates(from: focusedWindowID, direction: direction) {
         case .success(let results):
+            reporter.info("Focus cycle \(direction.rawValue) planned \(results.count) candidate(s)")
             for (index, result) in results.enumerated() {
                 if await focusWindow(
                     result,
@@ -970,7 +1000,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let focusedWindowID: WindowID?
+        var focusedWindowID: WindowID?
         switch axClient.focusedWindowSnapshot() {
         case .success(let value):
             focusedWindowID = value.id
@@ -978,7 +1008,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             focusedWindowID = nil
         }
 
-        let environment = await refreshEnvironment(reason: "pre-focus-previous")
+        let environment = await refreshEnvironment(
+            reason: "pre-focus-previous",
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             reporter.error("Focus previous rejected before planning: active Space unavailable")
             showOperatorFeedback("Focus previous failed: active Space unavailable", tone: .error)
@@ -986,6 +1019,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let focusedWindowID {
             await worldActor.recordExternalFocus(focusedWindowID)
+        } else if let fallback = await worldActor.focusedWindowFallback() {
+            focusedWindowID = fallback.id
+            await worldActor.recordExternalFocus(fallback.id)
         }
 
         switch await worldActor.planFocusPrevious() {
@@ -1061,7 +1097,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let environment = await refreshEnvironment(reason: "pre-undo")
+        let environment = await refreshEnvironment(
+            reason: "pre-undo",
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             reporter.error("Undo rejected before planning: active Space unavailable")
             showOperatorFeedback("Undo failed: active Space unavailable", tone: .error)
@@ -1091,12 +1130,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func performPush(_ direction: Direction) async -> Bool {
         let operation = "Push \(direction.rawValue)"
-        guard let context = focusedLayoutContext(operation: operation),
+        guard let context = await focusedLayoutContext(operation: operation),
               let displayID = displayForFocusedWindow(context, operation: operation),
               await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-push \(direction.rawValue)")
         else { return false }
 
-        switch await worldActor.planPush(context.snapshot.id, direction: direction) {
+        switch await worldActor.planPush(context.id, direction: direction) {
         case .success(let result):
             return await applyPlannedPush(result, direction: direction, retryOnClamp: true)
         case .failure(let error):
@@ -1110,14 +1149,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func performCenter() async -> Bool {
         let operation = "Center"
-        guard let context = focusedLayoutContext(operation: operation),
+        guard let context = await focusedLayoutContext(operation: operation),
               let displayID = displayForFocusedWindow(context, operation: operation),
               await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-center")
         else { return false }
 
-        switch await worldActor.planCenter(context.snapshot.id) {
+        switch await worldActor.planCenter(context.id) {
         case .success(let result):
-            return await applyPlannedCenter(result, windowID: context.snapshot.id, retryOnClamp: true)
+            return await applyPlannedCenter(result, windowID: context.id, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Center rejected by core: \(error.message)")
             showOperatorFeedback("Center failed: \(error.message)", tone: .error)
@@ -1129,14 +1168,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func performEject() async -> Bool {
         let operation = "Eject"
-        guard let context = focusedLayoutContext(operation: operation),
+        guard let context = await focusedLayoutContext(operation: operation),
               let displayID = displayForFocusedWindow(context, operation: operation),
               await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-eject")
         else { return false }
 
-        switch await worldActor.planEject(context.snapshot.id) {
+        switch await worldActor.planEject(context.id) {
         case .success(let result):
-            return await applyPlannedEject(result, windowID: context.snapshot.id, retryOnClamp: true)
+            return await applyPlannedEject(result, windowID: context.id, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Eject rejected by core: \(error.message)")
             showOperatorFeedback("Eject failed: \(error.message)", tone: .error)
@@ -1148,14 +1187,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func performToggleFloat() async -> Bool {
         let operation = "Toggle float"
-        guard let context = focusedLayoutContext(operation: operation),
+        guard let context = await focusedLayoutContext(operation: operation),
               let displayID = displayForFocusedWindow(context, operation: operation),
               await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-toggle-float")
         else { return false }
 
-        switch await worldActor.planToggleFloat(context.snapshot.id) {
+        switch await worldActor.planToggleFloat(context.id) {
         case .success(let result):
-            return await applyPlannedToggleFloat(result, windowID: context.snapshot.id, retryOnClamp: true)
+            return await applyPlannedToggleFloat(result, windowID: context.id, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Toggle float rejected by core: \(error.message)")
             showOperatorFeedback("Toggle float failed: \(error.message)", tone: .error)
@@ -1167,14 +1206,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func performSwap(_ direction: Direction) async -> Bool {
         let operation = "Swap \(direction.rawValue)"
-        guard let context = focusedLayoutContext(operation: operation),
+        guard let context = await focusedLayoutContext(operation: operation),
               let displayID = displayForFocusedWindow(context, operation: operation),
               await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-swap \(direction.rawValue)")
         else { return false }
 
-        switch await worldActor.planSwap(context.snapshot.id, direction: direction) {
+        switch await worldActor.planSwap(context.id, direction: direction) {
         case .success(let result):
-            return await applyPlannedSwap(result, windowID: context.snapshot.id, direction: direction, retryOnClamp: true)
+            return await applyPlannedSwap(result, windowID: context.id, direction: direction, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Swap \(direction.rawValue) rejected by core: \(error.message)")
             showOperatorFeedback("Swap failed: \(error.message)", tone: .error)
@@ -1186,16 +1225,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func performResize(_ direction: Direction, delta: Double) async -> Bool {
         let operation = "Resize \(direction.rawValue) \(delta)"
-        guard let context = focusedLayoutContext(operation: operation),
+        guard let context = await focusedLayoutContext(operation: operation),
               let displayID = displayForFocusedWindow(context, operation: operation),
               await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-resize \(direction.rawValue)")
         else { return false }
 
-        switch await worldActor.planResize(context.snapshot.id, direction: direction, delta: delta) {
+        switch await worldActor.planResize(context.id, direction: direction, delta: delta) {
         case .success(let result):
             return await applyPlannedResize(
                 result,
-                windowID: context.snapshot.id,
+                windowID: context.id,
                 direction: direction,
                 delta: delta,
                 retryOnClamp: true
@@ -1211,14 +1250,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func performMoveToNextDisplay() async -> Bool {
         let operation = "Move display"
-        guard let context = focusedLayoutContext(operation: operation),
+        guard let context = await focusedLayoutContext(operation: operation),
               let displayID = displayForFocusedWindow(context, operation: operation),
               await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-move-display")
         else { return false }
 
-        switch await worldActor.planMoveToNextDisplay(context.snapshot.id) {
+        switch await worldActor.planMoveToNextDisplay(context.id) {
         case .success(let result):
-            return await applyPlannedMoveToNextDisplay(result, windowID: context.snapshot.id, retryOnClamp: true)
+            return await applyPlannedMoveToNextDisplay(result, windowID: context.id, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Move display rejected by core: \(error.message)")
             showOperatorFeedback("Move display failed: \(error.message)", tone: .error)
@@ -1250,7 +1289,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let environment = await refreshEnvironment(reason: "pre-shuffle")
+        let environment = await refreshEnvironment(
+            reason: "pre-shuffle",
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             reporter.error("Shuffle rejected before planning: active Space unavailable")
             showOperatorFeedback("Shuffle failed: active Space unavailable", tone: .error)
@@ -1286,7 +1328,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let environment = await refreshEnvironment(reason: "pre-cascade")
+        let environment = await refreshEnvironment(
+            reason: "pre-cascade",
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             reporter.error("Cascade rejected before planning: active Space unavailable")
             showOperatorFeedback("Cascade failed: active Space unavailable", tone: .error)
@@ -1317,14 +1362,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func performMaximizeReset() async -> Bool {
         let operation = "Max reset"
-        guard let context = focusedLayoutContext(operation: operation),
+        guard let context = await focusedLayoutContext(operation: operation),
               let displayID = displayForFocusedWindow(context, operation: operation),
               await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-max-reset")
         else { return false }
 
-        switch await worldActor.planMaximizeReset(context.snapshot.id) {
+        switch await worldActor.planMaximizeReset(context.id) {
         case .success(let result):
-            return await applyPlannedMaximizeReset(result, windowID: context.snapshot.id, retryOnClamp: true)
+            return await applyPlannedMaximizeReset(result, windowID: context.id, retryOnClamp: true)
         case .failure(let error):
             reporter.error("Max reset rejected by core: \(error.message)")
             showOperatorFeedback("Max reset failed: \(error.message)", tone: .error)
@@ -1387,8 +1432,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let operation = "Drag drop"
-        guard let context = focusedLayoutContext(operation: operation) else { return }
-        let drag = DragEvent(windowID: context.snapshot.id, location: location, displayID: nil)
+        guard let context = await focusedLayoutContext(operation: operation) else { return }
+        let drag = DragEvent(windowID: context.id, location: location, displayID: nil)
         guard let command = resolveDrop(drag, zones: config.zones, displays: context.displays) else {
             reporter.info("Drag drop ignored: no matching exclusive zone at \(location.debugDescription)")
             showOperatorFeedback("No drop zone", tone: .warning)
@@ -1400,7 +1445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         reporter.info(
-            "Drag drop resolved focused=\(context.snapshot.id.description) display=\(displayID.raw) zone=\(zoneID.raw) location=\(location.debugDescription)"
+            "Drag drop resolved focused=\(context.id.description) display=\(displayID.raw) zone=\(zoneID.raw) location=\(location.debugDescription)"
         )
         guard await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-drag drop") else { return }
 
@@ -1414,30 +1459,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func focusedLayoutContext(operation: String) -> FocusedLayoutContext? {
+    private func focusedLayoutContext(operation: String) async -> FocusedLayoutContext? {
         guard AccessibilityTrust.current(prompt: false).isTrusted else {
             reporter.error("\(operation) skipped because Accessibility is not trusted")
             showOperatorFeedback("\(operation) failed: Accessibility not trusted", tone: .error)
             return nil
         }
 
-        guard let snapshot = focusedWindowSnapshotForLayoutOperation(operation) else {
-            let error: AXClientError
-            switch axClient.focusedWindowSnapshot() {
-            case .success:
-                error = .missingFocusedWindow
-            case .failure(let value):
-                error = value
+        let focused: FocusedLayoutContext
+        if let snapshot = focusedWindowSnapshotForLayoutOperation(operation) {
+            focused = FocusedLayoutContext(metadata: snapshot.metadata, displays: displayClient.currentDisplays())
+        } else {
+            let error = focusedWindowReadError()
+            let displays = displayClient.currentDisplays()
+            _ = await refreshEnvironment(
+                reason: "\(operation.lowercased()) focus fallback",
+                displays: displays,
+                reconciliationMode: .observeOnly
+            )
+            guard let fallback = await worldActor.focusedWindowFallback() else {
+                reporter.error("\(operation) failed reading focused window: \(error.description)")
+                showOperatorFeedback("\(operation) failed: no focused window", tone: .error)
+                return nil
             }
-            reporter.error("\(operation) failed reading focused window: \(error.description)")
+            reporter.info("\(operation) using stored focused-window fallback \(fallback.id.description) after AX focus read failed: \(error.description)")
+            focused = FocusedLayoutContext(metadata: fallback, displays: displays)
+        }
+
+        guard focused.metadata.role == "AXWindow" else {
+            reporter.error("\(operation) failed: focused element is not a window")
             showOperatorFeedback("\(operation) failed: no focused window", tone: .error)
             return nil
         }
 
-        let displays = displayClient.currentDisplays()
-        reporter.info("\(operation) focused \(snapshot.logDescription)")
-        logDisplays(displays)
-        return FocusedLayoutContext(snapshot: snapshot, displays: displays)
+        reporter.info("\(operation) focused \(focused.logDescription)")
+        logDisplays(focused.displays)
+        return focused
     }
 
     @MainActor
@@ -1454,8 +1511,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    private func focusedWindowReadError() -> AXClientError {
+        switch axClient.focusedWindowSnapshot() {
+        case .success:
+            return .missingFocusedWindow
+        case .failure(let value):
+            return value
+        }
+    }
+
+    @MainActor
     private func displayForFocusedWindow(_ context: FocusedLayoutContext, operation: String) -> DisplayID? {
-        guard let displayID = displayClient.displayContaining(frame: context.snapshot.frame, displays: context.displays) else {
+        guard let displayID = displayClient.displayContaining(frame: context.frame, displays: context.displays) else {
             reporter.error("\(operation) failed: no display for focused window")
             showOperatorFeedback("\(operation) failed: no display for focus", tone: .error)
             return nil
@@ -1471,20 +1538,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         operation: String,
         refreshReason: String
     ) async -> Bool {
-        let environment = await refreshEnvironment(reason: refreshReason, displays: context.displays)
+        let environment = await refreshEnvironment(
+            reason: refreshReason,
+            displays: context.displays,
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             reporter.error("\(operation) rejected before planning: active Space unavailable")
             showOperatorFeedback("\(operation) failed: active Space unavailable", tone: .error)
             return false
         }
 
-        switch axClient.visibleWindowIDs() {
-        case .success(let liveWindowIDs):
-            await worldActor.reconcileLiveWindows(liveWindowIDs.union([context.snapshot.id]))
-        case .failure(let error):
-            reporter.error("\(operation) skipped live-window reconciliation: \(error.description)")
-        }
-        switch await worldActor.upsertWindow(context.snapshot.metadata, displayID: displayID, displays: context.displays) {
+        switch await worldActor.upsertWindow(context.metadata, displayID: displayID, displays: context.displays) {
         case .success:
             return true
         case .failure(let error):
@@ -2199,7 +2264,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(reason: refreshReason, displays: displays)
+        let environment = await refreshEnvironment(
+            reason: refreshReason,
+            displays: displays,
+            reconciliationMode: .observeOnly
+        )
         guard let activeSpace = environment.activeSpace else {
             return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
         }
@@ -2235,7 +2304,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(reason: "ipc push \(direction.rawValue)", displays: displays)
+        let environment = await refreshEnvironment(
+            reason: "ipc push \(direction.rawValue)",
+            displays: displays,
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
         }
@@ -2270,7 +2343,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(reason: "ipc center", displays: displays)
+        let environment = await refreshEnvironment(
+            reason: "ipc center",
+            displays: displays,
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
         }
@@ -2305,7 +2382,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(reason: "ipc eject", displays: displays)
+        let environment = await refreshEnvironment(
+            reason: "ipc eject",
+            displays: displays,
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
         }
@@ -2340,7 +2421,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(reason: "ipc toggle float", displays: displays)
+        let environment = await refreshEnvironment(
+            reason: "ipc toggle float",
+            displays: displays,
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
         }
@@ -2375,7 +2460,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(reason: "ipc focus", displays: displays)
+        let environment = await refreshEnvironment(
+            reason: "ipc focus",
+            displays: displays,
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
         }
@@ -2410,7 +2499,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(reason: "ipc swap \(direction.rawValue)", displays: displays)
+        let environment = await refreshEnvironment(
+            reason: "ipc swap \(direction.rawValue)",
+            displays: displays,
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
         }
@@ -2449,7 +2542,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(reason: "ipc resize \(direction.rawValue)", displays: displays)
+        let environment = await refreshEnvironment(
+            reason: "ipc resize \(direction.rawValue)",
+            displays: displays,
+            reconciliationMode: .observeOnly
+        )
         guard environment.activeSpace != nil else {
             return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
         }
@@ -2520,8 +2617,20 @@ private struct CommandExecutionFailure {
 }
 
 private struct FocusedLayoutContext {
-    let snapshot: FocusedWindowSnapshot
+    let metadata: WindowMetadata
     let displays: [DisplayID: DisplayInfo]
+
+    var id: WindowID {
+        metadata.id
+    }
+
+    var frame: CGRect {
+        metadata.frame
+    }
+
+    var logDescription: String {
+        "id=\(metadata.id.description) pid=\(metadata.pid) bundle=\(metadata.bundleID.raw) title=\"\(metadata.title)\" role=\(metadata.role) frame=\(metadata.frame.debugDescription)"
+    }
 }
 
 private struct DragZonePreview {

@@ -84,7 +84,9 @@ public func maximizeResetLayout(windowID: WindowID, in world: World) -> Result<L
 }
 
 private func resizableVisibleWindowsByDisplay(in world: World) -> [DisplayID: [WindowMetadata]] {
-    let activeWindowIDs = activeSpaceWindowIDs(in: world)
+    let observedActiveWindowIDs = activeObservedVisibleWindowIDs(in: world)
+    let activeWindowIDs = observedActiveWindowIDs.isEmpty ? activeSpaceWindowIDs(in: world) : observedActiveWindowIDs
+    let activeSpaceIDs = Set(activeWorkspaceKeys(in: world).map(\.spaceID))
     return world.windows.values.reduce(into: [DisplayID: [WindowMetadata]]()) { result, window in
         guard activeWindowIDs.contains(window.id),
               window.isResizable,
@@ -92,6 +94,10 @@ private func resizableVisibleWindowsByDisplay(in world: World) -> [DisplayID: [W
               let displayID = world.windowDisplay[window.id],
               world.displays[displayID] != nil
         else { return }
+        if let mappedSpaceID = world.windowSpace[window.id],
+           !activeSpaceIDs.contains(mappedSpaceID) {
+            return
+        }
         result[displayID, default: []].append(window)
     }
 }

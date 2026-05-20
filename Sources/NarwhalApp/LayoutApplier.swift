@@ -62,11 +62,7 @@ struct LayoutApplier {
 
             let writeResult: AXFrameWriteOutcome
             echoSuppressor?.expectFrame(windowID: windowID, targetFrame: frame)
-            if let focusedWindowID = result.focusedWindowID, windowID == focusedWindowID {
-                writeResult = axClient.setFocusedWindowFrame(frame)
-            } else {
-                writeResult = axClient.setFrame(metadata, to: frame)
-            }
+            writeResult = axClient.setFrame(metadata, to: frame)
 
             switch writeResult {
             case .converged(let actual):

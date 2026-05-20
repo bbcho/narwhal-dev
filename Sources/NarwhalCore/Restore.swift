@@ -276,6 +276,7 @@ public func restoreWorld(
             windows: windows,
             windowDisplay: displayOwnership(for: windows.values, displays: displays),
             windowSpace: liveWindowSpace,
+            observedVisibleWindows: [:],
             windowConstraints: [:],
             pendingRules: [:],
             config: config
@@ -362,6 +363,7 @@ public func restoreWorld(
         windows: windows,
         windowDisplay: windowDisplay,
         windowSpace: windowSpace,
+        observedVisibleWindows: [:],
         windowConstraints: [:],
         pendingRules: restoredPendingRules(stored.pendingRules, matcher: matcher),
         config: config

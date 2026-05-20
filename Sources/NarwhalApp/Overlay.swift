@@ -1058,7 +1058,14 @@ private enum CommandOverlayLayout {
             CommandOverlayCategory.system.title
         ]
         let left = sections.filter { leftTitles.contains($0.title) }
-        let right = sections.filter { rightTitles.contains($0.title) }
+        let rightOrder = [
+            CommandOverlayCategory.system.title,
+            CommandOverlayCategory.arrangement.title,
+            CommandOverlayCategory.overlay.title
+        ]
+        let right = rightOrder.flatMap { title in
+            sections.filter { $0.title == title }
+        }
         let assignedTitles = leftTitles.union(rightTitles)
         let unassigned = sections.filter { !assignedTitles.contains($0.title) }
 
@@ -1110,6 +1117,14 @@ enum CommandOverlayVerification {
         let metrics = CommandOverlayMetrics(sections: sections)
         guard metrics.columns.count == 2 else {
             return (false, "expected 2 semantic command groups, got \(metrics.columns.count)")
+        }
+        guard sections.contains(where: { section in
+            section.rows.contains(where: { $0.command == "Open Finder" })
+        }) else {
+            return (false, "default command overlay is missing Open Finder")
+        }
+        guard metrics.columns[1].first?.title == CommandOverlayCategory.system.title else {
+            return (false, "default command overlay does not place System commands at the top of the right column")
         }
 
         let viewSize = CGSize(

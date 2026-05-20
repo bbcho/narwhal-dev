@@ -21,6 +21,8 @@ struct EnvironmentRefreshResult: Sendable {
     let windowCount: Int
     let quality: AXSnapshotQuality
     let preservedSpaceLayouts: Bool
+    let observedWindowCount: Int
+    let mappedWindowCount: Int
 }
 
 actor WorldActor {
@@ -36,6 +38,7 @@ actor WorldActor {
             spaces: [:],
             windows: [:],
             windowDisplay: [:],
+            observedVisibleWindows: [:],
             windowConstraints: [:],
             pendingRules: [:],
             config: config
@@ -57,7 +60,9 @@ actor WorldActor {
             displayCount: world.displays.count,
             windowCount: world.windows.count,
             quality: snapshot.axSnapshot.quality,
-            preservedSpaceLayouts: preservedSpaceLayouts
+            preservedSpaceLayouts: preservedSpaceLayouts,
+            observedWindowCount: snapshot.observedWindowCount,
+            mappedWindowCount: snapshot.mappedWindowCount
         )
     }
 
@@ -107,6 +112,21 @@ actor WorldActor {
         pruneRuntimeState()
     }
 
+    func focusedWindowFallback() -> WindowMetadata? {
+        if let active = activeFocusedWindow(in: world) {
+            return active
+        }
+        let visible = activeObservedVisibleWindowIDs(in: world)
+        for windowID in focusHistory.reversed() {
+            guard visible.isEmpty || visible.contains(windowID),
+                  let metadata = world.windows[windowID],
+                  !metadata.isMinimized
+            else { continue }
+            return metadata
+        }
+        return nil
+    }
+
     func removeWindowFromActiveSpace(_ windowID: WindowID) {
         world = removeWindowsFromActiveSpace([windowID], in: world)
         pruneRuntimeState()
@@ -129,6 +149,9 @@ actor WorldActor {
 
         var windowSpace = world.windowSpace
         windowSpace[metadata.id] = activeSpace
+        let workspaceKey = WorkspaceKey(displayID: displayID, spaceID: activeSpace)
+        var observedVisibleWindows = world.observedVisibleWindows
+        observedVisibleWindows[workspaceKey, default: []].insert(metadata.id)
 
         var spaces = world.spaces
         let space = spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
@@ -154,6 +177,7 @@ actor WorldActor {
             windows: windows,
             windowDisplay: windowDisplay,
             windowSpace: windowSpace,
+            observedVisibleWindows: observedVisibleWindows,
             windowConstraints: world.windowConstraints,
             pendingRules: world.pendingRules,
             config: world.config
@@ -575,6 +599,7 @@ actor WorldActor {
             windows: windows,
             windowDisplay: base.windowDisplay,
             windowSpace: base.windowSpace,
+            observedVisibleWindows: base.observedVisibleWindows,
             windowConstraints: base.windowConstraints,
             pendingRules: base.pendingRules,
             config: base.config
@@ -615,6 +640,7 @@ private extension World {
             windows: windows,
             windowDisplay: windowDisplay,
             windowSpace: windowSpace,
+            observedVisibleWindows: observedVisibleWindows,
             windowConstraints: windowConstraints,
             pendingRules: pendingRules,
             config: config
@@ -634,6 +660,7 @@ private extension World {
             windows: windows,
             windowDisplay: windowDisplay,
             windowSpace: windowSpace,
+            observedVisibleWindows: observedVisibleWindows,
             windowConstraints: windowConstraints,
             pendingRules: pendingRules,
             config: config

@@ -144,6 +144,7 @@ private func applyEject(_ windowID: WindowID, to world: World) -> Result<World, 
         windows: world.windows,
         windowDisplay: windowDisplay,
         windowSpace: windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config
@@ -195,13 +196,17 @@ private func applyFocus(_ windowID: WindowID, to world: World) -> Result<World, 
     guard world.windows[windowID] != nil else {
         return .failure(.windowNotFound(windowID))
     }
-    guard let key = workspaceKey(forWindow: windowID, in: world) else {
+    guard let key = observedWorkspaceKey(forVisibleWindow: windowID, in: world)
+        ?? workspaceKey(forWindow: windowID, in: world)
+    else {
         return .failure(.activeSpaceUnavailable)
     }
 
     var spaces = world.spaces
     let space = spaces[key.spaceID] ?? SpaceState(id: key.spaceID, displays: [:], focused: nil)
     spaces[key.spaceID] = SpaceState(id: key.spaceID, displays: space.displays, focused: windowID)
+    var windowSpace = world.windowSpace
+    windowSpace[windowID] = key.spaceID
 
     return .success(World(
         displays: world.displays,
@@ -210,7 +215,8 @@ private func applyFocus(_ windowID: WindowID, to world: World) -> Result<World, 
         spaces: spaces,
         windows: world.windows,
         windowDisplay: world.windowDisplay,
-        windowSpace: world.windowSpace,
+        windowSpace: windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config
@@ -341,6 +347,7 @@ private func applySwap(_ windowID: WindowID, direction: Direction, to world: Wor
         windows: world.windows,
         windowDisplay: windowDisplay,
         windowSpace: windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config
@@ -397,6 +404,7 @@ private func applyResizeSplit(
         windows: world.windows,
         windowDisplay: world.windowDisplay,
         windowSpace: world.windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config
@@ -439,6 +447,7 @@ private func applyBalance(_ spaceID: SpaceID, to world: World) -> Result<World, 
         windows: world.windows,
         windowDisplay: world.windowDisplay,
         windowSpace: world.windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config
@@ -563,6 +572,7 @@ private func worldByRetiling(_ target: RetileTarget, insertion: RetileInsertion,
         windows: world.windows,
         windowDisplay: windowDisplay,
         windowSpace: windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config
@@ -592,6 +602,7 @@ public func resetTilingState(in world: World) -> World {
         windows: world.windows,
         windowDisplay: world.windowDisplay,
         windowSpace: world.windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: [:],
         pendingRules: [:],
         config: world.config
@@ -622,6 +633,7 @@ public func resetActiveSpaceTilingState(in world: World) -> World {
         windows: world.windows,
         windowDisplay: world.windowDisplay,
         windowSpace: world.windowSpace.filter { !activeOnlyWindowIDs.contains($0.key) },
+        observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints.filter { !activeOnlyWindowIDs.contains($0.key) },
         pendingRules: world.pendingRules.filter { !activeOnlyWindowIDs.contains($0.key) },
         config: world.config
@@ -642,6 +654,7 @@ public func recordObservedConstraints(_ observed: WindowConstraints, for windowI
         windows: world.windows,
         windowDisplay: world.windowDisplay,
         windowSpace: world.windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config
@@ -652,7 +665,8 @@ private func applyExternalFocus(_ windowID: WindowID, to world: World) -> Result
     guard world.windows[windowID] != nil else {
         return .failure(.windowNotFound(windowID))
     }
-    guard let key = workspaceKey(forWindow: windowID, in: world),
+    guard let key = observedWorkspaceKey(forVisibleWindow: windowID, in: world)
+        ?? workspaceKey(forWindow: windowID, in: world),
           var space = world.spaces[key.spaceID]
     else {
         return .success(world)
@@ -661,6 +675,8 @@ private func applyExternalFocus(_ windowID: WindowID, to world: World) -> Result
     space = SpaceState(id: space.id, displays: space.displays, focused: windowID)
     var spaces = world.spaces
     spaces[key.spaceID] = space
+    var windowSpace = world.windowSpace
+    windowSpace[windowID] = key.spaceID
 
     return .success(World(
         displays: world.displays,
@@ -669,7 +685,8 @@ private func applyExternalFocus(_ windowID: WindowID, to world: World) -> Result
         spaces: spaces,
         windows: world.windows,
         windowDisplay: world.windowDisplay,
-        windowSpace: world.windowSpace,
+        windowSpace: windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config
@@ -731,6 +748,7 @@ private func applyExternalFrameUpdate(_ windowID: WindowID, frame: CGRect, to wo
         windows: windows,
         windowDisplay: windowDisplay,
         windowSpace: windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: world.config
@@ -746,6 +764,7 @@ private func worldBySettingConfig(_ config: Config, in world: World) -> World {
         windows: world.windows,
         windowDisplay: world.windowDisplay,
         windowSpace: world.windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
         config: config

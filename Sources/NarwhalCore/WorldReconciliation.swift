@@ -4,6 +4,7 @@ public func pruneWorld(_ world: World, keepingLiveWindows liveWindowIDs: Set<Win
     let windows = world.windows.filter { liveWindowIDs.contains($0.key) }
     let windowDisplay = world.windowDisplay.filter { liveWindowIDs.contains($0.key) }
     let windowSpace = world.windowSpace.filter { liveWindowIDs.contains($0.key) }
+    let observedVisibleWindows = world.observedVisibleWindows.mapValues { $0.intersection(liveWindowIDs) }
     let windowConstraints = world.windowConstraints.filter { liveWindowIDs.contains($0.key) }
     let pendingRules = world.pendingRules.filter { liveWindowIDs.contains($0.key) }
     let spaces = sanitizedSpaces(world.spaces.mapValues { space in
@@ -26,6 +27,7 @@ public func pruneWorld(_ world: World, keepingLiveWindows liveWindowIDs: Set<Win
         windows: windows,
         windowDisplay: windowDisplay,
         windowSpace: windowSpace,
+        observedVisibleWindows: observedVisibleWindows,
         windowConstraints: windowConstraints,
         pendingRules: pendingRules,
         config: world.config
@@ -55,6 +57,7 @@ public func removeWindowsFromActiveSpace(_ windowIDs: Set<WindowID>, in world: W
         windows: world.windows.filter { !removedUntrackedWindowIDs.contains($0.key) },
         windowDisplay: world.windowDisplay.filter { !removedUntrackedWindowIDs.contains($0.key) },
         windowSpace: world.windowSpace.filter { !removedUntrackedWindowIDs.contains($0.key) },
+        observedVisibleWindows: world.observedVisibleWindows.mapValues { $0.subtracting(removedUntrackedWindowIDs) },
         windowConstraints: world.windowConstraints.filter { !removedUntrackedWindowIDs.contains($0.key) },
         pendingRules: world.pendingRules.filter { !removedUntrackedWindowIDs.contains($0.key) },
         config: world.config
@@ -74,6 +77,7 @@ public func reconcileEnvironment(_ snapshot: EnvironmentSnapshot, in world: Worl
             windows: world.windows,
             windowDisplay: world.windowDisplay,
             windowSpace: world.windowSpace.merging(snapshot.windowSpace) { _, live in live },
+            observedVisibleWindows: world.observedVisibleWindows,
             windowConstraints: world.windowConstraints,
             pendingRules: world.pendingRules,
             config: world.config
@@ -101,15 +105,24 @@ func worldByClosingWindow(_ windowID: WindowID, in world: World) -> World {
 }
 
 public func environmentSnapshotPreservesSpaceLayouts(_ snapshot: EnvironmentSnapshot, in world: World) -> Bool {
+    switch snapshot.reconciliationMode {
+    case .observeOnly, .preserveLayouts:
+        return true
+    case .activeWorkspaceCleanup:
+        break
+    }
+
     guard case .complete = snapshot.axSnapshot.quality else {
         return snapshot.preserveSpaceLayouts
     }
 
     let liveWindowIDs = Set(snapshot.axSnapshot.windows.map(\.id))
+    let hasTrackedMemory = !trackedWindowIDs(in: world.spaces).isEmpty
     let activeSpaceChanged = !world.activeSpaceByDisplay.isEmpty
         ? snapshot.activeSpaceByDisplay != world.activeSpaceByDisplay
         : world.activeSpace != nil && snapshot.activeSpace != world.activeSpace
     return snapshot.preserveSpaceLayouts
+        || (snapshot.hasLowTopologyCoverage && hasTrackedMemory)
         || activeSpaceChanged
         || containsTrackedInactiveSpaceWindows(
             liveWindowIDs,
@@ -134,7 +147,17 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
     let liveWindowDisplay = displayOwnership(for: liveWindows.values, displays: snapshot.displays)
     let activeSpaceByDisplay = normalizedActiveSpaceByDisplay(in: snapshot)
     let activeSpaceIDs = Set(activeSpaceByDisplay.values)
-    let mergedWindowSpace = world.windowSpace.merging(snapshot.windowSpace) { _, live in live }
+    let observedVisibleWindows = observedVisibleWindowsByWorkspace(
+        liveWindowIDs: liveWindowIDs,
+        liveWindowDisplay: liveWindowDisplay,
+        activeSpaceByDisplay: activeSpaceByDisplay
+    )
+    let mergedWindowSpace = reconciledWindowSpace(
+        existing: world.windowSpace,
+        snapshot: snapshot.windowSpace,
+        liveWindowIDs: liveWindowIDs,
+        clearMissingLiveMappings: snapshot.topologyQuality == .managedDisplaySpaces
+    )
     if environmentSnapshotPreservesSpaceLayouts(snapshot, in: world) {
         var windows = world.windows
         windows.merge(liveWindows) { _, live in live }
@@ -150,6 +173,7 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
             windows: windows,
             windowDisplay: windowDisplay,
             windowSpace: mergedWindowSpace,
+            observedVisibleWindows: observedVisibleWindows,
             windowConstraints: world.windowConstraints,
             pendingRules: world.pendingRules,
             config: world.config
@@ -171,6 +195,7 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
             windows: windows,
             windowDisplay: windowDisplay,
             windowSpace: mergedWindowSpace,
+            observedVisibleWindows: observedVisibleWindows,
             windowConstraints: world.windowConstraints,
             pendingRules: world.pendingRules,
             config: world.config
@@ -197,11 +222,8 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
     windowDisplay.merge(liveWindowDisplay) { _, live in live }
 
     var windowSpace = mergedWindowSpace.filter { !removedActiveSpaceWindowIDs.contains($0.key) }
-    for (windowID, displayID) in liveWindowDisplay {
+    for (windowID, _) in liveWindowDisplay {
         if let spaceID = snapshot.windowSpace[windowID] {
-            windowSpace[windowID] = spaceID
-        } else if windowSpace[windowID] == nil,
-                  let spaceID = activeSpaceByDisplay[displayID] {
             windowSpace[windowID] = spaceID
         }
     }
@@ -262,6 +284,7 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
         windows: windows,
         windowDisplay: windowDisplay,
         windowSpace: windowSpace,
+        observedVisibleWindows: observedVisibleWindows,
         windowConstraints: world.windowConstraints.filter { !removedActiveSpaceWindowIDs.contains($0.key) },
         pendingRules: world.pendingRules.filter { !removedActiveSpaceWindowIDs.contains($0.key) },
         config: world.config
@@ -318,6 +341,23 @@ private func normalizedActiveSpaceByDisplay(in snapshot: EnvironmentSnapshot) ->
     return Dictionary(uniqueKeysWithValues: snapshot.displays.keys.map { ($0, activeSpace) })
 }
 
+private func reconciledWindowSpace(
+    existing: [WindowID: SpaceID],
+    snapshot: [WindowID: SpaceID],
+    liveWindowIDs: Set<WindowID>,
+    clearMissingLiveMappings: Bool
+) -> [WindowID: SpaceID] {
+    var result = existing
+    for windowID in liveWindowIDs {
+        if let spaceID = snapshot[windowID] {
+            result[windowID] = spaceID
+        } else if clearMissingLiveMappings {
+            result.removeValue(forKey: windowID)
+        }
+    }
+    return result
+}
+
 private func removedWindowIDsFromActiveWorkspaces(
     activeSpaceByDisplay: [DisplayID: SpaceID],
     liveWindowIDs: Set<WindowID>,
@@ -348,6 +388,19 @@ private func liveWindowIDsForWorkspace(
         guard liveWindowDisplay[windowID] == key.displayID else { return false }
         guard let spaceID = windowSpace[windowID] else { return true }
         return spaceID == key.spaceID
+    }
+}
+
+private func observedVisibleWindowsByWorkspace(
+    liveWindowIDs: Set<WindowID>,
+    liveWindowDisplay: [WindowID: DisplayID],
+    activeSpaceByDisplay: [DisplayID: SpaceID]
+) -> [WorkspaceKey: Set<WindowID>] {
+    liveWindowIDs.reduce(into: [:]) { result, windowID in
+        guard let displayID = liveWindowDisplay[windowID],
+              let spaceID = activeSpaceByDisplay[displayID]
+        else { return }
+        result[WorkspaceKey(displayID: displayID, spaceID: spaceID), default: []].insert(windowID)
     }
 }
 
@@ -421,6 +474,10 @@ private func worldByTrackingOpenedWindow(
         spaces: world.spaces,
         activeSpace: targetActiveSpace
     )
+    var observedVisibleWindows = world.observedVisibleWindows
+    if let displayID, let targetActiveSpace {
+        observedVisibleWindows[WorkspaceKey(displayID: displayID, spaceID: targetActiveSpace), default: []].insert(metadata.id)
+    }
 
     return World(
         displays: world.displays,
@@ -430,6 +487,7 @@ private func worldByTrackingOpenedWindow(
         windows: windows,
         windowDisplay: windowDisplay,
         windowSpace: windowSpace,
+        observedVisibleWindows: observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: pendingRules,
         config: world.config
