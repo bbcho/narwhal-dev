@@ -1,6 +1,16 @@
 import CoreGraphics
 import NarwhalCore
 
+public struct WindowSpaceCandidate: Equatable, Sendable {
+    public let metadata: WindowMetadata
+    public let candidateSpaces: [SpaceID]
+
+    public init(metadata: WindowMetadata, candidateSpaces: [SpaceID]) {
+        self.metadata = metadata
+        self.candidateSpaces = candidateSpaces
+    }
+}
+
 public func spaceTopologyByMergingWindowSpaces(
     _ topology: SpaceTopology,
     windowSpaces: [WindowID: SpaceID]
@@ -9,6 +19,24 @@ public func spaceTopologyByMergingWindowSpaces(
         activeSpaceByDisplay: topology.activeSpaceByDisplay,
         windowSpace: topology.windowSpace.merging(windowSpaces) { _, live in live },
         quality: topology.quality
+    )
+}
+
+public func assignedWindowSpaces(
+    from candidates: [WindowSpaceCandidate],
+    displays: [DisplayID: DisplayInfo],
+    activeSpaceByDisplay: [DisplayID: SpaceID]
+) -> [WindowID: SpaceID] {
+    Dictionary(
+        candidates.compactMap { candidate -> (WindowID, SpaceID)? in
+            selectedWindowSpace(
+                for: candidate.metadata,
+                candidateSpaces: candidate.candidateSpaces,
+                displays: displays,
+                activeSpaceByDisplay: activeSpaceByDisplay
+            ).map { selected in (candidate.metadata.id, selected) }
+        },
+        uniquingKeysWith: { _, replacement in replacement }
     )
 }
 

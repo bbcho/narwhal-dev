@@ -83,6 +83,37 @@ struct WindowSpaceAssignmentModelTests {
         #expect(selected == SpaceID(raw: 3))
     }
 
+    @Test("Assigned window Spaces project raw candidates without shell mutation")
+    func assignedWindowSpacesProjectRawCandidatesWithoutShellMutation() {
+        let leftWindow = windowFixture(id: 1, frame: CGRect(x: 50, y: 50, width: 200, height: 200))
+        let rightWindow = windowFixture(id: 2, frame: CGRect(x: 1200, y: 50, width: 200, height: 200))
+        let unmappedWindow = windowFixture(id: 3, frame: CGRect(x: 500, y: 50, width: 200, height: 200))
+
+        let assigned = assignedWindowSpaces(
+            from: [
+                WindowSpaceCandidate(
+                    metadata: leftWindow,
+                    candidateSpaces: [SpaceID(raw: 7), SpaceID(raw: 3)]
+                ),
+                WindowSpaceCandidate(
+                    metadata: rightWindow,
+                    candidateSpaces: [SpaceID(raw: 9), SpaceID(raw: 3)]
+                ),
+                WindowSpaceCandidate(metadata: unmappedWindow, candidateSpaces: [])
+            ],
+            displays: displaysFixture(),
+            activeSpaceByDisplay: [
+                DisplayID(raw: 1): SpaceID(raw: 3),
+                DisplayID(raw: 2): SpaceID(raw: 9)
+            ]
+        )
+
+        #expect(assigned == [
+            WindowID(raw: 1): SpaceID(raw: 3),
+            WindowID(raw: 2): SpaceID(raw: 9)
+        ])
+    }
+
     @Test("Display containing chooses largest intersection before nearest center fallback")
     func displayContainingChoosesLargestIntersectionBeforeNearestCenterFallback() {
         let displays = displaysFixture()
@@ -119,9 +150,9 @@ struct WindowSpaceAssignmentModelTests {
         ]
     }
 
-    private func windowFixture(frame: CGRect) -> WindowMetadata {
+    private func windowFixture(id: CGWindowID = 42, frame: CGRect) -> WindowMetadata {
         WindowMetadata(
-            id: WindowID(raw: 42),
+            id: WindowID(raw: id),
             bundleID: BundleID(raw: "com.example"),
             title: "Window",
             role: "AXWindow",

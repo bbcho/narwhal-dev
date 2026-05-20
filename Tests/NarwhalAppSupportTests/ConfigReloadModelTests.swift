@@ -28,6 +28,20 @@ struct ConfigReloadModelTests {
         ))
     }
 
+    @Test("Config watch root selection chooses the first existing directory")
+    func configWatchRootSelectionChoosesFirstExistingDirectory() {
+        let candidates = [
+            ConfigWatchRootCandidate(path: "/Users/ben/.config/narwhal", isDirectory: false),
+            ConfigWatchRootCandidate(path: "/Users/ben/.config", isDirectory: true),
+            ConfigWatchRootCandidate(path: "/Users/ben", isDirectory: true)
+        ]
+
+        #expect(selectedConfigWatchRoot(from: candidates) == "/Users/ben/.config")
+        #expect(selectedConfigWatchRoot(from: candidates.map { candidate in
+            ConfigWatchRootCandidate(path: candidate.path, isDirectory: false)
+        }) == nil)
+    }
+
     @Test("Scheduling config reload replaces pending generation")
     func schedulingConfigReloadReplacesPendingGeneration() {
         let first = scheduleConfigReload(in: .empty)

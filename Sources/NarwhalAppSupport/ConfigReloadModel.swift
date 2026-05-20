@@ -26,11 +26,27 @@ public struct ConfigWatchTarget: Equatable, Sendable {
     }
 }
 
+public struct ConfigWatchRootCandidate: Equatable, Sendable {
+    public let path: String
+    public let isDirectory: Bool
+
+    public init(path: String, isDirectory: Bool) {
+        self.path = path
+        self.isDirectory = isDirectory
+    }
+}
+
 public func configChangeEventTouchesTarget(
     path: String,
     target: ConfigWatchTarget
 ) -> Bool {
     path == target.configPath || path == target.directoryPath
+}
+
+public func selectedConfigWatchRoot(
+    from candidates: [ConfigWatchRootCandidate]
+) -> String? {
+    candidates.first { $0.isDirectory }?.path
 }
 
 public func scheduleConfigReload(

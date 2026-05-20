@@ -91,14 +91,17 @@ final class ConfigFileWatcherService {
     private func existingWatchRoot(for url: URL) -> URL? {
         let targetDirectory = url.deletingLastPathComponent().standardizedFileURL
         let configParent = targetDirectory.deletingLastPathComponent().standardizedFileURL
-        for candidate in [targetDirectory, configParent] {
+        let candidates = [targetDirectory, configParent].map { candidate in
             var isDirectory: ObjCBool = false
-            if fileManager.fileExists(atPath: candidate.path, isDirectory: &isDirectory),
-               isDirectory.boolValue {
-                return candidate
-            }
+            let exists = fileManager.fileExists(atPath: candidate.path, isDirectory: &isDirectory)
+            return ConfigWatchRootCandidate(
+                path: candidate.path,
+                isDirectory: exists && isDirectory.boolValue
+            )
         }
-        return nil
+        return selectedConfigWatchRoot(from: candidates).map { path in
+            URL(fileURLWithPath: path).standardizedFileURL
+        }
     }
 
     private func handleEvent(path: String) {

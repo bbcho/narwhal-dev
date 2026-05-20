@@ -140,20 +140,18 @@ private func windowSpaces(
     connectionID: CGSConnectionID,
     copySpacesForWindows: SLSCopySpacesForWindowsFunction
 ) -> [WindowID: SpaceID] {
-    windows.reduce(into: [:]) { result, metadata in
+    let candidates = windows.compactMap { metadata -> WindowSpaceCandidate? in
         let ids = [NSNumber(value: metadata.id.raw)]
         guard let rawSpaces = copySpacesForWindows(connectionID, 7, ids as CFArray)?.takeRetainedValue() else {
-            return
+            return nil
         }
         let spaces = (rawSpaces as NSArray)
             .compactMap { ($0 as? NSNumber).map { SpaceID(raw: $0.uint64Value) } }
-        if let selected = selectedWindowSpace(
-            for: metadata,
-            candidateSpaces: spaces,
-            displays: displays,
-            activeSpaceByDisplay: activeSpaceByDisplay
-        ) {
-            result[metadata.id] = selected
-        }
+        return WindowSpaceCandidate(metadata: metadata, candidateSpaces: spaces)
     }
+    return assignedWindowSpaces(
+        from: candidates,
+        displays: displays,
+        activeSpaceByDisplay: activeSpaceByDisplay
+    )
 }
