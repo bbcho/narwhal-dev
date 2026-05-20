@@ -48,6 +48,30 @@ public func flattenedLayout(of world: World) -> Result<Layout, UnsatisfiableLayo
         .map(\.layout)
 }
 
+public func workspaceLayout(
+    for key: WorkspaceKey,
+    in world: World
+) -> Result<Layout, UnsatisfiableLayout> {
+    guard let display = world.displays[key.displayID],
+          let space = world.spaces[key.spaceID]
+    else {
+        return .success(Layout(tiled: [:], floatingZOrder: [], hidden: []))
+    }
+
+    switch solveLayout(
+        spaceState: space,
+        displayID: key.displayID,
+        frame: display.visibleFrame,
+        gaps: world.config.gaps,
+        constraints: world.windowConstraints
+    ) {
+    case .solved(let layout, _):
+        return .success(layout)
+    case .unsatisfiable(let unsatisfiable):
+        return .failure(unsatisfiable)
+    }
+}
+
 public func tiledBorderTargets(of world: World) -> Result<[FocusBorderTarget], UnsatisfiableLayout> {
     switch flattenedLayout(of: world) {
     case .success(let layout):
@@ -162,24 +186,7 @@ private func activeWorkspaceLayout(
     for key: WorkspaceKey,
     in world: World
 ) -> Result<Layout, UnsatisfiableLayout> {
-    guard let display = world.displays[key.displayID],
-          let space = world.spaces[key.spaceID]
-    else {
-        return .success(Layout(tiled: [:], floatingZOrder: [], hidden: []))
-    }
-
-    switch solveLayout(
-        spaceState: space,
-        displayID: key.displayID,
-        frame: display.visibleFrame,
-        gaps: world.config.gaps,
-        constraints: world.windowConstraints
-    ) {
-    case .solved(let layout, _):
-        return .success(layout)
-    case .unsatisfiable(let unsatisfiable):
-        return .failure(unsatisfiable)
-    }
+    workspaceLayout(for: key, in: world)
 }
 
 private struct PendingTileRuleApplicationAccumulator {

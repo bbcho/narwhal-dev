@@ -270,7 +270,8 @@ final class Overlay {
     }
 
     private func orderFocusBorderWindow(_ window: NSWindow, above targetWindowID: WindowID) {
-        window.order(.above, relativeTo: Int(targetWindowID.raw))
+        let relativeWindowNumber = tiledBorderWindows[targetWindowID]?.windowNumber ?? Int(targetWindowID.raw)
+        window.order(.above, relativeTo: relativeWindowNumber)
     }
 
     private func makeTiledBorderWindow(frame: CGRect) -> NSWindow {
@@ -1646,6 +1647,47 @@ enum FocusBorderVerification {
             return (false, "tiled border overlay did not show both tiled windows")
         }
 
+        let focusedTiledModel = tiledModel.showingFocusBorder(FocusBorderTarget(
+            windowID: secondTiled,
+            frame: CGRect(x: 460, y: 10, width: 420, height: 320),
+            cornerRadius: standardRadius
+        ))
+        tiledOverlay.render(focusedTiledModel)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        guard tiledOverlay.debugFocusBorderWindowID() == secondTiled,
+              tiledOverlay.debugFocusBorderIsVisible() else {
+            tiledOverlay.stop()
+            return (false, "focus border did not show when focused window was also tiled")
+        }
+        guard let focusedTiledFocusNumber = tiledOverlay.debugFocusBorderWindowNumber(),
+              let focusedTiledGreenNumber = tiledOverlay.debugTiledBorderWindowNumber(for: secondTiled),
+              let focusedTiledOrderedNumbers = waitForFrontToBackWindowNumbers(containing: [
+                  focusedTiledFocusNumber,
+                  focusedTiledGreenNumber,
+                  secondTargetWindow.windowNumber
+              ]),
+              let focusedTiledFocusIndex = focusedTiledOrderedNumbers.firstIndex(of: focusedTiledFocusNumber),
+              let focusedTiledGreenIndex = focusedTiledOrderedNumbers.firstIndex(of: focusedTiledGreenNumber),
+              let focusedTiledTargetIndex = focusedTiledOrderedNumbers.firstIndex(of: secondTargetWindow.windowNumber)
+        else {
+            tiledOverlay.stop()
+            return (false, "could not verify focused tiled border window-server stacking")
+        }
+        guard focusedTiledFocusIndex < focusedTiledGreenIndex,
+              focusedTiledGreenIndex < focusedTiledTargetIndex else {
+            tiledOverlay.stop()
+            return (
+                false,
+                "focused tiled focus border is not above green tiled border and target: focusIndex=\(focusedTiledFocusIndex) greenIndex=\(focusedTiledGreenIndex) targetIndex=\(focusedTiledTargetIndex)"
+            )
+        }
+        let focusedTiledStackingMessage = [
+            "focused tiled stacking verified",
+            "focus=\(focusedTiledFocusNumber)",
+            "green=\(focusedTiledGreenNumber)",
+            "target=\(secondTargetWindow.windowNumber)"
+        ].joined(separator: " ")
+
         guard let initialSecondFrame = tiledOverlay.debugTiledBorderFrame(for: secondTiled) else {
             tiledOverlay.stop()
             return (false, "tiled border overlay did not expose the initial second tiled border frame")
@@ -1719,7 +1761,7 @@ enum FocusBorderVerification {
 
         return (
             true,
-            "focus/tiled borders verified: focus standard=\(standardRadius) dialog=\(dialogRadius) utility=\(utilityRadius) tiny=\(tinyRadius) path=\(standardSnapshot.pathBoundingBox.debugDescription); \(focusStacking.message); \(stacking.message)"
+            "focus/tiled borders verified: focus standard=\(standardRadius) dialog=\(dialogRadius) utility=\(utilityRadius) tiny=\(tinyRadius) path=\(standardSnapshot.pathBoundingBox.debugDescription); \(focusedTiledStackingMessage); \(focusStacking.message); \(stacking.message)"
         )
     }
 
@@ -1751,7 +1793,10 @@ enum FocusBorderVerification {
         guard let borderNumber = overlay.debugFocusBorderWindowNumber() else {
             return (false, "focus border window did not expose a window number")
         }
-        guard let initialOrderedWindowNumbers = frontToBackWindowNumbers(),
+        guard let initialOrderedWindowNumbers = waitForFrontToBackWindowNumbers(containing: [
+            borderNumber,
+            targetWindow.windowNumber
+        ]),
               let initialBorderIndex = initialOrderedWindowNumbers.firstIndex(of: borderNumber),
               let targetIndex = initialOrderedWindowNumbers.firstIndex(of: targetWindow.windowNumber)
         else {
@@ -1767,7 +1812,10 @@ enum FocusBorderVerification {
         coverWindow.orderFrontRegardless()
         RunLoop.current.run(until: Date().addingTimeInterval(0.03))
 
-        guard let staleOrderedWindowNumbers = frontToBackWindowNumbers(),
+        guard let staleOrderedWindowNumbers = waitForFrontToBackWindowNumbers(containing: [
+            coverWindow.windowNumber,
+            borderNumber
+        ]),
               let coverIndex = staleOrderedWindowNumbers.firstIndex(of: coverWindow.windowNumber),
               let staleBorderIndex = staleOrderedWindowNumbers.firstIndex(of: borderNumber)
         else {
@@ -1790,7 +1838,10 @@ enum FocusBorderVerification {
         guard overlay.debugFocusBorderWindowID() == coverID else {
             return (false, "focus border did not retarget to newly focused floating window")
         }
-        guard let focusedOrderedWindowNumbers = frontToBackWindowNumbers(),
+        guard let focusedOrderedWindowNumbers = waitForFrontToBackWindowNumbers(containing: [
+            borderNumber,
+            coverWindow.windowNumber
+        ]),
               let focusedBorderIndex = focusedOrderedWindowNumbers.firstIndex(of: borderNumber),
               let focusedCoverIndex = focusedOrderedWindowNumbers.firstIndex(of: coverWindow.windowNumber)
         else {
@@ -1839,7 +1890,11 @@ enum FocusBorderVerification {
         guard let borderNumber = overlay.debugTiledBorderWindowNumber(for: targetID) else {
             return (false, "tiled border window did not expose a window number")
         }
-        guard let orderedWindowNumbers = frontToBackWindowNumbers(),
+        guard let orderedWindowNumbers = waitForFrontToBackWindowNumbers(containing: [
+            coverWindow.windowNumber,
+            borderNumber,
+            targetWindow.windowNumber
+        ]),
               let coverIndex = orderedWindowNumbers.firstIndex(of: coverWindow.windowNumber),
               let borderIndex = orderedWindowNumbers.firstIndex(of: borderNumber),
               let targetIndex = orderedWindowNumbers.firstIndex(of: targetWindow.windowNumber)
@@ -1860,7 +1915,10 @@ enum FocusBorderVerification {
         ]))
         RunLoop.current.run(until: Date().addingTimeInterval(0.03))
 
-        guard let focusedOrderedWindowNumbers = frontToBackWindowNumbers(),
+        guard let focusedOrderedWindowNumbers = waitForFrontToBackWindowNumbers(containing: [
+            borderNumber,
+            targetWindow.windowNumber
+        ]),
               let focusedBorderIndex = focusedOrderedWindowNumbers.firstIndex(of: borderNumber),
               let focusedTargetIndex = focusedOrderedWindowNumbers.firstIndex(of: targetWindow.windowNumber)
         else {
@@ -1909,6 +1967,21 @@ enum FocusBorderVerification {
                 return number
             }
             return nil
+        }
+    }
+
+    private static func waitForFrontToBackWindowNumbers(
+        containing requiredWindowNumbers: [Int],
+        timeout: TimeInterval = 0.6
+    ) -> [Int]? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            if let numbers = frontToBackWindowNumbers(),
+               requiredWindowNumbers.allSatisfy({ numbers.contains($0) }) {
+                return numbers
+            }
+            guard Date() < deadline else { return nil }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
         }
     }
 }

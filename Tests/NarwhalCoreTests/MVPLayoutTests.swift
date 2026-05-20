@@ -3227,8 +3227,8 @@ struct MVPLayoutTests {
         #expect(next.windowDisplay == [a: displayID, b: displayID])
     }
 
-    @Test("Apply swap can exchange windows across adjacent displays")
-    func applySwapAcrossDisplaysUpdatesDisplayOwnership() throws {
+    @Test("Apply swap stays inside one display workspace")
+    func applySwapRejectsNeighborOnAnotherDisplay() throws {
         let leftDisplay = DisplayID(raw: 1)
         let rightDisplay = DisplayID(raw: 2)
         let space = SpaceID(raw: 1)
@@ -3257,23 +3257,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.swapInTree(a, .right), to: world) else {
-            Issue.record("Expected cross-display swap right to succeed")
-            return
-        }
-
-        let nextFrames: [WindowID: CGRect]
-        switch flattenedLayout(of: next) {
-        case .success(let layout):
-            nextFrames = layout.tiled
-        case .failure(let unsatisfiable):
-            Issue.record("Expected swapped layout to solve, got \(unsatisfiable)")
-            return
-        }
-        #expect(nextFrames[b] == CGRect(x: 0, y: 0, width: 500, height: 800))
-        #expect(nextFrames[a] == CGRect(x: 1500, y: 0, width: 500, height: 800))
-        #expect(next.windowDisplay == [a: rightDisplay, b: leftDisplay])
-        #expect(next.spaces[space]?.focused == a)
+        #expect(apply(.swapInTree(a, .right), to: world) == .failure(.noNeighbor(.right)))
     }
 
     @Test("Apply swap rejects untiled source windows")

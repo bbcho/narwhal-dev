@@ -229,9 +229,14 @@ private func applyFocusDirection(_ direction: Direction, to world: World) -> Res
     guard world.windows[focusedWindowID] != nil else {
         return .failure(.windowNotFound(focusedWindowID))
     }
+    guard let key = observedWorkspaceKey(forVisibleWindow: focusedWindowID, in: world)
+        ?? workspaceKey(forWindow: focusedWindowID, in: world)
+    else {
+        return .failure(.activeSpaceUnavailable)
+    }
 
     let currentLayout: Layout
-    switch flattenedLayout(of: world) {
+    switch workspaceLayout(for: key, in: world) {
     case .success(let layout):
         currentLayout = layout
     case .failure(let unsatisfiable):
@@ -293,9 +298,12 @@ private func applySwap(_ windowID: WindowID, direction: Direction, to world: Wor
     else {
         return .failure(.activeSpaceUnavailable)
     }
+    guard let sourceDisplay = tiledDisplay(containing: windowID, in: space) else {
+        return .failure(.windowIsFloating(windowID))
+    }
 
     let currentLayout: Layout
-    switch flattenedLayout(of: world) {
+    switch workspaceLayout(for: WorkspaceKey(displayID: sourceDisplay, spaceID: key.spaceID), in: world) {
     case .success(let layout):
         currentLayout = layout
     case .failure(let unsatisfiable):
@@ -310,8 +318,7 @@ private func applySwap(_ windowID: WindowID, direction: Direction, to world: Wor
     guard world.windows[targetWindowID] != nil else {
         return .failure(.windowNotFound(targetWindowID))
     }
-    guard let sourceDisplay = tiledDisplay(containing: windowID, in: space),
-          let targetDisplay = tiledDisplay(containing: targetWindowID, in: space)
+    guard let targetDisplay = tiledDisplay(containing: targetWindowID, in: space)
     else {
         return .failure(.windowIsFloating(windowID))
     }
@@ -432,6 +439,43 @@ private func applyBalance(_ spaceID: SpaceID, to world: World) -> Result<World, 
         activeSpaceByDisplay: world.activeSpaceByDisplay,
         spaces: world.spaces.setting(
             spaceID,
+            to: SpaceState(id: space.id, displays: displayStates, focused: space.focused)
+        ),
+        windows: world.windows,
+        windowDisplay: world.windowDisplay,
+        windowSpace: world.windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
+        windowConstraints: world.windowConstraints,
+        pendingRules: world.pendingRules,
+        config: world.config
+    ))
+}
+
+public func worldByBalancingWorkspace(
+    _ key: WorkspaceKey,
+    in world: World
+) -> Result<World, CommandError> {
+    guard let space = world.spaces[key.spaceID] else {
+        return .failure(.spaceNotFound(key.spaceID))
+    }
+    guard let displayState = space.displays[key.displayID] else {
+        return .failure(.displayNotFound(key.displayID))
+    }
+    let displayStates = space.displays.setting(
+        key.displayID,
+        to: DisplaySpaceState(
+            displayID: displayState.displayID,
+            tree: balanceTree(displayState.tree),
+            floating: sanitizedFloatingIDs(in: displayState)
+        )
+    )
+
+    return .success(World(
+        displays: world.displays,
+        activeSpace: world.activeSpace,
+        activeSpaceByDisplay: world.activeSpaceByDisplay,
+        spaces: world.spaces.setting(
+            key.spaceID,
             to: SpaceState(id: space.id, displays: displayStates, focused: space.focused)
         ),
         windows: world.windows,

@@ -33,16 +33,22 @@ public struct FocusPlanResult: Equatable, Sendable {
     }
 }
 
+public enum CommandPlanScope: Equatable, Sendable {
+    case activeWorkspaces
+    case workspace(WorkspaceKey)
+}
+
 public func commandPlan(
     from oldWorld: World,
     to newWorld: World,
     focusedWindowID: WindowID?,
     undoWorld: World?,
-    generation: LayoutGeneration
+    generation: LayoutGeneration,
+    scope: CommandPlanScope = .activeWorkspaces
 ) -> Result<CommandPlanResult, CommandError> {
-    switch flattenedLayout(of: oldWorld) {
+    switch commandLayout(of: oldWorld, scope: scope) {
     case .success(let oldLayout):
-        switch flattenedLayout(of: newWorld) {
+        switch commandLayout(of: newWorld, scope: scope) {
         case .success(let newLayout):
             return .success(commandPlanResult(
                 newWorld: newWorld,
@@ -122,7 +128,12 @@ public func focusDirectionPlan(
     guard world.windows[focusedWindowID] != nil else {
         return .failure(.windowNotFound(focusedWindowID))
     }
-    switch flattenedLayout(of: world) {
+    guard let key = observedWorkspaceKey(forVisibleWindow: focusedWindowID, in: world)
+        ?? workspaceKey(forWindow: focusedWindowID, in: world)
+    else {
+        return .failure(.activeSpaceUnavailable)
+    }
+    switch workspaceLayout(for: key, in: world) {
     case .success(let layout):
         let targetWindowID = focusTarget(in: layout, from: focusedWindowID, direction: direction)
             ?? focusTarget(
@@ -169,10 +180,15 @@ public func focusCycleCandidatePlans(
     }
 
     let layout: Layout?
-    switch flattenedLayout(of: world) {
-    case .success(let value):
-        layout = value
-    case .failure:
+    if let key = focusedWindowID.flatMap({ observedWorkspaceKey(forVisibleWindow: $0, in: world) })
+        ?? focusedWindowID.flatMap({ workspaceKey(forWindow: $0, in: world) }) {
+        switch workspaceLayout(for: key, in: world) {
+        case .success(let value):
+            layout = value
+        case .failure:
+            layout = nil
+        }
+    } else {
         layout = nil
     }
     let candidates = candidateIDs.compactMap { windowID -> FocusPlanResult? in
@@ -185,21 +201,45 @@ public func focusCycleCandidatePlans(
     return .success(candidates)
 }
 
+public func commandPlanScope(
+    focusedWindowID: WindowID?,
+    oldWorld: World,
+    newWorld: World
+) -> CommandPlanScope {
+    guard let focusedWindowID else { return .activeWorkspaces }
+    if let key = observedWorkspaceKey(forVisibleWindow: focusedWindowID, in: newWorld)
+        ?? workspaceKey(forWindow: focusedWindowID, in: newWorld)
+        ?? observedWorkspaceKey(forVisibleWindow: focusedWindowID, in: oldWorld)
+        ?? workspaceKey(forWindow: focusedWindowID, in: oldWorld) {
+        return .workspace(key)
+    }
+    return .activeWorkspaces
+}
+
 public func focusPreviousPlan(
     in world: World,
-    runtime: WorldRuntimeState
+    runtime: WorldRuntimeState,
+    from focusedWindowID: WindowID?
 ) -> Result<FocusPlanResult, CommandError> {
-    let current = world.activeSpace.flatMap { world.spaces[$0]?.focused }
+    let current = focusedWindowID ?? world.activeSpace.flatMap { world.spaces[$0]?.focused }
+    let key = current.flatMap { observedWorkspaceKey(forVisibleWindow: $0, in: world) }
+        ?? current.flatMap { workspaceKey(forWindow: $0, in: world) }
+        ?? activeWorkspaceKeys(in: world).first
     let activeWindowIDs: Set<WindowID>
-    switch flattenedLayout(of: world) {
-    case .success(let layout):
-        activeWindowIDs = Set(layout.tiled.keys).union(layout.floatingZOrder)
-    case .failure:
+    if let key {
+        switch workspaceLayout(for: key, in: world) {
+        case .success(let layout):
+            activeWindowIDs = Set(layout.tiled.keys).union(layout.floatingZOrder)
+        case .failure:
+            activeWindowIDs = []
+        }
+    } else {
         activeWindowIDs = []
     }
     guard let targetWindowID = previousFocusTarget(
         in: world,
         runtime: runtime,
+        currentWindowID: current,
         activeWindowIDs: activeWindowIDs
     ) else {
         return .failure(.windowNotFound(current ?? WindowID(raw: 0)))
@@ -264,6 +304,18 @@ private func commandPlanResult(
         plannedWorld: newWorld,
         undoWorld: undoWorld
     )
+}
+
+private func commandLayout(
+    of world: World,
+    scope: CommandPlanScope
+) -> Result<Layout, UnsatisfiableLayout> {
+    switch scope {
+    case .activeWorkspaces:
+        return flattenedLayout(of: world)
+    case .workspace(let key):
+        return workspaceLayout(for: key, in: world)
+    }
 }
 
 private func focusPlan(

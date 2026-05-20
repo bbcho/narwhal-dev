@@ -67,6 +67,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var spaceSettledRefreshTimers: [Timer] = []
     private var spaceTransitionPreserveTimer: Timer?
     private var spaceTransitionPreservation = SpaceTransitionPreservationState.empty
+    private var pendingHotkeys: [HotkeyAction] = []
+    private var isDrainingHotkeys = false
     private var runningServices: RunningServices?
     private var servicesStarted = false
     private var isPaused = false
@@ -91,6 +93,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if ProcessInfo.processInfo.arguments.contains("--verify-observation-replay") {
             let result = ObservationReplayVerification.verifyPartialTopologyReplay()
+            print(result.message)
+            Darwin.exit(result.passed ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.arguments.contains("--verify-workspace-scope") {
+            let result = WorkspaceScopeVerification.verifyFocusedCommandsStayOnOneDisplay()
             print(result.message)
             Darwin.exit(result.passed ? 0 : 1)
         }
@@ -618,7 +625,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installHotkeys() throws -> ServiceStop {
         let manager = HotkeyManager(bindings: config.keymap, reporter: reporter) { [weak self] action in
             Task { @MainActor in
-                await self?.performHotkey(action)
+                self?.enqueueHotkey(action)
             }
         }
         try manager.start()
@@ -640,10 +647,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             axClient: axClient,
             echoSuppressor: echoSuppressor,
             reporter: reporter,
-            activeSpaceID: { [weak self] in
-                guard let self else { return nil }
-                guard case .success(let spaceID) = self.spaceClient.activeSpaceID() else { return nil }
-                return spaceID
+            activeSpaceByDisplay: { [weak self] windows in
+                guard let self else { return [:] }
+                let displays = self.displayClient.currentDisplays()
+                return self.spaceClient
+                    .spaceTopology(displays: displays, windows: windows)
+                    .activeSpaceByDisplay
             },
             focusedWindowUnavailable: { [weak self] in
                 self?.focusedWindowUnavailable()
@@ -777,6 +786,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    private func enqueueHotkey(_ action: HotkeyAction) {
+        let maxPendingHotkeys = 32
+        if pendingHotkeys.count >= maxPendingHotkeys {
+            pendingHotkeys.removeFirst(pendingHotkeys.count - maxPendingHotkeys + 1)
+            reporter.info("Hotkey queue trimmed to \(maxPendingHotkeys) pending action(s)")
+        }
+        pendingHotkeys.append(action)
+        guard !isDrainingHotkeys else { return }
+        isDrainingHotkeys = true
+        Task { @MainActor in
+            await self.drainHotkeyQueue()
+        }
+    }
+
+    @MainActor
+    private func drainHotkeyQueue() async {
+        while !pendingHotkeys.isEmpty {
+            let action = pendingHotkeys.removeFirst()
+            await performHotkey(action)
+        }
+        isDrainingHotkeys = false
+    }
+
+    @MainActor
     private func performHotkey(_ action: HotkeyAction) async {
         if routeCommandOverlayHotkey(action) {
             return
@@ -785,6 +818,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if isPaused, pausesTilingBlocks(action) {
             reporter.info("Hotkey ignored while Narwhal is paused: \(describe(action))")
             showOperatorFeedback("Narwhal paused", tone: .warning, showsHUD: false)
+            return
+        }
+
+        guard await waitForStableWorkspaceIfNeeded(for: action) else {
             return
         }
 
@@ -837,6 +874,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 zones: config.zones
             )
         }
+    }
+
+    @MainActor
+    private func waitForStableWorkspaceIfNeeded(for action: HotkeyAction) async -> Bool {
+        guard workspaceStabilityPolicy(for: action) == .waitForStableWorkspace,
+              spaceTransitionPreservation.isPreservingSpaceLayouts
+        else { return true }
+
+        let description = describe(action)
+        reporter.info("Hotkey waiting for Space transition to settle: \(description)")
+        let deadline = Date().addingTimeInterval(Self.activeSpaceTransitionPreserveDuration + 0.5)
+        while spaceTransitionPreservation.isPreservingSpaceLayouts && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        guard !spaceTransitionPreservation.isPreservingSpaceLayouts else {
+            reporter.error("Hotkey skipped because Space transition did not settle: \(description)")
+            showOperatorFeedback("Space still settling", tone: .warning, showsHUD: false)
+            return false
+        }
+        return true
     }
 
     private func pausesTilingBlocks(_ action: HotkeyAction) -> Bool {
@@ -1062,7 +1119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await worldActor.recordExternalFocus(fallback.id)
         }
 
-        switch await worldActor.planFocusPrevious() {
+        switch await worldActor.planFocusPrevious(from: focusedWindowID) {
         case .success(let result):
             return await focusWindow(result, reason: "focus previous")
         case .failure(let error):
@@ -1306,16 +1363,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     @discardableResult
     private func performBalance() async -> Bool {
-        if let failure = await performActiveSpaceBalance(
-            operation: "Balance",
-            refreshReason: "pre-balance",
-            persistReason: "balance"
-        ) {
-            reporter.error("Balance rejected: \(failure.message)")
-            showOperatorFeedback("Balance failed: \(failure.message)", tone: .error)
+        let operation = "Balance"
+        guard let context = await focusedLayoutContext(operation: operation),
+              let displayID = displayForFocusedWindow(context, operation: operation)
+        else { return false }
+        guard await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-balance") else {
             return false
         }
-        return true
+
+        switch await worldActor.planBalanceWorkspace(containing: context.id) {
+        case .success(let result):
+            return await applyPlannedBalance(
+                result,
+                operation: operation,
+                persistReason: "balance",
+                retryOnClamp: true
+            ) {
+                await self.worldActor.planBalanceWorkspace(containing: context.id)
+            }
+        case .failure(let error):
+            reporter.error("Balance rejected by core: \(error.message)")
+            showOperatorFeedback("Balance failed: \(error.message)", tone: .error)
+            return false
+        }
     }
 
     @MainActor
@@ -1826,16 +1896,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ result: CommandPlanResult,
         operation: String,
         persistReason: String,
-        retryOnClamp: Bool
+        retryOnClamp: Bool,
+        replanAfterClamp: @escaping () async -> Result<CommandPlanResult, CommandError>
     ) async -> Bool {
         await applyPlannedLayout(
             result,
             operation: operation,
             persistReason: persistReason,
             retryOnClamp: retryOnClamp
-        ) {
-            await self.worldActor.planBalanceActiveSpace()
-        }
+        ) { await replanAfterClamp() }
     }
 
     @MainActor
@@ -2335,7 +2404,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reporter.info("\(operation) selected active Space \(activeSpace.raw)")
         switch await worldActor.planBalanceActiveSpace() {
         case .success(let result):
-            if await applyPlannedBalance(result, operation: operation, persistReason: persistReason, retryOnClamp: true) {
+            if await applyPlannedBalance(
+                result,
+                operation: operation,
+                persistReason: persistReason,
+                retryOnClamp: true,
+                replanAfterClamp: {
+                    await self.worldActor.planBalanceActiveSpace()
+                }
+            ) {
                 return nil
             }
             return CommandExecutionFailure(

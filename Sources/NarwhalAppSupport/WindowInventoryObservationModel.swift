@@ -4,22 +4,22 @@ import NarwhalCore
 public struct WindowInventoryObservationState: Equatable, Sendable {
     public let inventory: WindowInventoryState?
     public let frameInventory: WindowFrameInventoryState?
-    public let spaceID: SpaceID?
+    public let activeSpaceByDisplay: [DisplayID: SpaceID]
 
     public init(
         inventory: WindowInventoryState?,
         frameInventory: WindowFrameInventoryState?,
-        spaceID: SpaceID?
+        activeSpaceByDisplay: [DisplayID: SpaceID]
     ) {
         self.inventory = inventory
         self.frameInventory = frameInventory
-        self.spaceID = spaceID
+        self.activeSpaceByDisplay = activeSpaceByDisplay
     }
 
     public static let empty = WindowInventoryObservationState(
         inventory: nil,
         frameInventory: nil,
-        spaceID: nil
+        activeSpaceByDisplay: [:]
     )
 }
 
@@ -49,33 +49,36 @@ public struct WindowInventoryObservationTransition: Equatable, Sendable {
 
 public func windowInventoryObservationBaseline(
     windows: [WindowMetadata],
-    spaceID: SpaceID?
+    activeSpaceByDisplay: [DisplayID: SpaceID]
 ) -> WindowInventoryObservationState {
     WindowInventoryObservationState(
         inventory: WindowInventoryState(visibleWindowIDs: Set(windows.map(\.id))),
         frameInventory: WindowFrameInventoryState(
             framesByWindowID: Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0.frame) })
         ),
-        spaceID: spaceID
+        activeSpaceByDisplay: activeSpaceByDisplay
     )
 }
 
 public func observeWindowInventory(
     windows: [WindowMetadata],
-    spaceID: SpaceID?,
+    activeSpaceByDisplay: [DisplayID: SpaceID],
     tolerance: CGFloat,
     in state: WindowInventoryObservationState
 ) -> WindowInventoryObservationTransition {
     guard let previous = state.inventory else {
         return WindowInventoryObservationTransition(
-            state: windowInventoryObservationBaseline(windows: windows, spaceID: spaceID),
+            state: windowInventoryObservationBaseline(
+                windows: windows,
+                activeSpaceByDisplay: activeSpaceByDisplay
+            ),
             events: [],
             frameEvents: [],
             effect: nil
         )
     }
 
-    guard spaceID == state.spaceID else {
+    guard !activeDisplaySpacesChanged(from: state.activeSpaceByDisplay, to: activeSpaceByDisplay) else {
         return WindowInventoryObservationTransition(
             state: .empty,
             events: [],
@@ -106,10 +109,18 @@ public func observeWindowInventory(
         state: WindowInventoryObservationState(
             inventory: poll.state,
             frameInventory: framePoll.state,
-            spaceID: spaceID
+            activeSpaceByDisplay: activeSpaceByDisplay
         ),
         events: poll.events,
         frameEvents: framePoll.events,
         effect: nil
     )
+}
+
+private func activeDisplaySpacesChanged(
+    from previous: [DisplayID: SpaceID],
+    to current: [DisplayID: SpaceID]
+) -> Bool {
+    guard !previous.isEmpty, !current.isEmpty else { return false }
+    return previous != current
 }

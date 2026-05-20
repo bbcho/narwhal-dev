@@ -5,20 +5,20 @@ import NarwhalCore
 
 @Suite("Window inventory observation model")
 struct WindowInventoryObservationModelTests {
-    @Test("Baseline records visible windows, frames, and Space")
-    func baselineRecordsInventoryFramesAndSpace() {
-        let space = SpaceID(raw: 3)
+    @Test("Baseline records visible windows, frames, and per-display Spaces")
+    func baselineRecordsInventoryFramesAndPerDisplaySpaces() {
+        let activeSpaces = [DisplayID(raw: 1): SpaceID(raw: 3)]
         let first = metadata(WindowID(raw: 10))
         let second = metadata(WindowID(raw: 20), frame: CGRect(x: 40, y: 50, width: 600, height: 500))
 
-        let state = windowInventoryObservationBaseline(windows: [second, first], spaceID: space)
+        let state = windowInventoryObservationBaseline(windows: [second, first], activeSpaceByDisplay: activeSpaces)
 
         #expect(state.inventory == WindowInventoryState(visibleWindowIDs: [first.id, second.id]))
         #expect(state.frameInventory == WindowFrameInventoryState(framesByWindowID: [
             first.id: first.frame,
             second.id: second.frame
         ]))
-        #expect(state.spaceID == space)
+        #expect(state.activeSpaceByDisplay == activeSpaces)
     }
 
     @Test("First observation initializes baseline without emitting events")
@@ -27,12 +27,15 @@ struct WindowInventoryObservationModelTests {
 
         let transition = observeWindowInventory(
             windows: [window],
-            spaceID: SpaceID(raw: 4),
+            activeSpaceByDisplay: [DisplayID(raw: 1): SpaceID(raw: 4)],
             tolerance: 1,
             in: .empty
         )
 
-        #expect(transition.state == windowInventoryObservationBaseline(windows: [window], spaceID: SpaceID(raw: 4)))
+        #expect(transition.state == windowInventoryObservationBaseline(
+            windows: [window],
+            activeSpaceByDisplay: [DisplayID(raw: 1): SpaceID(raw: 4)]
+        ))
         #expect(transition.events == [])
         #expect(transition.frameEvents == [])
         #expect(transition.effect == nil)
@@ -41,11 +44,15 @@ struct WindowInventoryObservationModelTests {
     @Test("Space change requests boundary reset instead of diffing unrelated windows")
     func spaceChangeRequestsBoundaryReset() {
         let original = metadata(WindowID(raw: 40))
-        let state = windowInventoryObservationBaseline(windows: [original], spaceID: SpaceID(raw: 1))
+        let display = DisplayID(raw: 1)
+        let state = windowInventoryObservationBaseline(
+            windows: [original],
+            activeSpaceByDisplay: [display: SpaceID(raw: 1)]
+        )
 
         let transition = observeWindowInventory(
             windows: [metadata(WindowID(raw: 41))],
-            spaceID: SpaceID(raw: 2),
+            activeSpaceByDisplay: [display: SpaceID(raw: 2)],
             tolerance: 1,
             in: state
         )
@@ -56,6 +63,29 @@ struct WindowInventoryObservationModelTests {
         #expect(transition.effect == .activeSpaceChanged)
     }
 
+    @Test("Focused display changes do not reset inventory when display Space topology is unchanged")
+    func focusedDisplayChangeDoesNotResetInventoryWithSameDisplaySpaces() {
+        let first = metadata(WindowID(raw: 42))
+        let activeSpaces = [
+            DisplayID(raw: 1): SpaceID(raw: 11),
+            DisplayID(raw: 2): SpaceID(raw: 22)
+        ]
+        let state = windowInventoryObservationBaseline(
+            windows: [first],
+            activeSpaceByDisplay: activeSpaces
+        )
+
+        let transition = observeWindowInventory(
+            windows: [first],
+            activeSpaceByDisplay: activeSpaces,
+            tolerance: 1,
+            in: state
+        )
+
+        #expect(transition.state.activeSpaceByDisplay == activeSpaces)
+        #expect(transition.effect == nil)
+    }
+
     @Test("Likely Space replacement suppresses bulk window churn and resets boundary")
     func likelySpaceReplacementSuppressesBulkWindowChurn() {
         let state = windowInventoryObservationBaseline(
@@ -64,7 +94,7 @@ struct WindowInventoryObservationModelTests {
                 metadata(WindowID(raw: 51)),
                 metadata(WindowID(raw: 52))
             ],
-            spaceID: SpaceID(raw: 5)
+            activeSpaceByDisplay: [DisplayID(raw: 1): SpaceID(raw: 5)]
         )
         let replacement = [
             metadata(WindowID(raw: 60)),
@@ -74,7 +104,7 @@ struct WindowInventoryObservationModelTests {
 
         let transition = observeWindowInventory(
             windows: replacement,
-            spaceID: SpaceID(raw: 5),
+            activeSpaceByDisplay: [DisplayID(raw: 1): SpaceID(raw: 5)],
             tolerance: 1,
             in: state
         )
@@ -91,12 +121,12 @@ struct WindowInventoryObservationModelTests {
         let opened = metadata(WindowID(raw: 71))
         let state = windowInventoryObservationBaseline(
             windows: [staying],
-            spaceID: SpaceID(raw: 7)
+            activeSpaceByDisplay: [DisplayID(raw: 1): SpaceID(raw: 7)]
         )
 
         let transition = observeWindowInventory(
             windows: [opened, staying],
-            spaceID: SpaceID(raw: 7),
+            activeSpaceByDisplay: [DisplayID(raw: 1): SpaceID(raw: 7)],
             tolerance: 1,
             in: state
         )
@@ -115,7 +145,7 @@ struct WindowInventoryObservationModelTests {
         let second = metadata(WindowID(raw: 81))
         let state = windowInventoryObservationBaseline(
             windows: [first, second],
-            spaceID: SpaceID(raw: 8)
+            activeSpaceByDisplay: [DisplayID(raw: 1): SpaceID(raw: 8)]
         )
         let movedFirst = metadata(first.id, frame: first.frame.offsetBy(dx: 20, dy: 0))
         let resizedSecond = metadata(
@@ -125,7 +155,7 @@ struct WindowInventoryObservationModelTests {
 
         let transition = observeWindowInventory(
             windows: [resizedSecond, movedFirst],
-            spaceID: SpaceID(raw: 8),
+            activeSpaceByDisplay: [DisplayID(raw: 1): SpaceID(raw: 8)],
             tolerance: 1,
             in: state
         )

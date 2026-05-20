@@ -133,7 +133,36 @@ actor WorldActor {
         guard let activeSpace = world.activeSpace else {
             return .failure(.activeSpaceUnavailable)
         }
-        return planLayoutCommand(.balance(activeSpace), focusedWindowID: world.spaces[activeSpace]?.focused)
+        switch apply(.balance(activeSpace), to: world) {
+        case .success(let newWorld):
+            return makePlan(
+                from: world,
+                to: newWorld,
+                focusedWindowID: world.spaces[activeSpace]?.focused,
+                undoWorld: world,
+                scope: .activeWorkspaces
+            )
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    func planBalanceWorkspace(containing windowID: WindowID) -> Result<CommandPlanResult, CommandError> {
+        guard let key = workspaceKey(forWindow: windowID, in: world) else {
+            return .failure(.activeSpaceUnavailable)
+        }
+        switch worldByBalancingWorkspace(key, in: world) {
+        case .success(let newWorld):
+            return makePlan(
+                from: world,
+                to: newWorld,
+                focusedWindowID: windowID,
+                undoWorld: world,
+                scope: .workspace(key)
+            )
+        case .failure(let error):
+            return .failure(error)
+        }
     }
 
     func planShuffleActiveSpace() -> Result<CommandPlanResult, CommandError> {
@@ -220,14 +249,21 @@ actor WorldActor {
         from oldWorld: World,
         to newWorld: World,
         focusedWindowID: WindowID?,
-        undoWorld: World?
+        undoWorld: World?,
+        scope explicitScope: CommandPlanScope? = nil
     ) -> Result<CommandPlanResult, CommandError> {
-        advanceLayoutGeneration(onSuccess: commandPlan(
+        let scope = explicitScope ?? commandPlanScope(
+            focusedWindowID: focusedWindowID,
+            oldWorld: oldWorld,
+            newWorld: newWorld
+        )
+        return advanceLayoutGeneration(onSuccess: commandPlan(
             from: oldWorld,
             to: newWorld,
             focusedWindowID: focusedWindowID,
             undoWorld: undoWorld,
-            generation: LayoutGeneration(raw: nextGeneration)
+            generation: LayoutGeneration(raw: nextGeneration),
+            scope: scope
         ))
     }
 
@@ -271,8 +307,8 @@ actor WorldActor {
         focusCycleCandidatePlans(in: world, from: focusedWindowID, direction: direction)
     }
 
-    func planFocusPrevious() -> Result<FocusPlanResult, CommandError> {
-        focusPreviousPlan(in: world, runtime: runtimeState)
+    func planFocusPrevious(from focusedWindowID: WindowID?) -> Result<FocusPlanResult, CommandError> {
+        focusPreviousPlan(in: world, runtime: runtimeState, from: focusedWindowID)
     }
 
     func planFocus(_ windowID: WindowID) -> Result<FocusPlanResult, CommandError> {

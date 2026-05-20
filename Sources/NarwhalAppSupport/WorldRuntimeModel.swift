@@ -66,9 +66,10 @@ public func runtimeFocusedWindowFallback(
 public func previousFocusTarget(
     in world: World,
     runtime: WorldRuntimeState,
+    currentWindowID: WindowID? = nil,
     activeWindowIDs: Set<WindowID>
 ) -> WindowID? {
-    let current = world.activeSpace.flatMap { world.spaces[$0]?.focused }
+    let current = currentWindowID ?? world.activeSpace.flatMap { world.spaces[$0]?.focused }
     return runtime.focusHistory.reversed().first { windowID in
         windowID != current && activeWindowIDs.contains(windowID) && world.windows[windowID] != nil
     }

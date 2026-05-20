@@ -34,6 +34,47 @@ struct CommandPlanningModelTests {
         #expect(oldWorld.spaces[spaceID]?.displays[displayID]?.floating == [right.id])
     }
 
+    @Test("Focused command plans are scoped to the focused display workspace")
+    func focusedCommandPlansAreScopedToFocusedDisplayWorkspace() throws {
+        let leftTiled = windowFixture(1, frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        let leftFloating = windowFixture(2, frame: CGRect(x: 200, y: 0, width: 400, height: 800))
+        let rightTiled = windowFixture(3, frame: CGRect(x: 1200, y: 0, width: 400, height: 800))
+        let leftDisplay = DisplayID(raw: 1)
+        let rightDisplay = DisplayID(raw: 2)
+        let oldWorld = multiDisplayWorldFixture(
+            windows: [leftTiled, leftFloating, rightTiled],
+            displays: [
+                leftDisplay: DisplaySpaceState(displayID: leftDisplay, tree: .leaf(leftTiled.id), floating: [leftFloating.id]),
+                rightDisplay: DisplaySpaceState(displayID: rightDisplay, tree: .leaf(rightTiled.id), floating: [])
+            ],
+            windowDisplay: [
+                leftTiled.id: leftDisplay,
+                leftFloating.id: leftDisplay,
+                rightTiled.id: rightDisplay
+            ],
+            focused: leftFloating.id
+        )
+        let newWorld = try apply(.push(leftFloating.id, .right), to: oldWorld).get()
+        let scope = commandPlanScope(
+            focusedWindowID: leftFloating.id,
+            oldWorld: oldWorld,
+            newWorld: newWorld
+        )
+
+        let plan = try commandPlan(
+            from: oldWorld,
+            to: newWorld,
+            focusedWindowID: leftFloating.id,
+            undoWorld: oldWorld,
+            generation: LayoutGeneration(raw: 43),
+            scope: scope
+        ).get()
+
+        #expect(scope == .workspace(WorkspaceKey(displayID: leftDisplay, spaceID: spaceID)))
+        #expect(Set(plan.desiredLayout.layout.tiled.keys) == [leftTiled.id, leftFloating.id])
+        #expect(plan.desiredLayout.layout.tiled[rightTiled.id] == nil)
+    }
+
     @Test("Current layout plan returns nil when there are no tiled windows")
     func currentLayoutPlanReturnsNilWithoutTiledWindows() throws {
         let window = windowFixture(1)
@@ -62,6 +103,62 @@ struct CommandPlanningModelTests {
 
         #expect(plan.window.id == right.id)
         #expect(plan.frame == right.frame)
+    }
+
+    @Test("Focus direction plan does not cross display workspaces")
+    func focusDirectionPlanDoesNotCrossDisplayWorkspaces() throws {
+        let left = windowFixture(1, frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        let right = windowFixture(2, frame: CGRect(x: 1200, y: 0, width: 400, height: 800))
+        let leftDisplay = DisplayID(raw: 1)
+        let rightDisplay = DisplayID(raw: 2)
+        let world = multiDisplayWorldFixture(
+            windows: [left, right],
+            displays: [
+                leftDisplay: DisplaySpaceState(displayID: leftDisplay, tree: .leaf(left.id), floating: []),
+                rightDisplay: DisplaySpaceState(displayID: rightDisplay, tree: .leaf(right.id), floating: [])
+            ],
+            windowDisplay: [
+                left.id: leftDisplay,
+                right.id: rightDisplay
+            ],
+            focused: left.id
+        )
+
+        #expect(focusDirectionPlan(in: world, from: left.id, direction: .right) == .failure(.noNeighbor(.right)))
+    }
+
+    @Test("Focus previous stays inside the current display workspace")
+    func focusPreviousStaysInsideCurrentDisplayWorkspace() throws {
+        let leftCurrent = windowFixture(1, frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        let leftPrevious = windowFixture(2, frame: CGRect(x: 500, y: 0, width: 400, height: 800))
+        let rightRecent = windowFixture(3, frame: CGRect(x: 1200, y: 0, width: 400, height: 800))
+        let leftDisplay = DisplayID(raw: 1)
+        let rightDisplay = DisplayID(raw: 2)
+        let world = multiDisplayWorldFixture(
+            windows: [leftCurrent, leftPrevious, rightRecent],
+            displays: [
+                leftDisplay: DisplaySpaceState(
+                    displayID: leftDisplay,
+                    tree: .void,
+                    floating: [leftCurrent.id, leftPrevious.id]
+                ),
+                rightDisplay: DisplaySpaceState(displayID: rightDisplay, tree: .void, floating: [rightRecent.id])
+            ],
+            windowDisplay: [
+                leftCurrent.id: leftDisplay,
+                leftPrevious.id: leftDisplay,
+                rightRecent.id: rightDisplay
+            ],
+            focused: leftCurrent.id
+        )
+        let runtime = WorldRuntimeState(
+            undoWorld: nil,
+            focusHistory: [leftPrevious.id, rightRecent.id, leftCurrent.id]
+        )
+
+        let plan = try focusPreviousPlan(in: world, runtime: runtime, from: leftCurrent.id).get()
+
+        #expect(plan.window.id == leftPrevious.id)
     }
 
     @Test("Setting focus updates the owning Space only")
@@ -135,6 +232,52 @@ struct CommandPlanningModelTests {
             windowSpace: windowSpace,
             observedVisibleWindows: [workspaceKey: observed],
             windowConstraints: constraints,
+            pendingRules: [:],
+            config: .default
+        )
+    }
+
+    private func multiDisplayWorldFixture(
+        windows: [WindowMetadata],
+        displays: [DisplayID: DisplaySpaceState],
+        windowDisplay: [WindowID: DisplayID],
+        focused: WindowID? = nil
+    ) -> World {
+        let windowsByID = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) })
+        let windowSpace = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, spaceID) })
+        let displayInfos = Dictionary(uniqueKeysWithValues: displays.keys.map { displayID in
+            let index = displayID.raw == 1 ? 0 : 1
+            let x = CGFloat(index) * 1000
+            return (
+                displayID,
+                DisplayInfo(
+                    id: displayID,
+                    slot: index,
+                    fingerprint: "display-\(displayID.raw)",
+                    frame: CGRect(x: x, y: 0, width: 1000, height: 800),
+                    visibleFrame: CGRect(x: x, y: 0, width: 1000, height: 800)
+                )
+            )
+        })
+        let observed = Dictionary(uniqueKeysWithValues: displays.keys.map { displayID in
+            (
+                WorkspaceKey(displayID: displayID, spaceID: spaceID),
+                Set(windowDisplay.compactMap { $0.value == displayID ? $0.key : nil })
+            )
+        })
+
+        return World(
+            displays: displayInfos,
+            activeSpace: spaceID,
+            activeSpaceByDisplay: Dictionary(uniqueKeysWithValues: displays.keys.map { ($0, spaceID) }),
+            spaces: [
+                spaceID: SpaceState(id: spaceID, displays: displays, focused: focused)
+            ],
+            windows: windowsByID,
+            windowDisplay: windowDisplay,
+            windowSpace: windowSpace,
+            observedVisibleWindows: observed,
+            windowConstraints: [:],
             pendingRules: [:],
             config: .default
         )

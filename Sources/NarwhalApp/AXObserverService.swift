@@ -10,7 +10,7 @@ final class AXObserverService {
     private let axClient: AXClient
     private let echoSuppressor: AXEchoSuppressor
     private let reporter: StartupReporter
-    private let activeSpaceID: @MainActor () -> SpaceID?
+    private let activeSpaceByDisplay: @MainActor ([WindowMetadata]) -> [DisplayID: SpaceID]
     private let focusedWindowUnavailable: @MainActor () -> Void
     private let emit: @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
     private let spaceChanged: @MainActor () -> Void
@@ -24,7 +24,7 @@ final class AXObserverService {
         axClient: AXClient,
         echoSuppressor: AXEchoSuppressor,
         reporter: StartupReporter,
-        activeSpaceID: @escaping @MainActor () -> SpaceID?,
+        activeSpaceByDisplay: @escaping @MainActor ([WindowMetadata]) -> [DisplayID: SpaceID],
         focusedWindowUnavailable: @escaping @MainActor () -> Void,
         spaceChanged: @escaping @MainActor () -> Void,
         emit: @escaping @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
@@ -32,7 +32,7 @@ final class AXObserverService {
         self.axClient = axClient
         self.echoSuppressor = echoSuppressor
         self.reporter = reporter
-        self.activeSpaceID = activeSpaceID
+        self.activeSpaceByDisplay = activeSpaceByDisplay
         self.focusedWindowUnavailable = focusedWindowUnavailable
         self.spaceChanged = spaceChanged
         self.emit = emit
@@ -73,6 +73,13 @@ final class AXObserverService {
     }
 
     private func activeSpaceChanged() {
+        if activeSpaceNotificationOnlyChangedFocusedDisplay() {
+            reporter.info("Active Space notification kept display Space topology unchanged; preserving borders")
+            pollFocusedWindowAfterDelay(0.05)
+            pollFocusedWindowAfterDelay(0.15)
+            return
+        }
+
         settleTimers.forEach { $0.invalidate() }
         settleTimers.removeAll()
         focusedObservationState = .empty
@@ -82,6 +89,18 @@ final class AXObserverService {
         pollFocusedWindowAfterDelay(0.05)
         pollFocusedWindowAfterDelay(0.15)
         pollFocusedWindowAfterDelay(0.35)
+    }
+
+    private func activeSpaceNotificationOnlyChangedFocusedDisplay() -> Bool {
+        let snapshot = axClient.windowSnapshot()
+        guard case .complete = snapshot.quality else { return false }
+        let nextActiveSpaceByDisplay = activeSpaceByDisplay(snapshot.windows)
+        guard !windowInventoryObservationState.activeSpaceByDisplay.isEmpty,
+              !nextActiveSpaceByDisplay.isEmpty,
+              windowInventoryObservationState.activeSpaceByDisplay == nextActiveSpaceByDisplay
+        else { return false }
+
+        return true
     }
 
     private func pollFocusedWindowAfterDelay(_ delay: TimeInterval) {
@@ -154,7 +173,7 @@ final class AXObserverService {
         guard case .complete = snapshot.quality else { return }
         windowInventoryObservationState = windowInventoryObservationBaseline(
             windows: snapshot.windows,
-            spaceID: activeSpaceID()
+            activeSpaceByDisplay: activeSpaceByDisplay(snapshot.windows)
         )
     }
 
@@ -163,7 +182,7 @@ final class AXObserverService {
         guard case .complete = snapshot.quality else { return }
         let transition = observeWindowInventory(
             windows: snapshot.windows,
-            spaceID: activeSpaceID(),
+            activeSpaceByDisplay: activeSpaceByDisplay(snapshot.windows),
             tolerance: Self.frameTolerance,
             in: windowInventoryObservationState
         )
