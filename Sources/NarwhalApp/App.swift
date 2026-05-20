@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var restorePersistence = RestorePersistence(manager: RestoreManager())
     private let echoSuppressor = AXEchoSuppressor()
     private let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
+    private var overlayModel = OverlayModel.empty
     private let menubar = Menubar()
     private var worldActor = WorldActor()
     private let reporter = StartupReporter()
@@ -271,10 +272,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func updateFocusBorder(for snapshot: FocusedWindowSnapshot) {
         if snapshot.isFullscreen {
-            overlay.updateFocusBorder(.hide)
+            setFocusBorder(nil)
         } else {
-            overlay.updateFocusBorder(.show(snapshot.focusBorderTarget))
+            setFocusBorder(snapshot.focusBorderTarget)
         }
+    }
+
+    @MainActor
+    private func setFocusBorder(_ target: FocusBorderTarget?) {
+        if let target {
+            overlayModel = overlayModel.showingFocusBorder(target)
+        } else {
+            overlayModel = overlayModel.hidingFocusBorder()
+        }
+        overlay.render(overlayModel)
+    }
+
+    @MainActor
+    private func suppressFocusBorder(for windowID: WindowID, frame: CGRect) {
+        overlayModel = overlayModel.hidingFocusBorder()
+        overlay.suppressFocusBorder(for: windowID, frame: frame)
+        overlay.render(overlayModel)
+    }
+
+    @MainActor
+    private func setTiledBorders(_ targets: [FocusBorderTarget]) {
+        overlayModel = overlayModel.settingTiledBorders(targets)
+        overlay.render(overlayModel)
+    }
+
+    @MainActor
+    private func clearBorderOverlays() {
+        overlayModel = .empty
+        overlay.render(overlayModel)
+    }
+
+    @MainActor
+    private func removeWindowFromOverlays(_ windowID: WindowID) {
+        overlayModel = overlayModel.removingWindow(windowID)
+        overlay.render(overlayModel)
     }
 
     private func focusBorderTarget(
@@ -336,10 +372,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateTiledBordersFromWorld() async {
         switch await worldActor.tiledBorderTargets() {
         case .success(let targets):
-            overlay.updateTiledBorders(targets)
+            setTiledBorders(targets)
         case .failure(let error):
             reporter.error("Tiled border refresh failed: \(error.message)")
-            overlay.updateTiledBorders([])
+            setTiledBorders([])
         }
     }
 
@@ -608,6 +644,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard case .success(let spaceID) = self.spaceClient.activeSpaceID() else { return nil }
                 return spaceID
             },
+            focusedWindowUnavailable: { [weak self] in
+                self?.focusedWindowUnavailable()
+            },
             spaceChanged: { [weak self] in
                 self?.activeSpaceChanged()
             }
@@ -633,8 +672,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return {}
         }
         let service = DisplayObserverService(reporter: reporter) { [weak self] in
-            self?.overlay.updateFocusBorder(.hide)
-            self?.overlay.updateTiledBorders([])
+            self?.clearBorderOverlays()
             self?.scheduleCoalescedEnvironmentRefresh(.displayChanged)
         }
         service.start()
@@ -858,8 +896,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         await worldActor.resetLayoutMemory()
         reporter.info("\(logPrefix) layout memory: cleared BSP trees, floating lists, focus, pending rules, and observed window minimums")
-        overlay.updateFocusBorder(.hide)
-        overlay.updateTiledBorders([])
+        clearBorderOverlays()
         updateOperatingStatus { $0.focusedWindowID = nil }
         showOperatorFeedback("Layout memory reset", tone: .warning)
         await persistRestore(reason: persistReason)
@@ -1045,7 +1082,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             echoSuppressor.expectFocus(windowID: result.window.id)
             await worldActor.recordExternalFocus(result.window.id)
             updateOperatingStatus { $0.focusedWindowID = result.window.id }
-            overlay.updateFocusBorder(.show(FocusBorderTarget(window: result.window, frame: result.frame)))
+            setFocusBorder(FocusBorderTarget(window: result.window, frame: result.frame))
             reporter.info("\(reason) completed target=\(result.window.id.description)")
             showOperatorFeedback("\(reason) -> \(result.window.id.description)", tone: .success, showsHUD: false)
             return true
@@ -1308,7 +1345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .success(let result):
             let completed = await applyPlannedShuffle(result, retryOnClamp: true)
             if completed {
-                overlay.updateFocusBorder(.hide)
+                setFocusBorder(nil)
                 updateOperatingStatus { $0.focusedWindowID = nil }
             }
             return completed
@@ -1347,7 +1384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .success(let result):
             let completed = await applyPlannedCascade(result, retryOnClamp: true)
             if completed {
-                overlay.updateFocusBorder(.hide)
+                setFocusBorder(nil)
                 updateOperatingStatus { $0.focusedWindowID = nil }
             }
             return completed
@@ -1818,12 +1855,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                let frame = applyResult.applied[focusedWindowID] ?? result.desiredLayout.layout.tiled[focusedWindowID] {
                 if showFocusBorder {
                     let target = focusBorderTarget(windowID: focusedWindowID, frame: frame, windows: result.windows)
-                    overlay.updateFocusBorder(.show(target))
+                    setFocusBorder(target)
                 } else {
-                    overlay.suppressFocusBorder(for: focusedWindowID, frame: frame)
+                    suppressFocusBorder(for: focusedWindowID, frame: frame)
                 }
             } else if result.focusedWindowID != nil {
-                overlay.updateFocusBorder(.hide)
+                setFocusBorder(nil)
             }
             showOperatorFeedback("\(operation) completed", tone: .success, showsHUD: false)
             await persistRestore(reason: persistReason)
@@ -1988,13 +2025,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .windowOpened(let metadata):
             scheduleCoalescedEnvironmentRefresh(.windowOpened(metadata.id))
         case .windowClosed(let windowID):
-            overlay.hideFocusBorder(ifVisibleFor: windowID)
-            overlay.hideTiledBorder(ifVisibleFor: windowID)
+            removeWindowFromOverlays(windowID)
             if operatingStatus.focusedWindowID == windowID {
                 updateOperatingStatus { $0.focusedWindowID = nil }
             }
             scheduleCoalescedEnvironmentRefresh(.windowClosed(windowID))
         }
+    }
+
+    @MainActor
+    private func focusedWindowUnavailable() {
+        setFocusBorder(nil)
+        updateOperatingStatus { $0.focusedWindowID = nil }
     }
 
     @MainActor
@@ -2018,8 +2060,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func activeSpaceChanged() {
         cancelSpaceTransitionTimers()
         isPreservingSpaceTransitionLayouts = true
-        overlay.updateFocusBorder(.hide)
-        overlay.updateTiledBorders([])
+        clearBorderOverlays()
         scheduleCoalescedEnvironmentRefresh(.spaceSettled)
         scheduleDelayedSpaceSettledRefresh(after: 0.35)
         scheduleDelayedSpaceSettledRefresh(after: 0.80)

@@ -10,6 +10,7 @@ final class AXObserverService {
     private let echoSuppressor: AXEchoSuppressor
     private let reporter: StartupReporter
     private let activeSpaceID: @MainActor () -> SpaceID?
+    private let focusedWindowUnavailable: @MainActor () -> Void
     private let emit: @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
     private let spaceChanged: @MainActor () -> Void
     private var timer: Timer?
@@ -25,6 +26,7 @@ final class AXObserverService {
         echoSuppressor: AXEchoSuppressor,
         reporter: StartupReporter,
         activeSpaceID: @escaping @MainActor () -> SpaceID?,
+        focusedWindowUnavailable: @escaping @MainActor () -> Void,
         spaceChanged: @escaping @MainActor () -> Void,
         emit: @escaping @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
     ) {
@@ -32,6 +34,7 @@ final class AXObserverService {
         self.echoSuppressor = echoSuppressor
         self.reporter = reporter
         self.activeSpaceID = activeSpaceID
+        self.focusedWindowUnavailable = focusedWindowUnavailable
         self.spaceChanged = spaceChanged
         self.emit = emit
     }
@@ -107,7 +110,17 @@ final class AXObserverService {
     }
 
     private func pollFocusedWindow() {
-        guard case .success(let snapshot) = axClient.focusedWindowSnapshot() else { return }
+        let snapshot: FocusedWindowSnapshot
+        switch axClient.focusedWindowSnapshot() {
+        case .success(let value):
+            snapshot = value
+        case .failure(let error):
+            guard focusedGeometryState.windowID != nil else { return }
+            focusedGeometryState = .empty
+            focusedWindowUnavailable()
+            reporter.info("Focused-window snapshot unavailable; focus border hidden: \(error.description)")
+            return
+        }
         let poll = pollFocusedWindowGeometry(
             previous: focusedGeometryState,
             currentWindowID: snapshot.id,

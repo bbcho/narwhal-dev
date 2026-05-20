@@ -1,13 +1,16 @@
 # Narwhal
 
 Narwhal is a macOS BSP tiling window manager for people who want manual,
-persistent window zones instead of automatic rearrangement. Windows float by
-default; a push, drag zone, or IPC command explicitly tiles a window.
+per-Space window zones instead of automatic rearrangement. Windows float by
+default; a push, drag zone, or IPC command explicitly tiles a window. Tiled
+windows keep their layout per Space, show green tile borders, and remain editable
+with normal macOS move and resize gestures.
 
 The program is built as:
 
-- `NarwhalApp`: menu-bar app, hotkey handler, AX window writer, display/Space
-  observer, Lua config loader, restore persistence, and IPC server.
+- `NarwhalApp`: menu-bar accessory app, hotkey handler, AX window writer,
+  display/Space observer, Lua config loader, restore persistence, and IPC
+  server.
 - `narwhalctl`: command-line client for the local Unix socket.
 - `NarwhalCore`: pure layout, command, restore, config, rule, focus, and solver
   logic.
@@ -45,11 +48,21 @@ CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --dis
 scripts/build_app_bundle.sh --configuration debug --output .build/narwhal-package-next --replace
 ```
 
-Install for the current user:
+Install a development build for the current user:
 
 ```sh
 scripts/install_local.sh --replace --configuration debug
 ```
+
+For daily use, prefer a release build:
+
+```sh
+scripts/install_local.sh --replace --configuration release
+```
+
+The local installer writes `~/Applications/Narwhal.app` and a LaunchAgent so
+Narwhal starts at login. Narwhal runs as a menu-bar accessory app: look for the
+Narwhal menu-bar icon rather than a Dock icon.
 
 Control the running app:
 
@@ -72,13 +85,34 @@ Default hotkeys:
 - `control-option-command-F`: open a new Finder window.
 - `control-option-command-M`: maximize focused window and reset tile memory.
 - `control-option-command-N`: move focused window to the next display.
-- `control-option-command-S`: shuffle reset resizable windows into random quarter-screen frames.
+- `control-option-command-S`: shuffle reset resizable windows into random
+  quarter-screen frames.
 - `control-option-shift-command-H/J/K/L`: resize the nearest split.
 - `control-option-command-return`: balance split weights.
 - `control-option-Z`: undo the last layout command.
 - `control-option-space`: pause or resume tiling actions.
-- `control-option-/`: show two-column command overlay. While open, scroll it with `control-option-J/K`.
+- `control-option-/`: show the command overlay. It uses two columns when there
+  is room, switches to one column on narrow screens, and scrolls with
+  `control-option-J/K`.
 - `control-option-delete`: reset layout memory.
 
-Logs are written to `/tmp/narwhal.log`. The IPC socket is
-`/tmp/narwhal-$(id -u).sock`.
+## Runtime Behavior
+
+- Windows are not tiled until you explicitly push, drop, or command them into the
+  layout.
+- Layout memory is per macOS Space. Switching Spaces should preserve each
+  Space's tiled windows and restore the green tile borders when you come back.
+- Green borders mark tiled windows. Narwhal keeps them above their target window
+  when focus changes and updates them after manual window moves or resizes.
+- Focus cycling with `control-option-U/I` walks non-tiled windows in the active
+  Space and skips tiled windows.
+- Narwhal ignores its own border and overlay windows in window inventory, focus
+  cycling, and layout commands.
+
+Config, state, logs, and IPC:
+
+- User config: `~/.config/narwhal/init.lua`. If this file is missing, Narwhal
+  uses its built-in defaults.
+- Restore state: `~/Library/Application Support/narwhal/state.json`.
+- Log file: `/tmp/narwhal.log`.
+- IPC socket: `/tmp/narwhal-$(id -u).sock`.

@@ -44,21 +44,21 @@ final class Overlay {
         borderView?.update(border: border)
     }
 
-    func updateFocusBorder(_ effect: FocusBorderEffect) {
-        switch effect {
-        case .show(let target):
-            showFocusBorder(target)
-        case .hide:
-            hideFocusBorder()
-        }
-    }
-
     func suppressFocusBorder(for windowID: WindowID, frame: CGRect) {
         focusBorderSuppression = FocusBorderSuppression(windowID: windowID, frame: frame)
         hideFocusBorder()
     }
 
-    func updateTiledBorders(_ targets: [FocusBorderTarget]) {
+    func render(_ model: OverlayModel) {
+        renderTiledBorders(model.tiledBorders)
+        if let focusBorder = model.focusBorder {
+            showFocusBorder(focusBorder)
+        } else {
+            hideFocusBorder()
+        }
+    }
+
+    private func renderTiledBorders(_ targets: [FocusBorderTarget]) {
         let nextIDs = Set(targets.map(\.windowID))
         for windowID in tiledBorderWindows.keys where !nextIDs.contains(windowID) {
             hideTiledBorder(windowID)
@@ -67,21 +67,6 @@ final class Overlay {
         for target in targets.sorted(by: { $0.windowID.raw < $1.windowID.raw }) {
             showTiledBorder(target)
         }
-        if borderWindow?.isVisible == true {
-            borderWindow?.orderFrontRegardless()
-        }
-    }
-
-    func hideTiledBorder(ifVisibleFor windowID: WindowID) {
-        hideTiledBorder(windowID)
-    }
-
-    func hideFocusBorder(ifVisibleFor windowID: WindowID) {
-        if focusBorderSuppression?.windowID == windowID {
-            focusBorderSuppression = nil
-        }
-        guard visibleWindowID == windowID else { return }
-        hideFocusBorder()
     }
 
     func debugFocusBorderWindowID() -> WindowID? {
@@ -90,6 +75,14 @@ final class Overlay {
 
     func debugFocusBorderIsVisible() -> Bool {
         borderWindow?.isVisible == true
+    }
+
+    func debugFocusBorderWindowNumber() -> Int? {
+        borderWindow?.windowNumber
+    }
+
+    func debugFocusBorderLevelRawValue() -> Int? {
+        borderWindow?.level.rawValue
     }
 
     func debugTiledBorderWindowIDs() -> [WindowID] {
@@ -113,8 +106,7 @@ final class Overlay {
     }
 
     func stop() {
-        hideFocusBorder()
-        updateTiledBorders([])
+        render(.empty)
         hideCommandOverlay()
         hideHUD()
         hideDragPreview()
@@ -195,7 +187,7 @@ final class Overlay {
         }
         view.update(border: borderConfig, cornerRadius: target.cornerRadius)
         window.setFrame(appKitFrame, display: true)
-        window.orderFrontRegardless()
+        orderFocusBorderWindow(window, above: target.windowID)
         borderWindow = window
         visibleWindowID = target.windowID
     }
@@ -272,9 +264,13 @@ final class Overlay {
         window.isOpaque = false
         window.hasShadow = false
         window.ignoresMouseEvents = true
-        window.level = .statusBar
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        window.level = .normal
+        window.collectionBehavior = [.ignoresCycle]
         return window
+    }
+
+    private func orderFocusBorderWindow(_ window: NSWindow, above targetWindowID: WindowID) {
+        window.order(.above, relativeTo: Int(targetWindowID.raw))
     }
 
     private func makeTiledBorderWindow(frame: CGRect) -> NSWindow {
@@ -1568,33 +1564,48 @@ enum FocusBorderVerification {
         }
 
         let overlay = Overlay(border: border, hud: Config.default.hud)
-        let visibleWindow = WindowID(raw: 901)
+        let focusTargetWindow = makeVerificationWindow(frame: standardFrame, color: .systemGray)
+        defer {
+            focusTargetWindow.orderOut(nil)
+        }
+        focusTargetWindow.orderFrontRegardless()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+
+        let visibleWindow = WindowID(raw: CGWindowID(focusTargetWindow.windowNumber))
         let otherWindow = WindowID(raw: 902)
-        overlay.updateFocusBorder(.show(FocusBorderTarget(
+        var focusModel = OverlayModel.empty.showingFocusBorder(FocusBorderTarget(
             windowID: visibleWindow,
             frame: standardFrame,
             cornerRadius: standardRadius
-        )))
+        ))
+        overlay.render(focusModel)
         guard overlay.debugFocusBorderWindowID() == visibleWindow,
               overlay.debugFocusBorderIsVisible() else {
             overlay.stop()
             return (false, "focus border overlay did not show for \(visibleWindow.description)")
         }
 
-        overlay.hideFocusBorder(ifVisibleFor: otherWindow)
+        focusModel = focusModel.removingWindow(otherWindow)
+        overlay.render(focusModel)
         guard overlay.debugFocusBorderWindowID() == visibleWindow,
               overlay.debugFocusBorderIsVisible() else {
             overlay.stop()
             return (false, "focus border overlay hid for unrelated closed window \(otherWindow.description)")
         }
 
-        overlay.hideFocusBorder(ifVisibleFor: visibleWindow)
+        focusModel = focusModel.removingWindow(visibleWindow)
+        overlay.render(focusModel)
         guard overlay.debugFocusBorderWindowID() == nil,
               !overlay.debugFocusBorderIsVisible() else {
             overlay.stop()
             return (false, "focus border overlay stayed visible after closing \(visibleWindow.description)")
         }
         overlay.stop()
+
+        let focusStacking = verifyFocusBorderStacking(cornerRadius: standardRadius)
+        guard focusStacking.passed else {
+            return focusStacking
+        }
 
         let tiledOverlay = Overlay(border: border, hud: Config.default.hud)
         let firstTargetWindow = makeVerificationWindow(
@@ -1616,7 +1627,7 @@ enum FocusBorderVerification {
         let firstTiled = WindowID(raw: CGWindowID(firstTargetWindow.windowNumber))
         let secondTiled = WindowID(raw: CGWindowID(secondTargetWindow.windowNumber))
         let expectedTiledIDs = [firstTiled, secondTiled].sorted { $0.raw < $1.raw }
-        tiledOverlay.updateTiledBorders([
+        var tiledModel = OverlayModel.empty.settingTiledBorders([
             FocusBorderTarget(
                 windowID: firstTiled,
                 frame: CGRect(x: 10, y: 10, width: 420, height: 320),
@@ -1628,6 +1639,7 @@ enum FocusBorderVerification {
                 cornerRadius: dialogRadius
             )
         ])
+        tiledOverlay.render(tiledModel)
         guard tiledOverlay.debugTiledBorderWindowIDs() == expectedTiledIDs,
               tiledOverlay.debugVisibleTiledBorderCount() == 2 else {
             tiledOverlay.stop()
@@ -1639,7 +1651,7 @@ enum FocusBorderVerification {
             return (false, "tiled border overlay did not expose the initial second tiled border frame")
         }
         let updatedSecondFrame = CGRect(x: 500, y: 30, width: 520, height: 280)
-        tiledOverlay.updateTiledBorders([
+        tiledModel = tiledModel.settingTiledBorders([
             FocusBorderTarget(
                 windowID: firstTiled,
                 frame: CGRect(x: 10, y: 10, width: 420, height: 320),
@@ -1651,6 +1663,7 @@ enum FocusBorderVerification {
                 cornerRadius: dialogRadius
             )
         ])
+        tiledOverlay.render(tiledModel)
         guard let renderedSecondFrame = tiledOverlay.debugTiledBorderFrame(for: secondTiled),
               renderedSecondFrame.minX == updatedSecondFrame.minX - 1,
               renderedSecondFrame.minX != initialSecondFrame.minX,
@@ -1663,21 +1676,23 @@ enum FocusBorderVerification {
             )
         }
 
-        tiledOverlay.hideTiledBorder(ifVisibleFor: firstTiled)
+        tiledModel = tiledModel.removingWindow(firstTiled)
+        tiledOverlay.render(tiledModel)
         guard tiledOverlay.debugTiledBorderWindowIDs() == [secondTiled],
               tiledOverlay.debugVisibleTiledBorderCount() == 1 else {
             tiledOverlay.stop()
             return (false, "tiled border overlay did not hide closed tiled window \(firstTiled.description)")
         }
 
-        tiledOverlay.updateTiledBorders([])
+        tiledModel = tiledModel.settingTiledBorders([])
+        tiledOverlay.render(tiledModel)
         guard tiledOverlay.debugTiledBorderWindowIDs().isEmpty,
               tiledOverlay.debugVisibleTiledBorderCount() == 0 else {
             tiledOverlay.stop()
             return (false, "tiled border overlay did not clear all tiled borders")
         }
 
-        tiledOverlay.updateTiledBorders([
+        tiledModel = tiledModel.settingTiledBorders([
             FocusBorderTarget(
                 windowID: firstTiled,
                 frame: CGRect(x: 10, y: 10, width: 420, height: 320),
@@ -1689,6 +1704,7 @@ enum FocusBorderVerification {
                 cornerRadius: dialogRadius
             )
         ])
+        tiledOverlay.render(tiledModel)
         guard tiledOverlay.debugTiledBorderWindowIDs() == expectedTiledIDs,
               tiledOverlay.debugVisibleTiledBorderCount() == 2 else {
             tiledOverlay.stop()
@@ -1703,7 +1719,93 @@ enum FocusBorderVerification {
 
         return (
             true,
-            "focus/tiled borders verified: focus standard=\(standardRadius) dialog=\(dialogRadius) utility=\(utilityRadius) tiny=\(tinyRadius) path=\(standardSnapshot.pathBoundingBox.debugDescription); \(stacking.message)"
+            "focus/tiled borders verified: focus standard=\(standardRadius) dialog=\(dialogRadius) utility=\(utilityRadius) tiny=\(tinyRadius) path=\(standardSnapshot.pathBoundingBox.debugDescription); \(focusStacking.message); \(stacking.message)"
+        )
+    }
+
+    private static func verifyFocusBorderStacking(cornerRadius: Double) -> (passed: Bool, message: String) {
+        let targetFrame = CGRect(x: 120, y: 120, width: 300, height: 220)
+        let coverFrame = CGRect(x: 140, y: 140, width: 260, height: 180)
+        let targetWindow = makeVerificationWindow(frame: targetFrame, color: .systemGray)
+        let coverWindow = makeVerificationWindow(frame: coverFrame, color: .systemRed)
+        let overlay = Overlay(border: BorderConfig(width: 2, colorHex: "#4DA3FF"), hud: Config.default.hud)
+        defer {
+            overlay.stop()
+            targetWindow.orderOut(nil)
+            coverWindow.orderOut(nil)
+        }
+
+        targetWindow.orderFrontRegardless()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+
+        let targetID = WindowID(raw: CGWindowID(targetWindow.windowNumber))
+        var model = OverlayModel.empty.showingFocusBorder(
+            FocusBorderTarget(windowID: targetID, frame: targetFrame, cornerRadius: cornerRadius)
+        )
+        overlay.render(model)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+
+        guard overlay.debugFocusBorderLevelRawValue() == NSWindow.Level.normal.rawValue else {
+            return (false, "focus border window was not at normal window level")
+        }
+        guard let borderNumber = overlay.debugFocusBorderWindowNumber() else {
+            return (false, "focus border window did not expose a window number")
+        }
+        guard let initialOrderedWindowNumbers = frontToBackWindowNumbers(),
+              let initialBorderIndex = initialOrderedWindowNumbers.firstIndex(of: borderNumber),
+              let targetIndex = initialOrderedWindowNumbers.firstIndex(of: targetWindow.windowNumber)
+        else {
+            return (false, "could not verify focus border initial window-server stacking")
+        }
+        guard initialBorderIndex < targetIndex else {
+            return (
+                false,
+                "focus border was not above focused target: borderIndex=\(initialBorderIndex) targetIndex=\(targetIndex)"
+            )
+        }
+
+        coverWindow.orderFrontRegardless()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+
+        guard let staleOrderedWindowNumbers = frontToBackWindowNumbers(),
+              let coverIndex = staleOrderedWindowNumbers.firstIndex(of: coverWindow.windowNumber),
+              let staleBorderIndex = staleOrderedWindowNumbers.firstIndex(of: borderNumber)
+        else {
+            return (false, "could not verify stale focus border stacking")
+        }
+        guard coverIndex < staleBorderIndex else {
+            return (
+                false,
+                "stale focus border stayed above newly fronted floating window: coverIndex=\(coverIndex) borderIndex=\(staleBorderIndex)"
+            )
+        }
+
+        let coverID = WindowID(raw: CGWindowID(coverWindow.windowNumber))
+        model = model.showingFocusBorder(
+            FocusBorderTarget(windowID: coverID, frame: coverFrame, cornerRadius: cornerRadius)
+        )
+        overlay.render(model)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+
+        guard overlay.debugFocusBorderWindowID() == coverID else {
+            return (false, "focus border did not retarget to newly focused floating window")
+        }
+        guard let focusedOrderedWindowNumbers = frontToBackWindowNumbers(),
+              let focusedBorderIndex = focusedOrderedWindowNumbers.firstIndex(of: borderNumber),
+              let focusedCoverIndex = focusedOrderedWindowNumbers.firstIndex(of: coverWindow.windowNumber)
+        else {
+            return (false, "could not verify retargeted focus border stacking")
+        }
+        guard focusedBorderIndex < focusedCoverIndex else {
+            return (
+                false,
+                "retargeted focus border stayed behind floating target: borderIndex=\(focusedBorderIndex) coverIndex=\(focusedCoverIndex)"
+            )
+        }
+
+        return (
+            true,
+            "focus border stacking verified border=\(borderNumber) target=\(targetWindow.windowNumber) cover=\(coverWindow.windowNumber)"
         )
     }
 
@@ -1723,9 +1825,9 @@ enum FocusBorderVerification {
         RunLoop.current.run(until: Date().addingTimeInterval(0.03))
 
         let targetID = WindowID(raw: CGWindowID(targetWindow.windowNumber))
-        overlay.updateTiledBorders([
+        overlay.render(OverlayModel.empty.settingTiledBorders([
             FocusBorderTarget(windowID: targetID, frame: targetFrame, cornerRadius: cornerRadius)
-        ])
+        ]))
         RunLoop.current.run(until: Date().addingTimeInterval(0.03))
 
         coverWindow.orderFrontRegardless()
@@ -1753,9 +1855,9 @@ enum FocusBorderVerification {
 
         targetWindow.orderFrontRegardless()
         RunLoop.current.run(until: Date().addingTimeInterval(0.03))
-        overlay.updateTiledBorders([
+        overlay.render(OverlayModel.empty.settingTiledBorders([
             FocusBorderTarget(windowID: targetID, frame: targetFrame, cornerRadius: cornerRadius)
-        ])
+        ]))
         RunLoop.current.run(until: Date().addingTimeInterval(0.03))
 
         guard let focusedOrderedWindowNumbers = frontToBackWindowNumbers(),
