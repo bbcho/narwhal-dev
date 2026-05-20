@@ -22,24 +22,10 @@ actor WorldActor {
     }
 
     func refreshEnvironment(_ snapshot: EnvironmentSnapshot) -> EnvironmentRefreshResult {
-        let preservedSpaceLayouts = environmentSnapshotPreservesSpaceLayouts(snapshot, in: world)
-        switch apply(.environmentChanged(snapshot), to: world) {
-        case .success(let next):
-            world = next
-        case .failure:
-            break
-        }
+        let transition = environmentRefreshTransition(for: snapshot, in: world)
+        world = transition.world
         pruneRuntimeState()
-        return EnvironmentRefreshResult(
-            snapshot: snapshot,
-            activeSpace: world.activeSpace,
-            displayCount: world.displays.count,
-            windowCount: world.windows.count,
-            quality: snapshot.axSnapshot.quality,
-            preservedSpaceLayouts: preservedSpaceLayouts,
-            observedWindowCount: snapshot.observedWindowCount,
-            mappedWindowCount: snapshot.mappedWindowCount
-        )
+        return transition.result
     }
 
     func restore(_ stored: StoredWorld, from snapshot: EnvironmentSnapshot) -> Int {
