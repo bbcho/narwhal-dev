@@ -5,6 +5,68 @@ import NarwhalCore
 
 @Suite("World update model")
 struct WorldUpdateModelTests {
+    @Test("Display-state upsert appends only absent floating windows")
+    func displayStateUpsertAppendsOnlyAbsentFloatingWindows() {
+        let displayID = DisplayID(raw: 1)
+        let existing = WindowID(raw: 10)
+        let inserted = WindowID(raw: 11)
+        let state = DisplaySpaceState(displayID: displayID, tree: .void, floating: [existing])
+
+        let updated = displayStateByUpsertingFloatingWindow(inserted, in: state)
+
+        #expect(updated == DisplaySpaceState(
+            displayID: displayID,
+            tree: .void,
+            floating: [existing, inserted]
+        ))
+    }
+
+    @Test("Display-state upsert sanitizes duplicates when window is already tracked")
+    func displayStateUpsertSanitizesDuplicatesWhenAlreadyTracked() {
+        let displayID = DisplayID(raw: 1)
+        let existing = WindowID(raw: 10)
+        let state = DisplaySpaceState(displayID: displayID, tree: .void, floating: [existing, existing])
+
+        let updated = displayStateByUpsertingFloatingWindow(existing, in: state)
+
+        #expect(updated == DisplaySpaceState(
+            displayID: displayID,
+            tree: .void,
+            floating: [existing]
+        ))
+    }
+
+    @Test("Display-state upsert does not float already tiled windows")
+    func displayStateUpsertDoesNotFloatAlreadyTiledWindows() {
+        let displayID = DisplayID(raw: 1)
+        let tiled = WindowID(raw: 10)
+        let state = DisplaySpaceState(displayID: displayID, tree: .leaf(tiled), floating: [tiled])
+
+        let updated = displayStateByUpsertingFloatingWindow(tiled, in: state)
+
+        #expect(updated == DisplaySpaceState(displayID: displayID, tree: .leaf(tiled), floating: []))
+    }
+
+    @Test("Window frame recording updates only matching metadata")
+    func windowFrameRecordingUpdatesOnlyMatchingMetadata() {
+        let known = windowFixture(1)
+        let other = windowFixture(2)
+        let frame = CGRect(x: 100, y: 200, width: 500, height: 300)
+
+        let windows = windowsByRecordingWindowFrames([
+            known.id: frame,
+            WindowID(raw: 999): CGRect(x: 1, y: 1, width: 1, height: 1)
+        ], in: [
+            known.id: known,
+            other.id: other
+        ])
+
+        #expect(windows[known.id]?.frame == frame)
+        #expect(windows[known.id]?.bundleID == known.bundleID)
+        #expect(windows[other.id] == other)
+        #expect(windows[WindowID(raw: 999)] == nil)
+    }
+
     @Test("Upserting active window records ownership, visibility, and floating order")
     func upsertingActiveWindowRecordsOwnershipVisibilityAndFloatingOrder() throws {
         let displayID = DisplayID(raw: 1)

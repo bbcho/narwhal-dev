@@ -1,6 +1,47 @@
 import CoreGraphics
 import NarwhalCore
 
+public func displayStateByUpsertingFloatingWindow(
+    _ windowID: WindowID,
+    in displayState: DisplaySpaceState
+) -> DisplaySpaceState {
+    guard !occupiedWindows(in: displayState.tree).contains(windowID),
+          !displayState.floating.contains(windowID)
+    else {
+        return sanitizedDisplayState(displayState)
+    }
+    return DisplaySpaceState(
+        displayID: displayState.displayID,
+        tree: displayState.tree,
+        floating: displayState.floating + [windowID]
+    )
+}
+
+public func windowMetadataByRecordingFrame(
+    _ frame: CGRect,
+    in metadata: WindowMetadata
+) -> WindowMetadata {
+    WindowMetadata(
+        id: metadata.id,
+        bundleID: metadata.bundleID,
+        title: metadata.title,
+        role: metadata.role,
+        pid: metadata.pid,
+        frame: frame,
+        isResizable: metadata.isResizable,
+        isMinimized: metadata.isMinimized
+    )
+}
+
+public func windowsByRecordingWindowFrames(
+    _ frames: [WindowID: CGRect],
+    in windows: [WindowID: WindowMetadata]
+) -> [WindowID: WindowMetadata] {
+    windows.mapValues { metadata in
+        frames[metadata.id].map { windowMetadataByRecordingFrame($0, in: metadata) } ?? metadata
+    }
+}
+
 public func worldByUpsertingActiveWindow(
     _ metadata: WindowMetadata,
     displayID: DisplayID,
@@ -28,16 +69,7 @@ public func worldByUpsertingActiveWindow(
     let space = spaces[activeSpace] ?? SpaceState(id: activeSpace, displays: [:], focused: nil)
     var displayStates = space.displays
     let existing = displayStates[displayID] ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
-    if !occupiedWindows(in: existing.tree).contains(metadata.id),
-       !existing.floating.contains(metadata.id) {
-        displayStates[displayID] = DisplaySpaceState(
-            displayID: displayID,
-            tree: existing.tree,
-            floating: existing.floating + [metadata.id]
-        )
-    } else {
-        displayStates[displayID] = sanitizedDisplayState(existing)
-    }
+    displayStates[displayID] = displayStateByUpsertingFloatingWindow(metadata.id, in: existing)
     spaces[activeSpace] = SpaceState(id: activeSpace, displays: displayStates, focused: space.focused)
 
     return .success(World(
@@ -61,27 +93,12 @@ public func worldByRecordingWindowFrames(
 ) -> World {
     guard !frames.isEmpty else { return world }
 
-    var windows = world.windows
-    for (id, frame) in frames {
-        guard let old = windows[id] else { continue }
-        windows[id] = WindowMetadata(
-            id: old.id,
-            bundleID: old.bundleID,
-            title: old.title,
-            role: old.role,
-            pid: old.pid,
-            frame: frame,
-            isResizable: old.isResizable,
-            isMinimized: old.isMinimized
-        )
-    }
-
     return World(
         displays: world.displays,
         activeSpace: world.activeSpace,
         activeSpaceByDisplay: world.activeSpaceByDisplay,
         spaces: world.spaces,
-        windows: windows,
+        windows: windowsByRecordingWindowFrames(frames, in: world.windows),
         windowDisplay: world.windowDisplay,
         windowSpace: world.windowSpace,
         observedVisibleWindows: world.observedVisibleWindows,
