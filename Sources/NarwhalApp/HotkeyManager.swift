@@ -1,5 +1,6 @@
 import Carbon
 import Foundation
+import NarwhalAppSupport
 import NarwhalCore
 
 final class HotkeyManager {
@@ -85,22 +86,28 @@ final class HotkeyManager {
     }
 
     private func registerHotkeys(_ bindings: [HotkeyBinding]) throws {
-        for (offset, binding) in bindings.enumerated() {
-            try register(binding: binding, id: UInt32(offset + 1))
+        let registrations = hotkeyRegistrations(for: bindings)
+        var registeredRefs: [EventHotKeyRef?] = []
+        do {
+            for registration in registrations {
+                let ref = try register(binding: registration.binding, id: registration.id)
+                registeredRefs.append(ref)
+            }
+        } catch {
+            unregister(refs: registeredRefs)
+            throw error
         }
+        hotkeyRefs = registeredRefs
+        actionsByID = hotkeyActionRegistry(for: registrations)
     }
 
     private func unregisterHotkeys() {
-        for ref in hotkeyRefs {
-            if let ref {
-                UnregisterEventHotKey(ref)
-            }
-        }
+        unregister(refs: hotkeyRefs)
         hotkeyRefs.removeAll()
         actionsByID.removeAll()
     }
 
-    private func register(binding: HotkeyBinding, id: UInt32) throws {
+    private func register(binding: HotkeyBinding, id: UInt32) throws -> EventHotKeyRef? {
         guard let keyCode = carbonKeyCode(for: binding.key.key) else {
             throw HotkeyError.unsupportedKey(binding.key)
         }
@@ -118,12 +125,19 @@ final class HotkeyManager {
         guard status == noErr else {
             throw HotkeyError.registrationFailed(binding, status)
         }
-        hotkeyRefs.append(ref)
-        actionsByID[id] = binding.action
+        return ref
+    }
+
+    private func unregister(refs: [EventHotKeyRef?]) {
+        for ref in refs {
+            if let ref {
+                UnregisterEventHotKey(ref)
+            }
+        }
     }
 
     private func fire(id: UInt32) {
-        guard let action = actionsByID[id] else {
+        guard let action = hotkeyAction(for: id, in: actionsByID) else {
             reporter.error("Unknown hotkey id \(id)")
             return
         }
