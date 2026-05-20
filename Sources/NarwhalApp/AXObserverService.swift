@@ -18,9 +18,7 @@ final class AXObserverService {
     private var settleTimers: [Timer] = []
     private var workspaceObserver: NSObjectProtocol?
     private var focusedObservationState = FocusedWindowObservationState.empty
-    private var windowInventoryState: WindowInventoryState?
-    private var windowFrameInventoryState: WindowFrameInventoryState?
-    private var windowInventorySpaceID: SpaceID?
+    private var windowInventoryObservationState = WindowInventoryObservationState.empty
 
     init(
         axClient: AXClient,
@@ -67,9 +65,7 @@ final class AXObserverService {
         timer = nil
         settleTimers.forEach { $0.invalidate() }
         settleTimers.removeAll()
-        windowInventoryState = nil
-        windowFrameInventoryState = nil
-        windowInventorySpaceID = nil
+        windowInventoryObservationState = .empty
         if let workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
             self.workspaceObserver = nil
@@ -80,9 +76,7 @@ final class AXObserverService {
         settleTimers.forEach { $0.invalidate() }
         settleTimers.removeAll()
         focusedObservationState = .empty
-        windowInventoryState = nil
-        windowFrameInventoryState = nil
-        windowInventorySpaceID = nil
+        windowInventoryObservationState = .empty
         spaceChanged()
         reporter.info("Active Space changed; focus border hidden pending focused-window refresh")
         pollFocusedWindowAfterDelay(0.05)
@@ -158,61 +152,41 @@ final class AXObserverService {
     private func syncWindowInventory() {
         let snapshot = axClient.windowSnapshot()
         guard case .complete = snapshot.quality else { return }
-        windowInventoryState = WindowInventoryState(
-            visibleWindowIDs: Set(snapshot.windows.map(\.id))
+        windowInventoryObservationState = windowInventoryObservationBaseline(
+            windows: snapshot.windows,
+            spaceID: activeSpaceID()
         )
-        windowFrameInventoryState = WindowFrameInventoryState(
-            framesByWindowID: Dictionary(uniqueKeysWithValues: snapshot.windows.map { ($0.id, $0.frame) })
-        )
-        windowInventorySpaceID = activeSpaceID()
     }
 
     private func pollVisibleWindowInventory() {
         let snapshot = axClient.windowSnapshot()
         guard case .complete = snapshot.quality else { return }
-        let currentSpaceID = activeSpaceID()
+        let transition = observeWindowInventory(
+            windows: snapshot.windows,
+            spaceID: activeSpaceID(),
+            tolerance: Self.frameTolerance,
+            in: windowInventoryObservationState
+        )
+        windowInventoryObservationState = transition.state
 
-        guard let previous = windowInventoryState else {
-            windowInventoryState = WindowInventoryState(
-                visibleWindowIDs: Set(snapshot.windows.map(\.id))
-            )
-            windowFrameInventoryState = WindowFrameInventoryState(
-                framesByWindowID: Dictionary(uniqueKeysWithValues: snapshot.windows.map { ($0.id, $0.frame) })
-            )
-            windowInventorySpaceID = currentSpaceID
-            return
-        }
-
-        if currentSpaceID != windowInventorySpaceID {
+        switch transition.effect {
+        case .activeSpaceChanged:
             reporter.info("Active Space changed during inventory poll; inventory baseline reset")
             activeSpaceChanged()
             return
-        }
-
-        let poll = pollWindowInventorySuppressingLikelySpaceReplacement(
-            previous: previous,
-            current: snapshot.windows
-        )
-        windowInventoryState = poll.state
-        if poll.suppressedSpaceReplacement {
-            windowFrameInventoryState = WindowFrameInventoryState(
-                framesByWindowID: Dictionary(uniqueKeysWithValues: snapshot.windows.map { ($0.id, $0.frame) })
-            )
+        case .likelySpaceReplacement:
             reporter.info("Suppressed likely Space replacement inventory diff")
             activeSpaceChanged()
             return
+        case nil:
+            break
         }
-        for event in poll.events {
+
+        for event in transition.events {
             emit(event, nil)
         }
 
-        let framePoll = pollWindowFrameInventory(
-            previous: windowFrameInventoryState ?? .empty,
-            current: snapshot.windows,
-            tolerance: Self.frameTolerance
-        )
-        windowFrameInventoryState = framePoll.state
-        for event in framePoll.events {
+        for event in transition.frameEvents {
             guard !echoSuppressor.isExpectedEcho(event) else {
                 reporter.info("Suppressed expected AX echo for frame inventory event")
                 continue
