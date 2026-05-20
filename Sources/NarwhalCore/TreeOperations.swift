@@ -170,10 +170,7 @@ private func insertIntoSubtreeAfterClearing(
         split.cells[nextIndex].node
     ) {
     case .success(let child):
-        var cells = split.cells
-        let old = cells[nextIndex]
-        cells[nextIndex] = makeCell(weight: old.weight, node: child)
-        return .success(.split(makeSplit(axis: split.axis, cells: cells)))
+        return .success(splitByReplacingCell(split, at: nextIndex, with: child))
     case .failure(let error):
         return .failure(error)
     }
@@ -247,10 +244,7 @@ private func resizeSplit(
         in: split.cells[nextIndex].node
     ) {
     case .success(let child):
-        var cells = split.cells
-        let old = cells[nextIndex]
-        cells[nextIndex] = makeCell(weight: old.weight, node: child)
-        return .success(.split(makeSplit(axis: split.axis, cells: cells)))
+        return .success(splitByReplacingCell(split, at: nextIndex, with: child))
     case .failure(let error):
         return .failure(error)
     }
@@ -271,9 +265,9 @@ private func resizedSplitNode(
         return .failure(.nonPositiveWeight)
     }
 
-    var cells = split.cells
-    cells[childIndex] = makeCell(weight: childWeight, node: child.node)
-    cells[neighborIndex] = makeCell(weight: neighborWeight, node: neighbor.node)
+    let cells = split.cells
+        .replacingCell(at: childIndex, with: makeCell(weight: childWeight, node: child.node))
+        .replacingCell(at: neighborIndex, with: makeCell(weight: neighborWeight, node: neighbor.node))
     return .success(.split(makeSplit(axis: split.axis, cells: cells)))
 }
 
@@ -299,14 +293,12 @@ private func insertAtCenter(_ window: WindowID, _ node: Node) -> Node {
 private func insertAtRootCorner(_ window: WindowID, _ corner: Corner, _ node: Node) -> Node {
     switch node {
     case .split(let split) where split.axis == .horizontal:
-        var cells = split.cells
-        let targetIndex = corner.horizontalDirection.edgeInsertionIndex(count: cells.count)
-        let target = cells[targetIndex]
-        cells[targetIndex] = makeCell(
-            weight: target.weight,
-            node: insertIntoCornerSide(window, corner, target.node)
+        let targetIndex = corner.horizontalDirection.edgeInsertionIndex(count: split.cells.count)
+        return splitByReplacingCell(
+            split,
+            at: targetIndex,
+            with: insertIntoCornerSide(window, corner, split.cells[targetIndex].node)
         )
-        return .split(makeSplit(axis: split.axis, cells: cells))
     case .void, .leaf, .split:
         let side = insertIntoCornerSide(window, corner, node)
         switch corner {
@@ -332,14 +324,12 @@ private func insertIntoCornerSide(_ window: WindowID, _ corner: Corner, _ node: 
     case .leaf:
         return edgeSplit(inserted: .leaf(window), existing: node, direction: verticalDirection)
     case .split(let split) where split.axis == .vertical:
-        var cells = split.cells
-        let targetIndex = verticalDirection.edgeInsertionIndex(count: cells.count)
-        let target = cells[targetIndex]
-        cells[targetIndex] = makeCell(
-            weight: target.weight,
-            node: insertIntoLane(window, corner.horizontalDirection, target.node, nextAxis: .horizontal)
+        let targetIndex = verticalDirection.edgeInsertionIndex(count: split.cells.count)
+        return splitByReplacingCell(
+            split,
+            at: targetIndex,
+            with: insertIntoLane(window, corner.horizontalDirection, split.cells[targetIndex].node, nextAxis: .horizontal)
         )
-        return .split(makeSplit(axis: split.axis, cells: cells))
     case .split:
         return edgeSplit(inserted: .leaf(window), existing: node, direction: verticalDirection)
     }
@@ -416,20 +406,17 @@ private func insertAtRootEdge(_ window: WindowID, _ direction: Direction, _ node
         }
 
         let targetIndex = direction.edgeInsertionIndex(count: split.cells.count)
-        var cells = split.cells
-        let target = cells[targetIndex]
-        let replacement = insertIntoLane(window, direction, target.node, nextAxis: direction.splitLineAxis)
-        cells[targetIndex] = makeCell(weight: target.weight, node: replacement)
-        return .split(makeSplit(axis: split.axis, cells: cells))
+        return splitByReplacingCell(
+            split,
+            at: targetIndex,
+            with: insertIntoLane(window, direction, split.cells[targetIndex].node, nextAxis: direction.splitLineAxis)
+        )
     }
 }
 
 private func insertIntoVerticalRowRealm(_ window: WindowID, _ direction: Direction, _ split: Split) -> Node {
-    var cells = split.cells
-    let targetIndex = direction.edgeInsertionIndex(count: cells.count)
-    let target = cells[targetIndex]
-    cells[targetIndex] = makeCell(weight: target.weight, node: insertIntoHorizontalRow(window, target.node))
-    return .split(makeSplit(axis: split.axis, cells: cells))
+    let targetIndex = direction.edgeInsertionIndex(count: split.cells.count)
+    return splitByReplacingCell(split, at: targetIndex, with: insertIntoHorizontalRow(window, split.cells[targetIndex].node))
 }
 
 private func insertIntoHorizontalRow(_ window: WindowID, _ node: Node) -> Node {
@@ -446,8 +433,7 @@ private func insertIntoHorizontalRow(_ window: WindowID, _ node: Node) -> Node {
             makeCell(weight: 1, node: .leaf(window))
         ]))
     case .split(let split) where split.axis == .horizontal:
-        var cells = split.cells
-        cells.insert(makeCell(weight: 1, node: .leaf(window)), at: max(0, cells.count - 1))
+        let cells = split.cells.insertingCell(makeCell(weight: 1, node: .leaf(window)), at: max(0, split.cells.count - 1))
         return .split(makeSplit(axis: split.axis, cells: cells))
     case .split:
         return insertIntoLane(window, .right, node, nextAxis: .horizontal)
@@ -455,20 +441,11 @@ private func insertIntoHorizontalRow(_ window: WindowID, _ node: Node) -> Node {
 }
 
 private func insertIntoCenterLane(_ window: WindowID, _ direction: Direction, _ split: Split) -> Node {
-    var cells = split.cells
-    let targetIndex = centerLaneIndex(in: &cells)
-    let target = cells[targetIndex]
+    let centerLane = centeredLane(in: split.cells)
+    let target = centerLane.cells[centerLane.index]
     let replacement = insertAtRootEdge(window, direction, target.node)
-    cells[targetIndex] = makeCell(weight: target.weight, node: replacement)
+    let cells = centerLane.cells.replacingCell(at: centerLane.index, with: makeCell(weight: target.weight, node: replacement))
     return .split(makeSplit(axis: split.axis, cells: cells))
-}
-
-private func centerLaneIndex(in cells: inout [Cell]) -> Int {
-    if cells.count == 2 {
-        cells.insert(makeCell(weight: 1, node: .void), at: 1)
-        return 1
-    }
-    return cells.count / 2
 }
 
 private func insertIntoLane(_ window: WindowID, _ direction: Direction, _ node: Node, nextAxis: Axis) -> Node {
@@ -483,13 +460,11 @@ private func insertIntoLane(_ window: WindowID, _ direction: Direction, _ node: 
         return splitLaneLeaf(inserted: .leaf(window), existing: node, direction: direction, axis: nextAxis)
     case .split(let split):
         let targetIndex = direction.centerFacingIndex(axis: split.axis, count: split.cells.count)
-        var cells = split.cells
-        let target = cells[targetIndex]
-        cells[targetIndex] = makeCell(
-            weight: target.weight,
-            node: insertIntoLane(window, direction, target.node, nextAxis: split.axis.toggled)
+        return splitByReplacingCell(
+            split,
+            at: targetIndex,
+            with: insertIntoLane(window, direction, split.cells[targetIndex].node, nextAxis: split.axis.toggled)
         )
-        return .split(makeSplit(axis: split.axis, cells: cells))
     }
 }
 
@@ -536,6 +511,39 @@ private func splitLaneLeaf(inserted: Node, existing: Node, direction: Direction,
         ]
     }
     return .split(makeSplit(axis: axis, cells: cells))
+}
+
+private struct CenterLane {
+    let cells: [Cell]
+    let index: Int
+}
+
+private func centeredLane(in cells: [Cell]) -> CenterLane {
+    if cells.count == 2 {
+        return CenterLane(cells: cells.insertingCell(makeCell(weight: 1, node: .void), at: 1), index: 1)
+    }
+    return CenterLane(cells: cells, index: cells.count / 2)
+}
+
+private func splitByReplacingCell(_ split: Split, at index: Int, with node: Node) -> Node {
+    let target = split.cells[index]
+    return .split(makeSplit(
+        axis: split.axis,
+        cells: split.cells.replacingCell(at: index, with: makeCell(weight: target.weight, node: node))
+    ))
+}
+
+private extension Array where Element == Cell {
+    func replacingCell(at index: Int, with cell: Cell) -> [Cell] {
+        enumerated().map { currentIndex, element in
+            currentIndex == index ? cell : element
+        }
+    }
+
+    func insertingCell(_ cell: Cell, at index: Int) -> [Cell] {
+        let insertionIndex = Swift.max(0, Swift.min(index, count))
+        return Array(prefix(insertionIndex)) + [cell] + Array(dropFirst(insertionIndex))
+    }
 }
 
 private extension Direction {
