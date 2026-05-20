@@ -50,9 +50,10 @@ public func pollWindowInventory(
     previous: WindowInventoryState,
     current: [WindowMetadata]
 ) -> WindowInventoryPoll {
-    let windowsByID = current.reduce(into: [:]) { result, metadata in
-        result[metadata.id] = metadata
-    }
+    let windowsByID = Dictionary(
+        current.map { ($0.id, $0) },
+        uniquingKeysWith: { _, replacement in replacement }
+    )
     let currentIDs = Set(windowsByID.keys)
     let opened = currentIDs.subtracting(previous.visibleWindowIDs)
         .sorted { $0.raw < $1.raw }
@@ -110,9 +111,10 @@ public func pollWindowFrameInventory(
     current: [WindowMetadata],
     tolerance: CGFloat = 1
 ) -> WindowFrameInventoryPoll {
-    let currentFrames = current.reduce(into: [WindowID: CGRect]()) { result, metadata in
-        result[metadata.id] = metadata.frame
-    }
+    let currentFrames = Dictionary(
+        current.map { ($0.id, $0.frame) },
+        uniquingKeysWith: { _, replacement in replacement }
+    )
     let currentIDs = Set(currentFrames.keys)
     let previousIDs = Set(previous.framesByWindowID.keys)
     let sharedIDs = currentIDs.intersection(previousIDs).sorted { $0.raw < $1.raw }

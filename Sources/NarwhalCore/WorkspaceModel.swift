@@ -36,25 +36,24 @@ public func observedVisibleWindowIDs(_ key: WorkspaceKey, in world: World) -> Se
 }
 
 public func activeObservedVisibleWindowIDs(in world: World) -> Set<WindowID> {
-    activeWorkspaceKeys(in: world).reduce(into: Set<WindowID>()) { result, key in
-        result.formUnion(observedVisibleWindowIDs(key, in: world))
+    activeWorkspaceKeys(in: world).reduce(Set<WindowID>()) { result, key in
+        result.union(observedVisibleWindowIDs(key, in: world))
     }
 }
 
 public func activeSpaceWindowIDs(in world: World) -> Set<WindowID> {
-    activeWorkspaceKeys(in: world).reduce(into: Set<WindowID>()) { result, key in
-        result.formUnion(workspaceWindowIDs(key, in: world))
+    activeWorkspaceKeys(in: world).reduce(Set<WindowID>()) { result, key in
+        result.union(workspaceWindowIDs(key, in: world))
     }
 }
 
 public func sanitizedFloatingIDs(in displayState: DisplaySpaceState) -> [WindowID] {
     let tiled = Set(occupiedWindows(in: displayState.tree))
-    var seen: Set<WindowID> = []
-    return displayState.floating.filter { windowID in
-        guard !tiled.contains(windowID), !seen.contains(windowID) else { return false }
-        seen.insert(windowID)
-        return true
-    }
+    return displayState.floating
+        .reduce(FloatingIDsAccumulator(tiled: tiled, seen: [], ordered: [])) { accumulator, windowID in
+            accumulator.adding(windowID)
+        }
+        .ordered
 }
 
 public func sanitizedDisplayState(_ displayState: DisplaySpaceState) -> DisplaySpaceState {
@@ -139,14 +138,29 @@ public func windowIDs(in displayState: DisplaySpaceState) -> Set<WindowID> {
 }
 
 public func windowIDs(in space: SpaceState) -> Set<WindowID> {
-    space.displays.values.reduce(into: Set<WindowID>()) { result, displayState in
-        result.formUnion(windowIDs(in: displayState))
+    space.displays.values.reduce(Set<WindowID>()) { result, displayState in
+        result.union(windowIDs(in: displayState))
     }
 }
 
 public func trackedWindowIDs(in spaces: [SpaceID: SpaceState]) -> Set<WindowID> {
-    spaces.values.reduce(into: Set<WindowID>()) { result, space in
-        result.formUnion(windowIDs(in: space))
+    spaces.values.reduce(Set<WindowID>()) { result, space in
+        result.union(windowIDs(in: space))
+    }
+}
+
+private struct FloatingIDsAccumulator {
+    let tiled: Set<WindowID>
+    let seen: Set<WindowID>
+    let ordered: [WindowID]
+
+    func adding(_ windowID: WindowID) -> FloatingIDsAccumulator {
+        guard !tiled.contains(windowID), !seen.contains(windowID) else { return self }
+        return FloatingIDsAccumulator(
+            tiled: tiled,
+            seen: seen.union([windowID]),
+            ordered: ordered + [windowID]
+        )
     }
 }
 
