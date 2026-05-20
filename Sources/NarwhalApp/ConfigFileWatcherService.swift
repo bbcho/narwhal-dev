@@ -1,5 +1,6 @@
 import CoreServices
 import Foundation
+import NarwhalAppSupport
 
 @MainActor
 final class ConfigFileWatcherService {
@@ -9,8 +10,11 @@ final class ConfigFileWatcherService {
     private let reporter: StartupReporter
     private let fileManager: FileManager
     private let configChanged: @MainActor () -> Void
+    private let watchTarget: ConfigWatchTarget
     private var stream: FSEventStreamRef?
     private var reloadTimer: Timer?
+    private var reloadState = ConfigReloadDebounceState.empty
+    private var reloadTimerGeneration: UInt64?
 
     init(
         configURL: URL,
@@ -22,6 +26,10 @@ final class ConfigFileWatcherService {
         self.reporter = reporter
         self.fileManager = fileManager
         self.configChanged = configChanged
+        self.watchTarget = ConfigWatchTarget(
+            configPath: self.configURL.path,
+            directoryPath: self.configURL.deletingLastPathComponent().standardizedFileURL.path
+        )
     }
 
     func start() {
@@ -70,6 +78,8 @@ final class ConfigFileWatcherService {
     func stop() {
         reloadTimer?.invalidate()
         reloadTimer = nil
+        reloadTimerGeneration = nil
+        reloadState = cancelConfigReload(in: reloadState)
 
         guard let stream else { return }
         FSEventStreamStop(stream)
@@ -93,22 +103,39 @@ final class ConfigFileWatcherService {
 
     private func handleEvent(path: String) {
         let eventURL = URL(fileURLWithPath: path).standardizedFileURL
-        let targetDirectory = configURL.deletingLastPathComponent().standardizedFileURL
-        guard eventURL == configURL || eventURL == targetDirectory else { return }
+        guard configChangeEventTouchesTarget(path: eventURL.path, target: watchTarget) else { return }
         scheduleReload()
     }
 
     private func scheduleReload() {
+        let scheduled = scheduleConfigReload(in: reloadState)
+        reloadState = scheduled.state
+        scheduleTimer(generation: scheduled.generation)
+    }
+
+    private func scheduleTimer(generation: UInt64) {
         reloadTimer?.invalidate()
         let timer = Timer(timeInterval: Self.reloadDelay, repeats: false) { [weak self] _ in
             Task { @MainActor in
-                guard let self else { return }
-                self.reporter.info("Config file changed; reloading \(self.configURL.path)")
-                self.configChanged()
+                self?.fireTimer(generation: generation)
             }
         }
         reloadTimer = timer
+        reloadTimerGeneration = generation
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func fireTimer(generation: UInt64) {
+        if reloadTimerGeneration == generation {
+            reloadTimer?.invalidate()
+            reloadTimer = nil
+            reloadTimerGeneration = nil
+        }
+        let fired = fireConfigReloadTimer(generation: generation, in: reloadState)
+        reloadState = fired.state
+        guard fired.decision == .reload else { return }
+        reporter.info("Config file changed; reloading \(configURL.path)")
+        configChanged()
     }
 
     private static let handleEvents: FSEventStreamCallback = { _, info, eventCount, eventPaths, _, _ in
