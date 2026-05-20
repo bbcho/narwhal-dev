@@ -114,36 +114,31 @@ private func applyEject(_ windowID: WindowID, to world: World) -> Result<World, 
         return .failure(.displayNotFound(displayID))
     }
 
-    var displayStates = space.displays.mapValues { displayState in
+    let ejectedDisplayStates = space.displays.mapValues { displayState in
         DisplaySpaceState(
             displayID: displayState.displayID,
             tree: ejectFromTree(windowID, displayState.tree),
             floating: displayState.floating.filter { $0 != windowID }
         )
     }
-    let target = displayStates[displayID] ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
-    displayStates[displayID] = DisplaySpaceState(
+    let target = ejectedDisplayStates[displayID] ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
+    let displayStates = ejectedDisplayStates.setting(displayID, to: DisplaySpaceState(
         displayID: displayID,
         tree: target.tree,
         floating: target.floating + [windowID]
-    )
-
-    var spaces = world.spaces
-    spaces[key.spaceID] = SpaceState(id: key.spaceID, displays: displayStates, focused: windowID)
-
-    var windowDisplay = world.windowDisplay
-    windowDisplay[windowID] = displayID
-    var windowSpace = world.windowSpace
-    windowSpace[windowID] = key.spaceID
+    ))
 
     return .success(World(
         displays: world.displays,
         activeSpace: world.activeSpace,
         activeSpaceByDisplay: world.activeSpaceByDisplay,
-        spaces: spaces,
+        spaces: world.spaces.setting(
+            key.spaceID,
+            to: SpaceState(id: key.spaceID, displays: displayStates, focused: windowID)
+        ),
         windows: world.windows,
-        windowDisplay: windowDisplay,
-        windowSpace: windowSpace,
+        windowDisplay: world.windowDisplay.setting(windowID, to: displayID),
+        windowSpace: world.windowSpace.setting(windowID, to: key.spaceID),
         observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
@@ -202,20 +197,19 @@ private func applyFocus(_ windowID: WindowID, to world: World) -> Result<World, 
         return .failure(.activeSpaceUnavailable)
     }
 
-    var spaces = world.spaces
-    let space = spaces[key.spaceID] ?? SpaceState(id: key.spaceID, displays: [:], focused: nil)
-    spaces[key.spaceID] = SpaceState(id: key.spaceID, displays: space.displays, focused: windowID)
-    var windowSpace = world.windowSpace
-    windowSpace[windowID] = key.spaceID
+    let space = world.spaces[key.spaceID] ?? SpaceState(id: key.spaceID, displays: [:], focused: nil)
 
     return .success(World(
         displays: world.displays,
         activeSpace: world.activeSpace,
         activeSpaceByDisplay: world.activeSpaceByDisplay,
-        spaces: spaces,
+        spaces: world.spaces.setting(
+            key.spaceID,
+            to: SpaceState(id: key.spaceID, displays: space.displays, focused: windowID)
+        ),
         windows: world.windows,
         windowDisplay: world.windowDisplay,
-        windowSpace: windowSpace,
+        windowSpace: world.windowSpace.setting(windowID, to: key.spaceID),
         observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
@@ -329,24 +323,21 @@ private func applySwap(_ windowID: WindowID, direction: Direction, to world: Wor
             floating: sanitizedFloatingIDs(in: displayState)
         )
     }
-    var spaces = world.spaces
-    spaces[key.spaceID] = SpaceState(id: key.spaceID, displays: displayStates, focused: windowID)
-
-    var windowDisplay = world.windowDisplay
-    windowDisplay[windowID] = targetDisplay
-    windowDisplay[targetWindowID] = sourceDisplay
-    var windowSpace = world.windowSpace
-    windowSpace[windowID] = key.spaceID
-    windowSpace[targetWindowID] = key.spaceID
-
     return .success(World(
         displays: world.displays,
         activeSpace: world.activeSpace,
         activeSpaceByDisplay: world.activeSpaceByDisplay,
-        spaces: spaces,
+        spaces: world.spaces.setting(
+            key.spaceID,
+            to: SpaceState(id: key.spaceID, displays: displayStates, focused: windowID)
+        ),
         windows: world.windows,
-        windowDisplay: windowDisplay,
-        windowSpace: windowSpace,
+        windowDisplay: world.windowDisplay
+            .setting(windowID, to: targetDisplay)
+            .setting(targetWindowID, to: sourceDisplay),
+        windowSpace: world.windowSpace
+            .setting(windowID, to: key.spaceID)
+            .setting(targetWindowID, to: key.spaceID),
         observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
@@ -386,21 +377,20 @@ private func applyResizeSplit(
         return .failure(commandError(from: error, windowID: windowID, direction: direction))
     }
 
-    var displayStates = space.displays
-    displayStates[displayID] = DisplaySpaceState(
+    let displayStates = space.displays.setting(displayID, to: DisplaySpaceState(
         displayID: displayID,
         tree: resizedTree,
         floating: displayState.floating
-    )
-
-    var spaces = world.spaces
-    spaces[key.spaceID] = SpaceState(id: key.spaceID, displays: displayStates, focused: windowID)
+    ))
 
     return .success(World(
         displays: world.displays,
         activeSpace: world.activeSpace,
         activeSpaceByDisplay: world.activeSpaceByDisplay,
-        spaces: spaces,
+        spaces: world.spaces.setting(
+            key.spaceID,
+            to: SpaceState(id: key.spaceID, displays: displayStates, focused: windowID)
+        ),
         windows: world.windows,
         windowDisplay: world.windowDisplay,
         windowSpace: world.windowSpace,
@@ -436,14 +426,14 @@ private func applyBalance(_ spaceID: SpaceID, to world: World) -> Result<World, 
             floating: sanitizedFloatingIDs(in: displayState)
         )
     }
-    var spaces = world.spaces
-    spaces[spaceID] = SpaceState(id: space.id, displays: displayStates, focused: space.focused)
-
     return .success(World(
         displays: world.displays,
         activeSpace: world.activeSpace,
         activeSpaceByDisplay: world.activeSpaceByDisplay,
-        spaces: spaces,
+        spaces: world.spaces.setting(
+            spaceID,
+            to: SpaceState(id: space.id, displays: displayStates, focused: space.focused)
+        ),
         windows: world.windows,
         windowDisplay: world.windowDisplay,
         windowSpace: world.windowSpace,
@@ -526,7 +516,7 @@ private func retileTarget(
 }
 
 private func worldByRetiling(_ target: RetileTarget, insertion: RetileInsertion, in world: World) -> Result<World, CommandError> {
-    var spaces = world.spaces.mapValues { space in
+    let ejectedSpaces = world.spaces.mapValues { space in
         let displays = space.displays.mapValues { displayState in
             DisplaySpaceState(
                 displayID: displayState.displayID,
@@ -537,9 +527,8 @@ private func worldByRetiling(_ target: RetileTarget, insertion: RetileInsertion,
         let focused = space.focused == target.windowID ? nil : space.focused
         return SpaceState(id: space.id, displays: displays, focused: focused)
     }
-    let currentSpace = spaces[target.activeSpace] ?? SpaceState(id: target.activeSpace, displays: [:], focused: nil)
-    var displayStates = currentSpace.displays
-    let targetDisplayState = displayStates[target.displayID] ?? DisplaySpaceState(
+    let currentSpace = ejectedSpaces[target.activeSpace] ?? SpaceState(id: target.activeSpace, displays: [:], focused: nil)
+    let targetDisplayState = currentSpace.displays[target.displayID] ?? DisplaySpaceState(
         displayID: target.displayID,
         tree: .void,
         floating: []
@@ -551,27 +540,23 @@ private func worldByRetiling(_ target: RetileTarget, insertion: RetileInsertion,
     case .failure(let error):
         return .failure(error)
     }
-    displayStates[target.displayID] = DisplaySpaceState(
+    let displayStates = currentSpace.displays.setting(target.displayID, to: DisplaySpaceState(
         displayID: target.displayID,
         tree: targetTree,
         floating: targetDisplayState.floating.filter { $0 != target.windowID }
-    )
-
-    spaces[target.activeSpace] = SpaceState(id: target.activeSpace, displays: displayStates, focused: target.windowID)
-
-    var windowDisplay = world.windowDisplay
-    windowDisplay[target.windowID] = target.displayID
-    var windowSpace = world.windowSpace
-    windowSpace[target.windowID] = target.activeSpace
+    ))
 
     return .success(World(
         displays: world.displays,
         activeSpace: world.activeSpace ?? target.activeSpace,
         activeSpaceByDisplay: world.activeSpaceByDisplay,
-        spaces: spaces,
+        spaces: ejectedSpaces.setting(
+            target.activeSpace,
+            to: SpaceState(id: target.activeSpace, displays: displayStates, focused: target.windowID)
+        ),
         windows: world.windows,
-        windowDisplay: windowDisplay,
-        windowSpace: windowSpace,
+        windowDisplay: world.windowDisplay.setting(target.windowID, to: target.displayID),
+        windowSpace: world.windowSpace.setting(target.windowID, to: target.activeSpace),
         observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
@@ -614,14 +599,10 @@ public func resetActiveSpaceTilingState(in world: World) -> World {
     guard !activeKeys.isEmpty else { return world }
 
     let activeWindowIDs = activeSpaceWindowIDs(in: world)
-    var spaces = world.spaces
-    for key in activeKeys {
-        guard let space = spaces[key.spaceID] else { continue }
-        var displays = space.displays
-        if let displayState = displays[key.displayID] {
-            displays[key.displayID] = DisplaySpaceState(displayID: displayState.displayID, tree: .void, floating: [])
-        }
-        spaces[key.spaceID] = SpaceState(id: space.id, displays: displays, focused: nil)
+    let spaces = activeKeys.reduce(world.spaces) { spaces, key in
+        guard let space = spaces[key.spaceID] else { return spaces }
+        let displayStates = resetDisplay(key.displayID, in: space.displays)
+        return spaces.setting(key.spaceID, to: SpaceState(id: space.id, displays: displayStates, focused: nil))
     }
     let activeOnlyWindowIDs = activeWindowIDs.subtracting(trackedWindowIDs(in: spaces))
 
@@ -643,9 +624,6 @@ public func resetActiveSpaceTilingState(in world: World) -> World {
 public func recordObservedConstraints(_ observed: WindowConstraints, for windowID: WindowID, in world: World) -> World {
     guard world.windows[windowID] != nil, !observed.isEmpty else { return world }
 
-    var windowConstraints = world.windowConstraints
-    windowConstraints[windowID] = (windowConstraints[windowID] ?? WindowConstraints()).merged(with: observed)
-
     return World(
         displays: world.displays,
         activeSpace: world.activeSpace,
@@ -655,7 +633,10 @@ public func recordObservedConstraints(_ observed: WindowConstraints, for windowI
         windowDisplay: world.windowDisplay,
         windowSpace: world.windowSpace,
         observedVisibleWindows: world.observedVisibleWindows,
-        windowConstraints: windowConstraints,
+        windowConstraints: world.windowConstraints.setting(
+            windowID,
+            to: (world.windowConstraints[windowID] ?? WindowConstraints()).merged(with: observed)
+        ),
         pendingRules: world.pendingRules,
         config: world.config
     )
@@ -667,25 +648,22 @@ private func applyExternalFocus(_ windowID: WindowID, to world: World) -> Result
     }
     guard let key = observedWorkspaceKey(forVisibleWindow: windowID, in: world)
         ?? workspaceKey(forWindow: windowID, in: world),
-          var space = world.spaces[key.spaceID]
+          let space = world.spaces[key.spaceID]
     else {
         return .success(world)
     }
-
-    space = SpaceState(id: space.id, displays: space.displays, focused: windowID)
-    var spaces = world.spaces
-    spaces[key.spaceID] = space
-    var windowSpace = world.windowSpace
-    windowSpace[windowID] = key.spaceID
 
     return .success(World(
         displays: world.displays,
         activeSpace: world.activeSpace,
         activeSpaceByDisplay: world.activeSpaceByDisplay,
-        spaces: spaces,
+        spaces: world.spaces.setting(
+            key.spaceID,
+            to: SpaceState(id: space.id, displays: space.displays, focused: windowID)
+        ),
         windows: world.windows,
         windowDisplay: world.windowDisplay,
-        windowSpace: windowSpace,
+        windowSpace: world.windowSpace.setting(windowID, to: key.spaceID),
         observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
@@ -710,44 +688,16 @@ private func applyExternalFrameUpdate(_ windowID: WindowID, frame: CGRect, to wo
         return .failure(.windowNotFound(windowID))
     }
 
-    var windows = world.windows
-    windows[windowID] = WindowMetadata(
-        id: metadata.id,
-        bundleID: metadata.bundleID,
-        title: metadata.title,
-        role: metadata.role,
-        pid: metadata.pid,
-        frame: frame,
-        isResizable: metadata.isResizable,
-        isMinimized: metadata.isMinimized
-    )
-
-    var windowDisplay = world.windowDisplay
-    var windowSpace = world.windowSpace
-    if let displayID = displayContainingFrame(frame, displays: world.displays) {
-        windowDisplay[windowID] = displayID
-        let activeSpaces = Set(world.activeSpaceByDisplay.values)
-        if let currentSpace = windowSpace[windowID] {
-            if activeSpaces.contains(currentSpace),
-               let spaceID = activeSpaceID(for: displayID, in: world) {
-                windowSpace[windowID] = spaceID
-            }
-        } else if let spaceID = activeSpaceID(for: displayID, in: world) {
-            windowSpace[windowID] = spaceID
-        }
-    } else {
-        windowDisplay.removeValue(forKey: windowID)
-        windowSpace.removeValue(forKey: windowID)
-    }
+    let ownership = externalFrameOwnership(windowID: windowID, frame: frame, in: world)
 
     return .success(World(
         displays: world.displays,
         activeSpace: world.activeSpace,
         activeSpaceByDisplay: world.activeSpaceByDisplay,
         spaces: world.spaces,
-        windows: windows,
-        windowDisplay: windowDisplay,
-        windowSpace: windowSpace,
+        windows: world.windows.setting(windowID, to: metadata.withFrame(frame)),
+        windowDisplay: ownership.windowDisplay,
+        windowSpace: ownership.windowSpace,
         observedVisibleWindows: world.observedVisibleWindows,
         windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules,
@@ -769,4 +719,83 @@ private func worldBySettingConfig(_ config: Config, in world: World) -> World {
         pendingRules: world.pendingRules,
         config: config
     )
+}
+
+private func resetDisplay(
+    _ displayID: DisplayID,
+    in displays: [DisplayID: DisplaySpaceState]
+) -> [DisplayID: DisplaySpaceState] {
+    guard let displayState = displays[displayID] else { return displays }
+    return displays.setting(
+        displayID,
+        to: DisplaySpaceState(displayID: displayState.displayID, tree: .void, floating: [])
+    )
+}
+
+private struct ExternalFrameOwnership {
+    let windowDisplay: [WindowID: DisplayID]
+    let windowSpace: [WindowID: SpaceID]
+}
+
+private func externalFrameOwnership(
+    windowID: WindowID,
+    frame: CGRect,
+    in world: World
+) -> ExternalFrameOwnership {
+    guard let displayID = displayContainingFrame(frame, displays: world.displays) else {
+        return ExternalFrameOwnership(
+            windowDisplay: world.windowDisplay.removing(windowID),
+            windowSpace: world.windowSpace.removing(windowID)
+        )
+    }
+
+    return ExternalFrameOwnership(
+        windowDisplay: world.windowDisplay.setting(windowID, to: displayID),
+        windowSpace: windowSpaceAfterExternalFrameUpdate(windowID: windowID, displayID: displayID, in: world)
+    )
+}
+
+private func windowSpaceAfterExternalFrameUpdate(
+    windowID: WindowID,
+    displayID: DisplayID,
+    in world: World
+) -> [WindowID: SpaceID] {
+    if let currentSpace = world.windowSpace[windowID] {
+        let activeSpaces = Set(world.activeSpaceByDisplay.values)
+        guard activeSpaces.contains(currentSpace),
+              let spaceID = activeSpaceID(for: displayID, in: world)
+        else {
+            return world.windowSpace
+        }
+        return world.windowSpace.setting(windowID, to: spaceID)
+    }
+    guard let spaceID = activeSpaceID(for: displayID, in: world) else {
+        return world.windowSpace
+    }
+    return world.windowSpace.setting(windowID, to: spaceID)
+}
+
+private extension WindowMetadata {
+    func withFrame(_ frame: CGRect) -> WindowMetadata {
+        WindowMetadata(
+            id: id,
+            bundleID: bundleID,
+            title: title,
+            role: role,
+            pid: pid,
+            frame: frame,
+            isResizable: isResizable,
+            isMinimized: isMinimized
+        )
+    }
+}
+
+private extension Dictionary {
+    func setting(_ key: Key, to value: Value) -> [Key: Value] {
+        merging([key: value]) { _, replacement in replacement }
+    }
+
+    func removing(_ key: Key) -> [Key: Value] {
+        filter { $0.key != key }
+    }
 }
