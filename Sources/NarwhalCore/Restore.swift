@@ -255,9 +255,7 @@ public func restoreWorld(
     spaceTopology: SpaceTopology? = nil,
     config: Config
 ) -> World {
-    let windows = liveWindows.reduce(into: [:]) { result, metadata in
-        result[metadata.id] = metadata
-    }
+    let windows = Dictionary(liveWindows.map { ($0.id, $0) }, uniquingKeysWith: { _, replacement in replacement })
     let activeSpaceByDisplay: [DisplayID: SpaceID]
     if let topologyActiveSpaces = spaceTopology?.activeSpaceByDisplay, !topologyActiveSpaces.isEmpty {
         activeSpaceByDisplay = topologyActiveSpaces
@@ -284,76 +282,33 @@ public func restoreWorld(
     }
 
     let stored = validateStoredWorld(stored).successValue ?? .empty
-    var matcher = RestoreMatcher(liveWindows: Array(windows.values))
+    let matcher = RestoreMatcher(liveWindows: Array(windows.values))
     let storedSpaces: [(SpaceID, StoredSpace)]
     if let workspaces = stored.workspaces, !workspaces.isEmpty {
         storedSpaces = workspaces.map { ($0.spaceID, $0.space) }
     } else {
         storedSpaces = stored.activeSpace.map { [(activeSpace, $0)] } ?? []
     }
-    var spaces: [SpaceID: SpaceState] = [:]
-    var restoredDisplayByWindow: [WindowID: DisplayID] = [:]
-    var restoredSpaceByWindow: [WindowID: SpaceID] = [:]
-
-    for (spaceID, storedSpace) in storedSpaces {
-        var displayStates: [DisplayID: DisplaySpaceState] = [:]
-        for layout in storedSpace.layouts {
-            guard let displayID = matchDisplay(for: layout, displays: displays) else { continue }
-            let tree = restoreNode(
-                layout.tree,
-                matcher: &matcher,
-                displayID: displayID,
-                spaceID: spaceID,
-                restoredDisplayByWindow: &restoredDisplayByWindow,
-                restoredSpaceByWindow: &restoredSpaceByWindow
-            )
-            let floating = layout.floating.compactMap { ref -> WindowID? in
-                guard let windowID = matcher.take(ref) else { return nil }
-                restoredDisplayByWindow[windowID] = displayID
-                restoredSpaceByWindow[windowID] = spaceID
-                return windowID
-            }
-            displayStates[displayID] = DisplaySpaceState(displayID: displayID, tree: tree, floating: floating)
-        }
-        let focused = storedSpace.focused.flatMap { matcher.lookup($0) }
-        spaces[spaceID] = SpaceState(id: spaceID, displays: displayStates, focused: focused)
-    }
-
-    var windowDisplay = displayOwnership(for: windows.values, displays: displays)
-    for (windowID, displayID) in restoredDisplayByWindow {
-        windowDisplay[windowID] = displayID
-    }
-
-    var windowSpace = liveWindowSpace
-    for (windowID, spaceID) in restoredSpaceByWindow {
-        windowSpace[windowID] = spaceID
-    }
-    for (windowID, displayID) in windowDisplay where windowSpace[windowID] == nil {
-        windowSpace[windowID] = activeSpaceByDisplay[displayID] ?? activeSpace
-    }
-
-    let activeFallbackSpaces = Set(activeSpaceByDisplay.values).union([activeSpace])
-    for spaceID in activeFallbackSpaces where spaces[spaceID] == nil {
-        spaces[spaceID] = SpaceState(id: spaceID, displays: [:], focused: nil)
-    }
-    for spaceID in spaces.keys.sorted(by: { $0.raw < $1.raw }) {
-        guard let space = spaces[spaceID] else { continue }
-        var displayStates = space.displays
-        for displayID in displays.keys {
-            let existing = displayStates[displayID] ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
-            let alreadyAssigned = Set(occupiedWindows(in: existing.tree)).union(existing.floating)
-            let floating = existing.floating + windowDisplay
-                .filter { windowID, ownedDisplayID in
-                    ownedDisplayID == displayID
-                        && windowSpace[windowID] == spaceID
-                        && !alreadyAssigned.contains(windowID)
-                }
-                .map(\.key)
-                .sorted { $0.raw < $1.raw }
-            displayStates[displayID] = DisplaySpaceState(displayID: displayID, tree: existing.tree, floating: floating)
-        }
-        spaces[spaceID] = SpaceState(id: space.id, displays: displayStates, focused: space.focused)
-    }
+    let projection = restoreSpaces(storedSpaces, matcher: matcher, displays: displays)
+    let windowDisplay = displayOwnership(for: windows.values, displays: displays)
+        .merging(projection.displayByWindow) { _, restored in restored }
+    let windowSpace = restoredWindowSpace(
+        liveWindowSpace: liveWindowSpace,
+        restoredSpaceByWindow: projection.spaceByWindow,
+        windowDisplay: windowDisplay,
+        activeSpaceByDisplay: activeSpaceByDisplay,
+        fallbackSpace: activeSpace
+    )
+    let spaces = spacesByAddingDisplayFloatingWindows(
+        spaces: spacesWithActiveFallbacks(
+            projection.spaces,
+            activeSpaceByDisplay: activeSpaceByDisplay,
+            activeSpace: activeSpace
+        ),
+        displays: displays,
+        windowDisplay: windowDisplay,
+        windowSpace: windowSpace
+    )
 
     return World(
         displays: displays,
@@ -365,35 +320,22 @@ public func restoreWorld(
         windowSpace: windowSpace,
         observedVisibleWindows: [:],
         windowConstraints: [:],
-        pendingRules: restoredPendingRules(stored.pendingRules, matcher: matcher),
+        pendingRules: restoredPendingRules(stored.pendingRules, matcher: projection.matcher),
         config: config
     )
 }
 
 private extension StoredWorld {
     var allWindowRefs: [StoredWindowRef] {
-        var refs: [StoredWindowRef] = []
-        if let activeSpace {
-            for layout in activeSpace.layouts {
-                refs.append(contentsOf: layout.tree.windowRefs)
-                refs.append(contentsOf: layout.floating)
-            }
-            if let focused = activeSpace.focused {
-                refs.append(focused)
-            }
-        }
-        for workspace in workspaces ?? [] {
-            for layout in workspace.space.layouts {
-                refs.append(contentsOf: layout.tree.windowRefs)
-                refs.append(contentsOf: layout.floating)
-            }
-            if let focused = workspace.space.focused {
-                refs.append(focused)
-            }
-        }
-        refs.append(contentsOf: pendingRules.map(\.window))
-        return refs
+        (activeSpace.map(storedWindowRefs(in:)) ?? [])
+            + (workspaces ?? []).flatMap { storedWindowRefs(in: $0.space) }
+            + pendingRules.map(\.window)
     }
+}
+
+private func storedWindowRefs(in space: StoredSpace) -> [StoredWindowRef] {
+    space.layouts.flatMap { $0.tree.windowRefs + $0.floating }
+        + (space.focused.map { [$0] } ?? [])
 }
 
 private struct RestoreWindowKey: Hashable {
@@ -404,20 +346,30 @@ private struct RestoreWindowKey: Hashable {
 
 private struct RestoreMatcher {
     private let candidatesByKey: [RestoreWindowKey: [WindowMetadata]]
-    private var consumed: Set<WindowID> = []
+    private let consumed: Set<WindowID>
 
     init(liveWindows: [WindowMetadata]) {
-        candidatesByKey = Dictionary(grouping: liveWindows, by: \.restoreKey).mapValues(stableWindowOrder)
+        self.init(
+            candidatesByKey: Dictionary(grouping: liveWindows, by: \.restoreKey).mapValues(stableWindowOrder),
+            consumed: []
+        )
     }
 
-    mutating func take(_ ref: StoredWindowRef) -> WindowID? {
+    private init(candidatesByKey: [RestoreWindowKey: [WindowMetadata]], consumed: Set<WindowID>) {
+        self.candidatesByKey = candidatesByKey
+        self.consumed = consumed
+    }
+
+    func taking(_ ref: StoredWindowRef) -> RestoreMatch {
         guard let metadata = bestCandidate(
             for: ref,
             in: candidatesByKey[ref.restoreKey, default: []],
             excluding: consumed
-        ) else { return nil }
-        consumed.insert(metadata.id)
-        return metadata.id
+        ) else { return RestoreMatch(matcher: self, windowID: nil) }
+        return RestoreMatch(
+            matcher: RestoreMatcher(candidatesByKey: candidatesByKey, consumed: consumed.union([metadata.id])),
+            windowID: metadata.id
+        )
     }
 
     func lookup(_ ref: StoredWindowRef) -> WindowID? {
@@ -450,18 +402,288 @@ private struct RestoreMatcher {
     }
 }
 
+private struct RestoreMatch {
+    let matcher: RestoreMatcher
+    let windowID: WindowID?
+}
+
 private func storedRefsByWindowID(for windows: [WindowID: WindowMetadata]) -> [WindowID: StoredWindowRef] {
-    Dictionary(grouping: Array(windows.values), by: \.restoreKey).values.reduce(into: [:]) { result, group in
-        for (occurrence, metadata) in stableWindowOrder(group).enumerated() {
-            result[metadata.id] = StoredWindowRef(
-                bundleID: metadata.bundleID,
-                title: metadata.title,
-                role: metadata.role,
-                occurrence: occurrence,
-                lastKnownFrame: metadata.frame
+    Dictionary(
+        Dictionary(grouping: Array(windows.values), by: \.restoreKey).values.flatMap { group in
+            stableWindowOrder(group).enumerated().map { occurrence, metadata in
+                (
+                    metadata.id,
+                    StoredWindowRef(
+                        bundleID: metadata.bundleID,
+                        title: metadata.title,
+                        role: metadata.role,
+                        occurrence: occurrence,
+                        lastKnownFrame: metadata.frame
+                    )
+                )
+            }
+        },
+        uniquingKeysWith: { _, replacement in replacement }
+    )
+}
+
+private struct RestoredSpacesProjection {
+    let matcher: RestoreMatcher
+    let spaces: [SpaceID: SpaceState]
+    let displayByWindow: [WindowID: DisplayID]
+    let spaceByWindow: [WindowID: SpaceID]
+
+    static func empty(matcher: RestoreMatcher) -> RestoredSpacesProjection {
+        RestoredSpacesProjection(matcher: matcher, spaces: [:], displayByWindow: [:], spaceByWindow: [:])
+    }
+}
+
+private func restoreSpaces(
+    _ storedSpaces: [(SpaceID, StoredSpace)],
+    matcher: RestoreMatcher,
+    displays: [DisplayID: DisplayInfo]
+) -> RestoredSpacesProjection {
+    storedSpaces.reduce(.empty(matcher: matcher)) { state, storedSpace in
+        let restoredSpace = restoreSpace(
+            storedSpace.1,
+            spaceID: storedSpace.0,
+            matcher: state.matcher,
+            displays: displays
+        )
+        return RestoredSpacesProjection(
+            matcher: restoredSpace.matcher,
+            spaces: state.spaces.setting(storedSpace.0, to: restoredSpace.space),
+            displayByWindow: state.displayByWindow.merging(restoredSpace.displayByWindow) { _, restored in restored },
+            spaceByWindow: state.spaceByWindow.merging(restoredSpace.spaceByWindow) { _, restored in restored }
+        )
+    }
+}
+
+private struct RestoredSpaceProjection {
+    let matcher: RestoreMatcher
+    let space: SpaceState
+    let displayByWindow: [WindowID: DisplayID]
+    let spaceByWindow: [WindowID: SpaceID]
+}
+
+private struct RestoredDisplayAccumulator {
+    let matcher: RestoreMatcher
+    let displayStates: [DisplayID: DisplaySpaceState]
+    let displayByWindow: [WindowID: DisplayID]
+    let spaceByWindow: [WindowID: SpaceID]
+}
+
+private func restoreSpace(
+    _ storedSpace: StoredSpace,
+    spaceID: SpaceID,
+    matcher: RestoreMatcher,
+    displays: [DisplayID: DisplayInfo]
+) -> RestoredSpaceProjection {
+    let restoredDisplays = storedSpace.layouts.reduce(
+        RestoredDisplayAccumulator(matcher: matcher, displayStates: [:], displayByWindow: [:], spaceByWindow: [:])
+    ) { state, layout in
+        guard let displayID = matchDisplay(for: layout, displays: displays) else { return state }
+        let restoredLayout = restoreLayout(
+            layout,
+            displayID: displayID,
+            spaceID: spaceID,
+            matcher: state.matcher
+        )
+        return RestoredDisplayAccumulator(
+            matcher: restoredLayout.matcher,
+            displayStates: state.displayStates.setting(displayID, to: restoredLayout.displayState),
+            displayByWindow: state.displayByWindow.merging(restoredLayout.displayByWindow) { _, restored in restored },
+            spaceByWindow: state.spaceByWindow.merging(restoredLayout.spaceByWindow) { _, restored in restored }
+        )
+    }
+    let focused = storedSpace.focused.flatMap { restoredDisplays.matcher.lookup($0) }
+    return RestoredSpaceProjection(
+        matcher: restoredDisplays.matcher,
+        space: SpaceState(id: spaceID, displays: restoredDisplays.displayStates, focused: focused),
+        displayByWindow: restoredDisplays.displayByWindow,
+        spaceByWindow: restoredDisplays.spaceByWindow
+    )
+}
+
+private struct RestoredLayoutProjection {
+    let matcher: RestoreMatcher
+    let displayState: DisplaySpaceState
+    let displayByWindow: [WindowID: DisplayID]
+    let spaceByWindow: [WindowID: SpaceID]
+}
+
+private struct RestoredFloatingAccumulator {
+    let matcher: RestoreMatcher
+    let floating: [WindowID]
+    let displayByWindow: [WindowID: DisplayID]
+    let spaceByWindow: [WindowID: SpaceID]
+}
+
+private func restoreLayout(
+    _ layout: StoredDisplayLayout,
+    displayID: DisplayID,
+    spaceID: SpaceID,
+    matcher: RestoreMatcher
+) -> RestoredLayoutProjection {
+    let restoredTree = restoreNode(layout.tree, matcher: matcher, displayID: displayID, spaceID: spaceID)
+    let restoredFloating = layout.floating.reduce(
+        RestoredFloatingAccumulator(
+            matcher: restoredTree.matcher,
+            floating: [],
+            displayByWindow: restoredTree.displayByWindow,
+            spaceByWindow: restoredTree.spaceByWindow
+        )
+    ) { state, ref in
+        let match = state.matcher.taking(ref)
+        guard let windowID = match.windowID else {
+            return RestoredFloatingAccumulator(
+                matcher: match.matcher,
+                floating: state.floating,
+                displayByWindow: state.displayByWindow,
+                spaceByWindow: state.spaceByWindow
             )
         }
+        return RestoredFloatingAccumulator(
+            matcher: match.matcher,
+            floating: state.floating + [windowID],
+            displayByWindow: state.displayByWindow.setting(windowID, to: displayID),
+            spaceByWindow: state.spaceByWindow.setting(windowID, to: spaceID)
+        )
     }
+    return RestoredLayoutProjection(
+        matcher: restoredFloating.matcher,
+        displayState: DisplaySpaceState(displayID: displayID, tree: restoredTree.node, floating: restoredFloating.floating),
+        displayByWindow: restoredFloating.displayByWindow,
+        spaceByWindow: restoredFloating.spaceByWindow
+    )
+}
+
+private struct RestoredNodeProjection {
+    let matcher: RestoreMatcher
+    let node: Node
+    let displayByWindow: [WindowID: DisplayID]
+    let spaceByWindow: [WindowID: SpaceID]
+}
+
+private struct RestoredCellAccumulator {
+    let matcher: RestoreMatcher
+    let cells: [Cell]
+    let displayByWindow: [WindowID: DisplayID]
+    let spaceByWindow: [WindowID: SpaceID]
+}
+
+private func restoreNode(
+    _ node: StoredNode,
+    matcher: RestoreMatcher,
+    displayID: DisplayID,
+    spaceID: SpaceID
+) -> RestoredNodeProjection {
+    switch node {
+    case .void:
+        return RestoredNodeProjection(matcher: matcher, node: .void, displayByWindow: [:], spaceByWindow: [:])
+    case .leaf(let ref):
+        let match = matcher.taking(ref)
+        guard let windowID = match.windowID else {
+            return RestoredNodeProjection(matcher: match.matcher, node: .void, displayByWindow: [:], spaceByWindow: [:])
+        }
+        return RestoredNodeProjection(
+            matcher: match.matcher,
+            node: .leaf(windowID),
+            displayByWindow: [windowID: displayID],
+            spaceByWindow: [windowID: spaceID]
+        )
+    case .split(let split):
+        let restoredCells = split.cells.reduce(
+            RestoredCellAccumulator(matcher: matcher, cells: [], displayByWindow: [:], spaceByWindow: [:])
+        ) { state, cell in
+            let restoredNode = restoreNode(
+                cell.node,
+                matcher: state.matcher,
+                displayID: displayID,
+                spaceID: spaceID
+            )
+            return RestoredCellAccumulator(
+                matcher: restoredNode.matcher,
+                cells: state.cells + [makeCell(weight: cell.weight, node: restoredNode.node)],
+                displayByWindow: state.displayByWindow.merging(restoredNode.displayByWindow) { _, restored in restored },
+                spaceByWindow: state.spaceByWindow.merging(restoredNode.spaceByWindow) { _, restored in restored }
+            )
+        }
+        return RestoredNodeProjection(
+            matcher: restoredCells.matcher,
+            node: .split(makeSplit(axis: split.axis, cells: restoredCells.cells)),
+            displayByWindow: restoredCells.displayByWindow,
+            spaceByWindow: restoredCells.spaceByWindow
+        )
+    }
+}
+
+private func restoredWindowSpace(
+    liveWindowSpace: [WindowID: SpaceID],
+    restoredSpaceByWindow: [WindowID: SpaceID],
+    windowDisplay: [WindowID: DisplayID],
+    activeSpaceByDisplay: [DisplayID: SpaceID],
+    fallbackSpace: SpaceID
+) -> [WindowID: SpaceID] {
+    let restored = liveWindowSpace.merging(restoredSpaceByWindow) { _, restored in restored }
+    return windowDisplay.reduce(restored) { state, ownership in
+        let (windowID, displayID) = ownership
+        guard state[windowID] == nil else { return state }
+        return state.setting(windowID, to: activeSpaceByDisplay[displayID] ?? fallbackSpace)
+    }
+}
+
+private func spacesWithActiveFallbacks(
+    _ spaces: [SpaceID: SpaceState],
+    activeSpaceByDisplay: [DisplayID: SpaceID],
+    activeSpace: SpaceID
+) -> [SpaceID: SpaceState] {
+    Set(activeSpaceByDisplay.values).union([activeSpace]).reduce(spaces) { state, spaceID in
+        guard state[spaceID] == nil else { return state }
+        return state.setting(spaceID, to: SpaceState(id: spaceID, displays: [:], focused: nil))
+    }
+}
+
+private func spacesByAddingDisplayFloatingWindows(
+    spaces: [SpaceID: SpaceState],
+    displays: [DisplayID: DisplayInfo],
+    windowDisplay: [WindowID: DisplayID],
+    windowSpace: [WindowID: SpaceID]
+) -> [SpaceID: SpaceState] {
+    spaces.reduce([:]) { state, entry in
+        let (spaceID, space) = entry
+        return state.setting(
+            spaceID,
+            to: spaceByAddingDisplayFloatingWindows(
+                space,
+                displays: displays,
+                windowDisplay: windowDisplay,
+                windowSpace: windowSpace
+            )
+        )
+    }
+}
+
+private func spaceByAddingDisplayFloatingWindows(
+    _ space: SpaceState,
+    displays: [DisplayID: DisplayInfo],
+    windowDisplay: [WindowID: DisplayID],
+    windowSpace: [WindowID: SpaceID]
+) -> SpaceState {
+    let displayStates = displays.keys.reduce(space.displays) { state, displayID in
+        let existing = state[displayID] ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
+        let alreadyAssigned = Set(occupiedWindows(in: existing.tree)).union(existing.floating)
+        let floating = existing.floating + windowDisplay
+            .filter { windowID, ownedDisplayID in
+                ownedDisplayID == displayID
+                    && windowSpace[windowID] == space.id
+                    && !alreadyAssigned.contains(windowID)
+            }
+            .map(\.key)
+            .sorted { $0.raw < $1.raw }
+        return state.setting(displayID, to: DisplaySpaceState(displayID: displayID, tree: existing.tree, floating: floating))
+    }
+    return SpaceState(id: space.id, displays: displayStates, focused: space.focused)
 }
 
 private func storedNode(from node: Node, refs: [WindowID: StoredWindowRef]) -> StoredNode {
@@ -480,47 +702,14 @@ private func storedNode(from node: Node, refs: [WindowID: StoredWindowRef]) -> S
     }
 }
 
-private func restoreNode(
-    _ node: StoredNode,
-    matcher: inout RestoreMatcher,
-    displayID: DisplayID,
-    spaceID: SpaceID,
-    restoredDisplayByWindow: inout [WindowID: DisplayID],
-    restoredSpaceByWindow: inout [WindowID: SpaceID]
-) -> Node {
-    switch node {
-    case .void:
-        return .void
-    case .leaf(let ref):
-        guard let windowID = matcher.take(ref) else { return .void }
-        restoredDisplayByWindow[windowID] = displayID
-        restoredSpaceByWindow[windowID] = spaceID
-        return .leaf(windowID)
-    case .split(let split):
-        return .split(makeSplit(
-            axis: split.axis,
-            cells: split.cells.map { cell in
-                makeCell(
-                    weight: cell.weight,
-                    node: restoreNode(
-                        cell.node,
-                        matcher: &matcher,
-                        displayID: displayID,
-                        spaceID: spaceID,
-                        restoredDisplayByWindow: &restoredDisplayByWindow,
-                        restoredSpaceByWindow: &restoredSpaceByWindow
-                    )
-                )
-            }
-        ))
-    }
-}
-
 private func restoredPendingRules(_ stored: [StoredPendingRule], matcher: RestoreMatcher) -> [WindowID: RuleAction] {
-    stored.reduce(into: [:]) { result, pending in
-        guard let windowID = matcher.lookup(pending.window) else { return }
-        result[windowID] = ruleAction(from: pending.action)
-    }
+    Dictionary(
+        stored.compactMap { pending -> (WindowID, RuleAction)? in
+            guard let windowID = matcher.lookup(pending.window) else { return nil }
+            return (windowID, ruleAction(from: pending.action))
+        },
+        uniquingKeysWith: { _, replacement in replacement }
+    )
 }
 
 private func storedRuleAction(from action: RuleAction) -> StoredRuleAction {
@@ -561,10 +750,13 @@ private func displayOwnership(
     for windows: Dictionary<WindowID, WindowMetadata>.Values,
     displays: [DisplayID: DisplayInfo]
 ) -> [WindowID: DisplayID] {
-    windows.reduce(into: [:]) { result, metadata in
-        guard let displayID = displayContaining(frame: metadata.frame, displays: displays) else { return }
-        result[metadata.id] = displayID
-    }
+    Dictionary(
+        windows.compactMap { metadata -> (WindowID, DisplayID)? in
+            guard let displayID = displayContaining(frame: metadata.frame, displays: displays) else { return nil }
+            return (metadata.id, displayID)
+        },
+        uniquingKeysWith: { _, replacement in replacement }
+    )
 }
 
 private func displayContaining(frame: CGRect, displays: [DisplayID: DisplayInfo]) -> DisplayID? {
