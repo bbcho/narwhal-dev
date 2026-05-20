@@ -11,7 +11,6 @@ final class AXObserverService {
     private let echoSuppressor: AXEchoSuppressor
     private let reporter: StartupReporter
     private let activeSpaceByDisplay: @MainActor ([WindowMetadata]) -> [DisplayID: SpaceID]
-    private let focusedWindowUnavailable: @MainActor () -> Void
     private let emit: @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
     private let spaceChanged: @MainActor () -> Void
     private var timer: Timer?
@@ -25,7 +24,6 @@ final class AXObserverService {
         echoSuppressor: AXEchoSuppressor,
         reporter: StartupReporter,
         activeSpaceByDisplay: @escaping @MainActor ([WindowMetadata]) -> [DisplayID: SpaceID],
-        focusedWindowUnavailable: @escaping @MainActor () -> Void,
         spaceChanged: @escaping @MainActor () -> Void,
         emit: @escaping @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
     ) {
@@ -33,7 +31,6 @@ final class AXObserverService {
         self.echoSuppressor = echoSuppressor
         self.reporter = reporter
         self.activeSpaceByDisplay = activeSpaceByDisplay
-        self.focusedWindowUnavailable = focusedWindowUnavailable
         self.spaceChanged = spaceChanged
         self.emit = emit
     }
@@ -142,9 +139,7 @@ final class AXObserverService {
             )
             focusedObservationState = transition.state
             handleFocusedObservationEffects(transition.effects, snapshot: nil)
-            if transition.effects.contains(.focusedWindowUnavailable) {
-                reporter.info("Focused-window snapshot unavailable; focus border hidden: \(error.description)")
-            }
+            reporter.info("Focused-window snapshot unavailable; preserving last focus border: \(error.description)")
         }
     }
 
@@ -162,8 +157,6 @@ final class AXObserverService {
                     continue
                 }
                 emit(event, snapshot)
-            case .focusedWindowUnavailable:
-                focusedWindowUnavailable()
             }
         }
     }

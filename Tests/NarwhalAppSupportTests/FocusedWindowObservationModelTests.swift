@@ -20,8 +20,8 @@ struct FocusedWindowObservationModelTests {
         #expect(transition.effects == [.emit(.windowFocused(window))])
     }
 
-    @Test("Unavailable focus clears stale state exactly once")
-    func unavailableFocusClearsStaleStateOnce() {
+    @Test("Unavailable focus preserves stale state without hiding")
+    func unavailableFocusPreservesStaleStateWithoutHiding() {
         let stale = FocusedWindowObservationState(
             geometry: FocusedWindowGeometryState(
                 windowID: WindowID(raw: 101),
@@ -40,9 +40,9 @@ struct FocusedWindowObservationModelTests {
             tolerance: 1
         )
 
-        #expect(first.state == .empty)
-        #expect(first.effects == [.focusedWindowUnavailable])
-        #expect(second.state == .empty)
+        #expect(first.state == stale)
+        #expect(first.effects == [])
+        #expect(second.state == stale)
         #expect(second.effects == [])
     }
 
@@ -69,6 +69,31 @@ struct FocusedWindowObservationModelTests {
 
         #expect(observed.state.geometry == FocusedWindowGeometryState(windowID: newWindow, frame: newFrame))
         #expect(observed.effects == [.emit(.windowFocused(newWindow))])
+    }
+
+    @Test("Repeated unavailable focus remains non-destructive")
+    func repeatedUnavailableFocusRemainsNonDestructive() {
+        let window = WindowID(raw: 105)
+        let frame = CGRect(x: 10, y: 20, width: 400, height: 300)
+        let state = FocusedWindowObservationState(
+            geometry: FocusedWindowGeometryState(windowID: window, frame: frame)
+        )
+
+        let first = reduceFocusedWindowObservation(
+            state: state,
+            input: .unavailable,
+            tolerance: 1
+        )
+        let second = reduceFocusedWindowObservation(
+            state: first.state,
+            input: .unavailable,
+            tolerance: 1
+        )
+
+        #expect(first.state == state)
+        #expect(second.state == state)
+        #expect(first.effects == [])
+        #expect(second.effects == [])
     }
 
     @Test("Focused frame change emits geometry event")

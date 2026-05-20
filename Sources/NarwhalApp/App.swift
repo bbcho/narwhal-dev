@@ -101,6 +101,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print(result.message)
             Darwin.exit(result.passed ? 0 : 1)
         }
+        if ProcessInfo.processInfo.arguments.contains("--verify-live-multi-display") {
+            let result = LiveMultiDisplayVerification.verifyDisplayScopedPushAndCycle()
+            print(result.message)
+            Darwin.exit(result.passed ? 0 : 1)
+        }
         app.delegate = instance
         app.run()
     }
@@ -653,9 +658,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return self.spaceClient
                     .spaceTopology(displays: displays, windows: windows)
                     .activeSpaceByDisplay
-            },
-            focusedWindowUnavailable: { [weak self] in
-                self?.focusedWindowUnavailable()
             },
             spaceChanged: { [weak self] in
                 self?.activeSpaceChanged()
@@ -2096,12 +2098,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             scheduleCoalescedEnvironmentRefresh(.windowClosed(windowID))
         }
-    }
-
-    @MainActor
-    private func focusedWindowUnavailable() {
-        setFocusBorder(nil)
-        updateOperatingStatus { $0.focusedWindowID = nil }
     }
 
     @MainActor

@@ -373,8 +373,8 @@ final class Overlay {
         }
         let displayFrame = cgFrame(for: screen)
         return CGRect(
-            x: frame.minX,
-            y: displayFrame.minY + (displayFrame.maxY - frame.maxY),
+            x: screen.frame.minX + (frame.minX - displayFrame.minX),
+            y: screen.frame.minY + (displayFrame.maxY - frame.maxY),
             width: frame.width,
             height: frame.height
         )
@@ -1584,6 +1584,24 @@ enum FocusBorderVerification {
               overlay.debugFocusBorderIsVisible() else {
             overlay.stop()
             return (false, "focus border overlay did not show for \(visibleWindow.description)")
+        }
+
+        let transientUnavailable = reduceFocusedWindowObservation(
+            state: FocusedWindowObservationState(
+                geometry: FocusedWindowGeometryState(windowID: visibleWindow, frame: standardFrame)
+            ),
+            input: .unavailable,
+            tolerance: 1
+        )
+        guard transientUnavailable.effects.isEmpty else {
+            overlay.stop()
+            return (false, "transient focused-window unavailable incorrectly produced a hide effect")
+        }
+        overlay.render(focusModel)
+        guard overlay.debugFocusBorderWindowID() == visibleWindow,
+              overlay.debugFocusBorderIsVisible() else {
+            overlay.stop()
+            return (false, "focus border overlay hid after transient focused-window unavailable")
         }
 
         focusModel = focusModel.removingWindow(otherWindow)

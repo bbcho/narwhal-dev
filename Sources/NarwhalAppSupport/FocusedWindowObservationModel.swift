@@ -18,7 +18,6 @@ public enum FocusedWindowObservationInput: Equatable, Sendable {
 
 public enum FocusedWindowObservationEffect: Equatable, Sendable {
     case emit(AXEvent)
-    case focusedWindowUnavailable
 }
 
 public struct FocusedWindowObservationTransition: Equatable, Sendable {
@@ -54,12 +53,6 @@ public func reduceFocusedWindowObservation(
         )
 
     case .unavailable:
-        guard state.geometry.windowID != nil else {
-            return FocusedWindowObservationTransition(state: .empty, effects: [])
-        }
-        return FocusedWindowObservationTransition(
-            state: .empty,
-            effects: [.focusedWindowUnavailable]
-        )
+        return FocusedWindowObservationTransition(state: state, effects: [])
     }
 }
