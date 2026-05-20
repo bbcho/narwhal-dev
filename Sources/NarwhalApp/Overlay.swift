@@ -966,7 +966,11 @@ private struct CommandOverlayMetrics {
         ))
         commandColumnWidth = ceil(min(
             CommandOverlayLayout.maximumCommandColumnWidth,
-            max(CommandOverlayLayout.minimumCommandColumnWidth, measuredCommandWidth, measuredDetailWidth)
+            max(
+                CommandOverlayLayout.minimumCommandColumnWidth,
+                measuredCommandWidth + CommandOverlayLayout.textFitPadding,
+                measuredDetailWidth + CommandOverlayLayout.textFitPadding
+            )
         ))
         rowsHeight = columns.map(CommandOverlayLayout.sectionsHeight).max() ?? 0
 
@@ -1027,7 +1031,8 @@ private enum CommandOverlayLayout {
     static let minimumKeyColumnWidth: CGFloat = 120
     static let maximumKeyColumnWidth: CGFloat = 220
     static let minimumCommandColumnWidth: CGFloat = 260
-    static let maximumCommandColumnWidth: CGFloat = 360
+    static let maximumCommandColumnWidth: CGFloat = 580
+    static let textFitPadding: CGFloat = 12
     static let titleFont = NSFont.systemFont(ofSize: 24, weight: .semibold)
     static let subtitleFont = NSFont.systemFont(ofSize: 13, weight: .regular)
     static let sectionFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
@@ -1133,6 +1138,18 @@ enum CommandOverlayVerification {
         }
         guard metrics.columns[1].first?.title == CommandOverlayCategory.system.title else {
             return (false, "default command overlay does not place System commands at the top of the right column")
+        }
+        let widestMeaningText = sections.flatMap(\.rows).map { row in
+            max(
+                CommandOverlayLayout.measure(row.command, font: CommandOverlayLayout.commandFont).width,
+                CommandOverlayLayout.measure(row.detail, font: CommandOverlayLayout.detailFont).width
+            )
+        }.max() ?? 0
+        guard widestMeaningText + CommandOverlayLayout.textFitPadding <= metrics.commandColumnWidth else {
+            return (
+                false,
+                "default command overlay text would truncate: widest=\(widestMeaningText) column=\(metrics.commandColumnWidth)"
+            )
         }
 
         let viewHeight = min(ceil(metrics.contentSize.height), 760)
