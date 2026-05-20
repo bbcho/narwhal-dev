@@ -1751,6 +1751,26 @@ enum FocusBorderVerification {
             )
         }
 
+        targetWindow.orderFrontRegardless()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        overlay.updateTiledBorders([
+            FocusBorderTarget(windowID: targetID, frame: targetFrame, cornerRadius: cornerRadius)
+        ])
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+
+        guard let focusedOrderedWindowNumbers = frontToBackWindowNumbers(),
+              let focusedBorderIndex = focusedOrderedWindowNumbers.firstIndex(of: borderNumber),
+              let focusedTargetIndex = focusedOrderedWindowNumbers.firstIndex(of: targetWindow.windowNumber)
+        else {
+            return (false, "could not verify focused tiled border window-server stacking")
+        }
+        guard focusedBorderIndex < focusedTargetIndex else {
+            return (
+                false,
+                "focused tiled border stayed behind target: borderIndex=\(focusedBorderIndex) targetIndex=\(focusedTargetIndex)"
+            )
+        }
+
         return (
             true,
             "tiled border stacking verified cover=\(coverWindow.windowNumber) border=\(borderNumber) target=\(targetWindow.windowNumber)"

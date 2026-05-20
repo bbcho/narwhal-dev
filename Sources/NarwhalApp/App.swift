@@ -1978,6 +1978,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let snapshot {
                 updateFocusBorder(for: snapshot)
             }
+            await updateTiledBordersFromWorld()
         case .windowMoved, .windowResized:
             await worldActor.recordExternalGeometry(event)
             if let snapshot {
