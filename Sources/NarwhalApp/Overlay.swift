@@ -193,6 +193,7 @@ final class Overlay {
         view.update(border: borderConfig, cornerRadius: target.cornerRadius)
         window.setFrame(appKitFrame, display: true)
         orderFocusBorderWindow(window, above: target.windowID)
+        orderUnfocusedTiledBordersBelowFocusedWindow(target)
         scheduleFocusBorderRestacks(above: target.windowID)
         borderWindow = window
         visibleWindowID = target.windowID
@@ -329,6 +330,14 @@ final class Overlay {
     private func orderTiledBorderWindow(_ window: NSWindow, above targetWindowID: WindowID) {
         window.level = windowLevelMatchingTarget(targetWindowID)
         window.order(.above, relativeTo: Int(targetWindowID.raw))
+    }
+
+    private func orderUnfocusedTiledBordersBelowFocusedWindow(_ target: FocusBorderTarget) {
+        let focusedFrame = appKitFrame(forAXFrame: target.frame)
+        for (windowID, tiledWindow) in tiledBorderWindows where windowID != target.windowID {
+            guard tiledWindow.frame.intersects(focusedFrame) else { continue }
+            tiledWindow.order(.below, relativeTo: Int(target.windowID.raw))
+        }
     }
 
     private func windowLevelMatchingTarget(_ targetWindowID: WindowID) -> NSWindow.Level {

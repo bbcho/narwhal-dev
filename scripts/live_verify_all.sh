@@ -44,6 +44,7 @@ run_required --verify-focused-unavailable-polling
 run_required --verify-space-focus-recovery
 run_required --verify-live-space-switch-focus-border
 run_required --verify-display-change-focus-border
+run_required --verify-live-focus-workflow
 run_required --verify-live-command-workflows
 
 echo "live_verify_all passed"

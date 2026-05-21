@@ -91,6 +91,10 @@ final class AXObserverService {
         }
     }
 
+    func pollFocusedWindowNow() {
+        pollFocusedWindow()
+    }
+
     private func activeSpaceChanged() {
         if activeSpaceNotificationOnlyChangedFocusedDisplay() {
             reporter.info("Active Space notification kept display Space topology unchanged; preserving borders")
