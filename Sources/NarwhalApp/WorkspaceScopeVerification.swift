@@ -1,3 +1,4 @@
+#if NARWHAL_ENABLE_VERIFIERS
 import CoreGraphics
 import NarwhalAppSupport
 import NarwhalCore
@@ -149,3 +150,4 @@ enum WorkspaceScopeVerification {
         )
     }
 }
+#endif

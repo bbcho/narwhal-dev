@@ -1,3 +1,4 @@
+#if NARWHAL_ENABLE_VERIFIERS
 import AppKit
 import CoreGraphics
 import Foundation
@@ -374,3 +375,4 @@ private struct SpaceSwitchFocusBorderFailure: Error {
         self.message = message
     }
 }
+#endif

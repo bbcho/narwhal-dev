@@ -9,16 +9,16 @@ export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/narwhal-
 
 run_required() {
   local flag="$1"
-  echo "==> swift run NarwhalApp $flag"
-  swift run --disable-sandbox NarwhalApp "$flag"
+  echo "==> swift run -Xswiftc -DNARWHAL_ENABLE_VERIFIERS NarwhalApp $flag"
+  swift run --disable-sandbox -Xswiftc -DNARWHAL_ENABLE_VERIFIERS NarwhalApp "$flag"
   sleep 0.2
 }
 
 run_optional_multi_display() {
   local output
-  echo "==> swift run NarwhalApp --verify-live-multi-display"
+  echo "==> swift run -Xswiftc -DNARWHAL_ENABLE_VERIFIERS NarwhalApp --verify-live-multi-display"
   set +e
-  output="$(swift run --disable-sandbox NarwhalApp --verify-live-multi-display 2>&1)"
+  output="$(swift run --disable-sandbox -Xswiftc -DNARWHAL_ENABLE_VERIFIERS NarwhalApp --verify-live-multi-display 2>&1)"
   local status="$?"
   set -e
   printf '%s\n' "$output"

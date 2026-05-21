@@ -1,3 +1,4 @@
+#if NARWHAL_ENABLE_VERIFIERS
 import AppKit
 import CoreGraphics
 import Darwin
@@ -342,3 +343,4 @@ private extension CGRect {
             && abs(height - other.height) <= tolerance
     }
 }
+#endif

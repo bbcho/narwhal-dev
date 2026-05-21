@@ -1,3 +1,4 @@
+#if NARWHAL_ENABLE_VERIFIERS
 import ApplicationServices
 import Foundation
 import NarwhalCore
@@ -54,3 +55,4 @@ enum FocusedUnavailablePollingVerification {
         )
     }
 }
+#endif

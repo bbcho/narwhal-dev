@@ -80,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
+#if NARWHAL_ENABLE_VERIFIERS
         if ProcessInfo.processInfo.arguments.contains("--verify-command-overlay-layout") {
             let result = CommandOverlayVerification.verifyDefaultTwoColumnLayout()
             print(result.message)
@@ -140,6 +141,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print(result.message)
             Darwin.exit(result.passed ? 0 : 1)
         }
+#else
+        if let verifierFlag = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--verify-") }) {
+            print("NarwhalApp was built without verifier support; rerun \(verifierFlag) through scripts/live_verify_all.sh")
+            Darwin.exit(2)
+        }
+#endif
         app.delegate = instance
         app.run()
     }

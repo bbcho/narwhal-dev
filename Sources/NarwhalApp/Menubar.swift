@@ -96,6 +96,7 @@ final class Menubar {
         statusItem?.button?.contentTintColor = operatingStatus.paused ? .systemOrange : (needsAttention ? .systemRed : nil)
     }
 
+#if NARWHAL_ENABLE_VERIFIERS
     func debugStatusButtonSnapshot() -> MenubarStatusButtonSnapshot? {
         guard let button = statusItem?.button else { return nil }
         return MenubarStatusButtonSnapshot(
@@ -107,6 +108,7 @@ final class Menubar {
             imagePosition: button.imagePosition
         )
     }
+#endif
 
     func stop() {
         guard let statusItem else { return }
@@ -182,6 +184,7 @@ final class Menubar {
     }
 }
 
+#if NARWHAL_ENABLE_VERIFIERS
 struct MenubarStatusButtonSnapshot {
     let hasImage: Bool
     let imageName: String?
@@ -226,6 +229,7 @@ enum MenubarIconVerification {
         )
     }
 }
+#endif
 
 enum NarwhalIconResources {
     static let statusItemImageName = "NarwhalToolbarIcon"

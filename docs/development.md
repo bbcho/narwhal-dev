@@ -108,6 +108,9 @@ overlay, command workflow, Space, or display changes:
 scripts/live_verify_all.sh
 ```
 
+Verifier-only code is compiled behind `NARWHAL_ENABLE_VERIFIERS`; use the script
+instead of passing `--verify-*` flags to a normal app build.
+
 `--verify-live-command-workflows` creates real AppKit windows and runs command
 families through the core planning path for 0 through 6 windows. It verifies
 actual frame application, focus cycling/focus direction, tiled-border visibility,

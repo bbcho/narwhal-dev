@@ -70,6 +70,7 @@ final class Overlay {
         }
     }
 
+#if NARWHAL_ENABLE_VERIFIERS
     func debugFocusBorderWindowID() -> WindowID? {
         visibleWindowID
     }
@@ -109,6 +110,7 @@ final class Overlay {
     func debugTiledBorderLevelRawValue(for windowID: WindowID) -> Int? {
         tiledBorderWindows[windowID]?.level.rawValue
     }
+#endif
 
     func stop() {
         render(.empty)
@@ -653,6 +655,7 @@ private final class CommandOverlayView: NSView {
         updateScrollState()
     }
 
+#if NARWHAL_ENABLE_VERIFIERS
     func debugLayoutSnapshot() -> CommandOverlayDebugLayoutSnapshot? {
         layoutSubtreeIfNeeded()
         guard
@@ -680,6 +683,7 @@ private final class CommandOverlayView: NSView {
             separatorFrame: columnsView.debugSeparatorFrame(in: columnsView.bounds)
         )
     }
+#endif
 
     private func build(columns: [[CommandOverlaySection]], keyColumnWidth: CGFloat, commandColumnWidth: CGFloat) {
         let title = NSTextField(labelWithString: CommandOverlayLayout.titleText)
@@ -792,6 +796,7 @@ private final class CommandOverlayView: NSView {
     }
 }
 
+#if NARWHAL_ENABLE_VERIFIERS
 @MainActor
 private struct CommandOverlayDebugLayoutSnapshot {
     let titleText: String
@@ -806,6 +811,7 @@ private struct CommandOverlayDebugLayoutSnapshot {
     let columnFrames: [CGRect]
     let separatorFrame: CGRect?
 }
+#endif
 
 @MainActor
 private final class CommandOverlayScrollBarView: NSView {
@@ -1034,6 +1040,7 @@ private final class CommandColumnsView: NSView {
         }
     }
 
+#if NARWHAL_ENABLE_VERIFIERS
     func debugColumnFrames(in bounds: CGRect) -> [CGRect] {
         CommandOverlayLayout.columnFrames(in: bounds, columnCount: columns.count).columns
     }
@@ -1041,6 +1048,7 @@ private final class CommandColumnsView: NSView {
     func debugSeparatorFrame(in bounds: CGRect) -> CGRect? {
         CommandOverlayLayout.columnFrames(in: bounds, columnCount: columns.count).separator
     }
+#endif
 }
 
 @MainActor
@@ -1363,6 +1371,7 @@ private enum CommandOverlayLayout {
     }
 }
 
+#if NARWHAL_ENABLE_VERIFIERS
 @MainActor
 enum CommandOverlayVerification {
     static func verifyDefaultTwoColumnLayout() -> (passed: Bool, message: String) {
@@ -2109,7 +2118,9 @@ enum FocusBorderVerification {
         }
     }
 }
+#endif
 
+#if NARWHAL_ENABLE_VERIFIERS
 @MainActor
 private struct FocusBorderDebugGeometrySnapshot {
     let strokeRect: CGRect
@@ -2117,6 +2128,7 @@ private struct FocusBorderDebugGeometrySnapshot {
     let renderedCornerRadius: Double
     let pathBoundingBox: CGRect
 }
+#endif
 
 @MainActor
 private final class BorderView: NSView {
@@ -2159,6 +2171,7 @@ private final class BorderView: NSView {
         updatePath()
     }
 
+#if NARWHAL_ENABLE_VERIFIERS
     func debugGeometrySnapshot() -> FocusBorderDebugGeometrySnapshot? {
         layoutSubtreeIfNeeded()
         guard let path = shapeLayer.path else {
@@ -2171,6 +2184,7 @@ private final class BorderView: NSView {
             pathBoundingBox: path.boundingBox
         )
     }
+#endif
 
     private func updatePath() {
         shapeLayer.frame = bounds

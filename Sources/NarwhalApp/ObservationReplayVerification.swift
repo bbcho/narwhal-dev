@@ -1,3 +1,4 @@
+#if NARWHAL_ENABLE_VERIFIERS
 import CoreGraphics
 import NarwhalCore
 
@@ -152,3 +153,4 @@ enum ObservationReplayVerification {
         )
     }
 }
+#endif

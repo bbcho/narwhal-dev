@@ -1,3 +1,4 @@
+#if NARWHAL_ENABLE_VERIFIERS
 import AppKit
 import CoreGraphics
 import NarwhalAppSupport
@@ -141,3 +142,4 @@ enum DisplayChangeFocusBorderVerification {
         return window
     }
 }
+#endif
