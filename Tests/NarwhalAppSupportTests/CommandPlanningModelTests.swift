@@ -75,6 +75,41 @@ struct CommandPlanningModelTests {
         #expect(plan.desiredLayout.layout.tiled[rightTiled.id] == nil)
     }
 
+    @Test("Move-display plans use the new display workspace despite stale observed visibility")
+    func moveDisplayPlansUseNewDisplayWorkspaceDespiteStaleObservedVisibility() throws {
+        let moving = windowFixture(1, frame: CGRect(x: 100, y: 100, width: 400, height: 300))
+        let leftDisplay = DisplayID(raw: 1)
+        let rightDisplay = DisplayID(raw: 2)
+        let oldWorld = multiDisplayWorldFixture(
+            windows: [moving],
+            displays: [
+                leftDisplay: DisplaySpaceState(displayID: leftDisplay, tree: .void, floating: [moving.id]),
+                rightDisplay: DisplaySpaceState(displayID: rightDisplay, tree: .void, floating: [])
+            ],
+            windowDisplay: [moving.id: leftDisplay],
+            focused: moving.id
+        )
+        let newWorld = try apply(.moveToNextDisplay(moving.id), to: oldWorld).get()
+
+        let scope = commandPlanScope(
+            focusedWindowID: moving.id,
+            oldWorld: oldWorld,
+            newWorld: newWorld
+        )
+        let plan = try commandPlan(
+            from: oldWorld,
+            to: newWorld,
+            focusedWindowID: moving.id,
+            undoWorld: oldWorld,
+            generation: LayoutGeneration(raw: 44),
+            scope: scope
+        ).get()
+
+        #expect(scope == .workspace(WorkspaceKey(displayID: rightDisplay, spaceID: spaceID)))
+        #expect(plan.desiredLayout.layout.tiled[moving.id]?.minX ?? 0 >= 1000)
+        #expect(plan.desiredLayout.delta.moves[moving.id]?.minX ?? 0 >= 1000)
+    }
+
     @Test("Current layout plan returns nil when there are no tiled windows")
     func currentLayoutPlanReturnsNilWithoutTiledWindows() throws {
         let window = windowFixture(1)

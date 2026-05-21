@@ -207,6 +207,10 @@ public func commandPlanScope(
     newWorld: World
 ) -> CommandPlanScope {
     guard let focusedWindowID else { return .activeWorkspaces }
+    if oldWorld.windowDisplay[focusedWindowID] != newWorld.windowDisplay[focusedWindowID],
+       let key = workspaceKey(forWindow: focusedWindowID, in: newWorld) {
+        return .workspace(key)
+    }
     if let key = observedWorkspaceKey(forVisibleWindow: focusedWindowID, in: newWorld)
         ?? workspaceKey(forWindow: focusedWindowID, in: newWorld)
         ?? observedWorkspaceKey(forVisibleWindow: focusedWindowID, in: oldWorld)

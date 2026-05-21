@@ -100,6 +100,23 @@ Shell-support tests cover:
 Manual and script smokes cover AppKit, Accessibility, LaunchAgent, real display
 state, hotkeys, and event taps.
 
+Live AppKit verifiers cover visible UI and layout behavior that unit tests cannot
+prove. Run the full live suite before shipping focus-border, tiled-border,
+overlay, command workflow, Space, or display changes:
+
+```sh
+scripts/live_verify_all.sh
+```
+
+`--verify-live-command-workflows` creates real AppKit windows and runs command
+families through the core planning path for 0 through 6 windows. It verifies
+actual frame application, focus cycling/focus direction, tiled-border visibility,
+focus-border visibility, and window-server stacking. True multi-display movement
+is verified only when the machine has at least two usable displays; otherwise the
+live suite reports that segment as skipped. Multi-Space state isolation is covered
+by the Space focus recovery verifier with real AppKit windows and separate
+workspace model state.
+
 ## Coding Guidelines
 
 Preserve the current architecture:

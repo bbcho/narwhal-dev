@@ -82,6 +82,10 @@ final class Overlay {
         borderWindow?.windowNumber
     }
 
+    func debugFocusBorderFrame() -> CGRect? {
+        borderWindow?.frame
+    }
+
     func debugFocusBorderLevelRawValue() -> Int? {
         borderWindow?.level.rawValue
     }

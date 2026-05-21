@@ -45,6 +45,7 @@ Build and test:
 
 ```sh
 CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
+scripts/live_verify_all.sh
 scripts/build_app_bundle.sh --configuration debug --output .build/narwhal-package-next --replace
 ```
 

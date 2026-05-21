@@ -118,6 +118,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print(result.message)
             Darwin.exit(result.passed ? 0 : 1)
         }
+        if ProcessInfo.processInfo.arguments.contains("--verify-live-command-workflows") {
+            let result = LiveCommandWorkflowVerification.verifyCommandWorkflows()
+            print(result.message)
+            Darwin.exit(result.passed ? 0 : 1)
+        }
         app.delegate = instance
         app.run()
     }
