@@ -1,14 +1,20 @@
 import NarwhalCore
 
 public struct WorldRuntimeState: Equatable, Sendable {
-    public static let empty = WorldRuntimeState(undoWorld: nil, focusHistory: [])
+    public static let empty = WorldRuntimeState(undoWorld: nil, focusHistory: [], workspaceFocus: [:])
 
     public let undoWorld: World?
     public let focusHistory: [WindowID]
+    public let workspaceFocus: [WorkspaceKey: WindowID]
 
-    public init(undoWorld: World?, focusHistory: [WindowID]) {
+    public init(
+        undoWorld: World?,
+        focusHistory: [WindowID],
+        workspaceFocus: [WorkspaceKey: WindowID] = [:]
+    ) {
         self.undoWorld = undoWorld
         self.focusHistory = focusHistory
+        self.workspaceFocus = workspaceFocus
     }
 }
 
@@ -16,18 +22,31 @@ public func worldRuntimeBySettingUndo(
     _ undoWorld: World?,
     in state: WorldRuntimeState
 ) -> WorldRuntimeState {
-    WorldRuntimeState(undoWorld: undoWorld, focusHistory: state.focusHistory)
+    WorldRuntimeState(
+        undoWorld: undoWorld,
+        focusHistory: state.focusHistory,
+        workspaceFocus: state.workspaceFocus
+    )
 }
 
 public func worldRuntimeByRecordingFocus(
     _ windowID: WindowID,
+    workspaceKey: WorkspaceKey? = nil,
     limit: Int = 16,
     in state: WorldRuntimeState
 ) -> WorldRuntimeState {
-    guard state.focusHistory.last != windowID else { return state }
     let boundedLimit = max(0, limit)
-    let nextHistory = Array((state.focusHistory + [windowID]).suffix(boundedLimit))
-    return WorldRuntimeState(undoWorld: state.undoWorld, focusHistory: nextHistory)
+    let nextHistory = state.focusHistory.last == windowID
+        ? state.focusHistory
+        : Array((state.focusHistory + [windowID]).suffix(boundedLimit))
+    let nextWorkspaceFocus = workspaceKey.map { key in
+        state.workspaceFocus.merging([key: windowID]) { _, replacement in replacement }
+    } ?? state.workspaceFocus
+    return WorldRuntimeState(
+        undoWorld: state.undoWorld,
+        focusHistory: nextHistory,
+        workspaceFocus: nextWorkspaceFocus
+    )
 }
 
 public func prunedWorldRuntimeState(
@@ -35,6 +54,7 @@ public func prunedWorldRuntimeState(
     in state: WorldRuntimeState
 ) -> WorldRuntimeState {
     let focusHistory = state.focusHistory.filter { liveWindowIDs.contains($0) }
+    let workspaceFocus = state.workspaceFocus.filter { liveWindowIDs.contains($0.value) }
     let undoWorld: World?
     if let undo = state.undoWorld,
        Set(undo.windows.keys).isSubset(of: liveWindowIDs) {
@@ -42,7 +62,11 @@ public func prunedWorldRuntimeState(
     } else {
         undoWorld = nil
     }
-    return WorldRuntimeState(undoWorld: undoWorld, focusHistory: focusHistory)
+    return WorldRuntimeState(
+        undoWorld: undoWorld,
+        focusHistory: focusHistory,
+        workspaceFocus: workspaceFocus
+    )
 }
 
 public func runtimeFocusedWindowFallback(
@@ -51,6 +75,12 @@ public func runtimeFocusedWindowFallback(
 ) -> WindowMetadata? {
     if let active = activeFocusedWindow(in: world) {
         return active
+    }
+    for key in activeWorkspaceKeys(in: world) {
+        guard let windowID = runtime.workspaceFocus[key],
+              let metadata = fallbackMetadata(windowID, in: key, world: world)
+        else { continue }
+        return metadata
     }
     let visible = activeObservedVisibleWindowIDs(in: world)
     for windowID in runtime.focusHistory.reversed() {
@@ -61,6 +91,22 @@ public func runtimeFocusedWindowFallback(
         return metadata
     }
     return nil
+}
+
+private func fallbackMetadata(_ windowID: WindowID, in key: WorkspaceKey, world: World) -> WindowMetadata? {
+    guard let metadata = world.windows[windowID],
+          !metadata.isMinimized,
+          world.windowDisplay[windowID] == key.displayID
+    else { return nil }
+
+    if let spaceID = world.windowSpace[windowID], spaceID != key.spaceID {
+        return nil
+    }
+    let observed = observedVisibleWindowIDs(key, in: world)
+    if !observed.isEmpty, !observed.contains(windowID) {
+        return nil
+    }
+    return metadata
 }
 
 public func previousFocusTarget(

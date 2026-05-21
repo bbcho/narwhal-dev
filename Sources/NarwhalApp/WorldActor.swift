@@ -358,7 +358,11 @@ actor WorldActor {
     }
 
     private func recordFocus(_ windowID: WindowID) {
-        runtimeState = worldRuntimeByRecordingFocus(windowID, in: runtimeState)
+        runtimeState = worldRuntimeByRecordingFocus(
+            windowID,
+            workspaceKey: workspaceKey(forWindow: windowID, in: world),
+            in: runtimeState
+        )
     }
 
     private func pruneRuntimeState() {

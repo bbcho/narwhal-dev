@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let instance = AppDelegate()
     private static let environmentRefreshCoalescingDelay: TimeInterval = 0.10
     private static let activeSpaceTransitionPreserveDuration: TimeInterval = 1.25
+    private static let activeSpaceFocusRecoveryDuration: TimeInterval = 5.0
     private static let activeSpaceSettledRefreshDelays: [TimeInterval] = [0.35, 0.80]
     private static let restoreSaveDebounceInterval: TimeInterval = 0.25
 
@@ -67,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var spaceSettledRefreshTimers: [Timer] = []
     private var spaceTransitionPreserveTimer: Timer?
     private var spaceTransitionPreservation = SpaceTransitionPreservationState.empty
+    private var activeSpaceFocusRecoveryDeadline: Date?
     private var pendingHotkeys: [HotkeyAction] = []
     private var isDrainingHotkeys = false
     private var runningServices: RunningServices?
@@ -108,6 +110,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if ProcessInfo.processInfo.arguments.contains("--verify-focused-unavailable-polling") {
             let result = FocusedUnavailablePollingVerification.verifyUnavailableFocusIsNotLoggedEveryPoll()
+            print(result.message)
+            Darwin.exit(result.passed ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.arguments.contains("--verify-space-focus-recovery") {
+            let result = SpaceFocusRecoveryVerification.verifyWorkspaceFocusFallbackMovesOnlyActiveSpace()
             print(result.message)
             Darwin.exit(result.passed ? 0 : 1)
         }
@@ -1592,13 +1599,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 displays: displays,
                 reconciliationMode: .observeOnly
             )
-            guard let fallback = await worldActor.focusedWindowFallback() else {
+            if let fallback = await worldActor.focusedWindowFallback() {
+                reporter.info("\(operation) using stored focused-window fallback \(fallback.id.description) after AX focus read failed: \(error.description)")
+                focused = FocusedLayoutContext(metadata: fallback, displays: displays)
+            } else if let recovered = await waitForFocusedLayoutContextAfterSpaceChange(
+                operation: operation,
+                initialError: error
+            ) {
+                focused = recovered
+            } else {
                 reporter.error("\(operation) failed reading focused window: \(error.description)")
                 showOperatorFeedback("\(operation) failed: no focused window", tone: .error)
                 return nil
             }
-            reporter.info("\(operation) using stored focused-window fallback \(fallback.id.description) after AX focus read failed: \(error.description)")
-            focused = FocusedLayoutContext(metadata: fallback, displays: displays)
         }
 
         guard focused.metadata.role == "AXWindow" else {
@@ -1616,12 +1629,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func focusedWindowSnapshotForLayoutOperation(_ operation: String) -> FocusedWindowSnapshot? {
         for attempt in 0..<4 {
             if case .success(let snapshot) = axClient.focusedWindowSnapshot() {
+                activeSpaceFocusRecoveryDeadline = nil
                 return snapshot
             }
             if attempt < 3 {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.03))
             }
         }
+        return nil
+    }
+
+    @MainActor
+    private func waitForFocusedLayoutContextAfterSpaceChange(
+        operation: String,
+        initialError: AXClientError
+    ) async -> FocusedLayoutContext? {
+        guard let deadline = activeSpaceFocusRecoveryDeadline,
+              Date() < deadline
+        else { return nil }
+
+        reporter.info("\(operation) waiting for focused window after Space transition: \(initialError.description)")
+        var nextRefresh = Date().addingTimeInterval(0.45)
+        while Date() < deadline {
+            if case .success(let snapshot) = axClient.focusedWindowSnapshot() {
+                activeSpaceFocusRecoveryDeadline = nil
+                return FocusedLayoutContext(metadata: snapshot.metadata, displays: displayClient.currentDisplays())
+            }
+
+            let displays = displayClient.currentDisplays()
+            if let fallback = await worldActor.focusedWindowFallback() {
+                reporter.info("\(operation) recovered stored focused-window fallback \(fallback.id.description) after Space transition")
+                return FocusedLayoutContext(metadata: fallback, displays: displays)
+            }
+            if Date() >= nextRefresh {
+                _ = await refreshEnvironment(
+                    reason: "\(operation.lowercased()) focus recovery",
+                    displays: displays,
+                    reconciliationMode: .observeOnly
+                )
+                nextRefresh = Date().addingTimeInterval(0.45)
+            }
+
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+
+        activeSpaceFocusRecoveryDeadline = nil
         return nil
     }
 
@@ -2082,6 +2134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleAXEvent(_ event: AXEvent, snapshot: FocusedWindowSnapshot?) async {
         switch event {
         case .windowFocused(let windowID):
+            activeSpaceFocusRecoveryDeadline = nil
             await worldActor.recordExternalFocus(windowID)
             updateOperatingStatus { $0.focusedWindowID = windowID }
             if let snapshot {
@@ -2131,6 +2184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             preserveEndDelay: Self.activeSpaceTransitionPreserveDuration
         )
         spaceTransitionPreservation = preservation.state
+        activeSpaceFocusRecoveryDeadline = Date().addingTimeInterval(Self.activeSpaceFocusRecoveryDuration)
         clearBorderOverlays()
         scheduleCoalescedEnvironmentRefresh(.spaceSettled)
         preservation.settledRefreshDelays.forEach { delay in

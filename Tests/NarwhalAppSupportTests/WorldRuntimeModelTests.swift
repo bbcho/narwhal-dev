@@ -39,6 +39,27 @@ struct WorldRuntimeModelTests {
         #expect(pruned.focusHistory == [WindowID(raw: 1), WindowID(raw: 3)])
     }
 
+    @Test("Pruning runtime state drops workspace focus for closed windows")
+    func pruningRuntimeStateDropsWorkspaceFocusForClosedWindows() {
+        let kept = WindowID(raw: 1)
+        let closed = WindowID(raw: 2)
+        let keptKey = WorkspaceKey(displayID: DisplayID(raw: 1), spaceID: SpaceID(raw: 1))
+        let closedKey = WorkspaceKey(displayID: DisplayID(raw: 1), spaceID: SpaceID(raw: 2))
+        let state = WorldRuntimeState(
+            undoWorld: nil,
+            focusHistory: [kept, closed],
+            workspaceFocus: [
+                keptKey: kept,
+                closedKey: closed
+            ]
+        )
+
+        let pruned = prunedWorldRuntimeState(liveWindowIDs: [kept], in: state)
+
+        #expect(pruned.focusHistory == [kept])
+        #expect(pruned.workspaceFocus == [keptKey: kept])
+    }
+
     @Test("Focused window fallback prefers active focus before history")
     func focusedWindowFallbackPrefersActiveFocusBeforeHistory() throws {
         let world = worldFixture(windowIDs: [1, 2], focused: WindowID(raw: 1))
@@ -72,6 +93,66 @@ struct WorldRuntimeModelTests {
         let fallback = try #require(runtimeFocusedWindowFallback(in: world, runtime: runtime))
 
         #expect(fallback.id == visible)
+    }
+
+    @Test("Focused window fallback uses active workspace focus before global history")
+    func focusedWindowFallbackUsesActiveWorkspaceFocusBeforeGlobalHistory() throws {
+        let displayID = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let inactiveSpace = SpaceID(raw: 2)
+        let activeFocused = WindowID(raw: 10)
+        let inactiveRecent = WindowID(raw: 20)
+        let activeKey = WorkspaceKey(displayID: displayID, spaceID: activeSpace)
+        let inactiveKey = WorkspaceKey(displayID: displayID, spaceID: inactiveSpace)
+        let world = multiSpaceWorldFixture(
+            activeSpace: activeSpace,
+            displayID: displayID,
+            windowsBySpace: [
+                activeSpace: [activeFocused],
+                inactiveSpace: [inactiveRecent]
+            ],
+            observedActiveWindows: [activeFocused],
+            focusedBySpace: [:]
+        )
+        let runtime = WorldRuntimeState(
+            undoWorld: nil,
+            focusHistory: [inactiveRecent],
+            workspaceFocus: [
+                activeKey: activeFocused,
+                inactiveKey: inactiveRecent
+            ]
+        )
+
+        let fallback = try #require(runtimeFocusedWindowFallback(in: world, runtime: runtime))
+
+        #expect(fallback.id == activeFocused)
+    }
+
+    @Test("Focused window fallback skips workspace focus that is no longer visible")
+    func focusedWindowFallbackSkipsWorkspaceFocusThatIsNoLongerVisible() throws {
+        let displayID = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let activeFocused = WindowID(raw: 10)
+        let activeVisible = WindowID(raw: 11)
+        let activeKey = WorkspaceKey(displayID: displayID, spaceID: activeSpace)
+        let world = multiSpaceWorldFixture(
+            activeSpace: activeSpace,
+            displayID: displayID,
+            windowsBySpace: [
+                activeSpace: [activeFocused, activeVisible]
+            ],
+            observedActiveWindows: [activeVisible],
+            focusedBySpace: [:]
+        )
+        let runtime = WorldRuntimeState(
+            undoWorld: nil,
+            focusHistory: [activeVisible],
+            workspaceFocus: [activeKey: activeFocused]
+        )
+
+        let fallback = try #require(runtimeFocusedWindowFallback(in: world, runtime: runtime))
+
+        #expect(fallback.id == activeVisible)
     }
 
     @Test("Previous focus target stays in active windows and skips current focus")
@@ -140,6 +221,60 @@ struct WorldRuntimeModelTests {
             windowDisplay: windowDisplay,
             windowSpace: windowSpace,
             observedVisibleWindows: observed.isEmpty ? [:] : [workspaceKey: observed],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+    }
+
+    private func multiSpaceWorldFixture(
+        activeSpace: SpaceID,
+        displayID: DisplayID,
+        windowsBySpace: [SpaceID: [WindowID]],
+        observedActiveWindows: Set<WindowID>,
+        focusedBySpace: [SpaceID: WindowID]
+    ) -> World {
+        let allWindowIDs = windowsBySpace.values.flatMap { $0 }
+        let windows = Dictionary(uniqueKeysWithValues: allWindowIDs.map { ($0, windowFixture($0.raw)) })
+        let windowDisplay = Dictionary(uniqueKeysWithValues: allWindowIDs.map { ($0, displayID) })
+        let windowSpace = Dictionary(uniqueKeysWithValues: windowsBySpace.flatMap { spaceID, windowIDs in
+            windowIDs.map { ($0, spaceID) }
+        })
+        let spaces = Dictionary(uniqueKeysWithValues: windowsBySpace.map { spaceID, windowIDs in
+            (
+                spaceID,
+                SpaceState(
+                    id: spaceID,
+                    displays: [
+                        displayID: DisplaySpaceState(
+                            displayID: displayID,
+                            tree: .void,
+                            floating: windowIDs
+                        )
+                    ],
+                    focused: focusedBySpace[spaceID]
+                )
+            )
+        })
+        let activeKey = WorkspaceKey(displayID: displayID, spaceID: activeSpace)
+
+        return World(
+            displays: [
+                displayID: DisplayInfo(
+                    id: displayID,
+                    slot: 0,
+                    fingerprint: "main",
+                    frame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+                    visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 760)
+                )
+            ],
+            activeSpace: activeSpace,
+            activeSpaceByDisplay: [displayID: activeSpace],
+            spaces: spaces,
+            windows: windows,
+            windowDisplay: windowDisplay,
+            windowSpace: windowSpace,
+            observedVisibleWindows: observedActiveWindows.isEmpty ? [:] : [activeKey: observedActiveWindows],
             windowConstraints: [:],
             pendingRules: [:],
             config: .default

@@ -15,7 +15,9 @@ public func focusTarget(windows: [WindowMetadata], from focused: WindowID, direc
 }
 
 private func focusTarget(in frames: [WindowID: CGRect], from focused: WindowID, direction: Direction) -> WindowID? {
-    guard let sourceFrame = frames[focused] else { return nil }
+    guard let sourceFrame = frames[focused],
+          sourceFrame.isFinitePositive
+    else { return nil }
 
     return frames
         .compactMap { windowID, frame -> FocusCandidate? in
