@@ -31,6 +31,7 @@ final class Overlay {
     private var dragPreviewWindow: NSWindow?
     private var dragPreviewView: DragPreviewView?
     private var focusBorderSuppression: FocusBorderSuppression?
+    private var focusBorderRestackTask: Task<Void, Never>?
     private var visibleWindowID: WindowID?
 
     init(border: BorderConfig, hud: HUDConfig) {
@@ -188,6 +189,7 @@ final class Overlay {
         view.update(border: borderConfig, cornerRadius: target.cornerRadius)
         window.setFrame(appKitFrame, display: true)
         orderFocusBorderWindow(window, above: target.windowID)
+        scheduleFocusBorderRestacks(above: target.windowID)
         borderWindow = window
         visibleWindowID = target.windowID
     }
@@ -219,6 +221,8 @@ final class Overlay {
     }
 
     private func hideFocusBorder() {
+        focusBorderRestackTask?.cancel()
+        focusBorderRestackTask = nil
         borderWindow?.orderOut(nil)
         visibleWindowID = nil
     }
@@ -270,8 +274,36 @@ final class Overlay {
     }
 
     private func orderFocusBorderWindow(_ window: NSWindow, above targetWindowID: WindowID) {
-        let relativeWindowNumber = tiledBorderWindows[targetWindowID]?.windowNumber ?? Int(targetWindowID.raw)
-        window.order(.above, relativeTo: relativeWindowNumber)
+        if let tiledBorderWindow = tiledBorderWindows[targetWindowID] {
+            orderTiledBorderWindow(tiledBorderWindow, above: targetWindowID)
+            window.level = tiledBorderWindow.level
+            window.order(.above, relativeTo: tiledBorderWindow.windowNumber)
+        } else {
+            window.level = windowLevelMatchingTarget(targetWindowID)
+            window.order(.above, relativeTo: Int(targetWindowID.raw))
+        }
+    }
+
+    private func scheduleFocusBorderRestacks(above targetWindowID: WindowID) {
+        focusBorderRestackTask?.cancel()
+        focusBorderRestackTask = Task { [weak self] in
+            for delay in [50_000_000, 150_000_000, 350_000_000] {
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(delay))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self,
+                          self.visibleWindowID == targetWindowID,
+                          let borderWindow = self.borderWindow,
+                          borderWindow.isVisible
+                    else { return }
+                    self.orderFocusBorderWindow(borderWindow, above: targetWindowID)
+                }
+            }
+        }
     }
 
     private func makeTiledBorderWindow(frame: CGRect) -> NSWindow {
@@ -291,7 +323,25 @@ final class Overlay {
     }
 
     private func orderTiledBorderWindow(_ window: NSWindow, above targetWindowID: WindowID) {
+        window.level = windowLevelMatchingTarget(targetWindowID)
         window.order(.above, relativeTo: Int(targetWindowID.raw))
+    }
+
+    private func windowLevelMatchingTarget(_ targetWindowID: WindowID) -> NSWindow.Level {
+        guard let layer = windowLayer(targetWindowID), layer >= NSWindow.Level.normal.rawValue else {
+            return .normal
+        }
+        return NSWindow.Level(rawValue: layer)
+    }
+
+    private func windowLayer(_ windowID: WindowID) -> Int? {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionIncludingWindow],
+            windowID.raw
+        ) as? [[String: Any]] else {
+            return nil
+        }
+        return windows.first?[kCGWindowLayer as String] as? Int
     }
 
     private func makeCommandWindow(frame: CGRect) -> NSWindow {
@@ -1699,6 +1749,30 @@ enum FocusBorderVerification {
                 "focused tiled focus border is not above green tiled border and target: focusIndex=\(focusedTiledFocusIndex) greenIndex=\(focusedTiledGreenIndex) targetIndex=\(focusedTiledTargetIndex)"
             )
         }
+
+        secondTargetWindow.orderFrontRegardless()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.45))
+
+        guard let postRaiseFocusedTiledOrderedNumbers = waitForFrontToBackWindowNumbers(containing: [
+            focusedTiledFocusNumber,
+            focusedTiledGreenNumber,
+            secondTargetWindow.windowNumber
+        ]),
+              let postRaiseFocusIndex = postRaiseFocusedTiledOrderedNumbers.firstIndex(of: focusedTiledFocusNumber),
+              let postRaiseGreenIndex = postRaiseFocusedTiledOrderedNumbers.firstIndex(of: focusedTiledGreenNumber),
+              let postRaiseTargetIndex = postRaiseFocusedTiledOrderedNumbers.firstIndex(of: secondTargetWindow.windowNumber)
+        else {
+            tiledOverlay.stop()
+            return (false, "could not verify focused tiled post-raise window-server stacking")
+        }
+        guard postRaiseFocusIndex < postRaiseGreenIndex,
+              postRaiseGreenIndex < postRaiseTargetIndex else {
+            tiledOverlay.stop()
+            return (
+                false,
+                "focused tiled focus border stayed behind target after post-render raise: focusIndex=\(postRaiseFocusIndex) greenIndex=\(postRaiseGreenIndex) targetIndex=\(postRaiseTargetIndex)"
+            )
+        }
         let focusedTiledStackingMessage = [
             "focused tiled stacking verified",
             "focus=\(focusedTiledFocusNumber)",
@@ -1824,6 +1898,25 @@ enum FocusBorderVerification {
             return (
                 false,
                 "focus border was not above focused target: borderIndex=\(initialBorderIndex) targetIndex=\(targetIndex)"
+            )
+        }
+
+        targetWindow.orderFrontRegardless()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.45))
+
+        guard let postRaiseOrderedWindowNumbers = waitForFrontToBackWindowNumbers(containing: [
+            borderNumber,
+            targetWindow.windowNumber
+        ]),
+              let postRaiseBorderIndex = postRaiseOrderedWindowNumbers.firstIndex(of: borderNumber),
+              let postRaiseTargetIndex = postRaiseOrderedWindowNumbers.firstIndex(of: targetWindow.windowNumber)
+        else {
+            return (false, "could not verify focus border post-raise window-server stacking")
+        }
+        guard postRaiseBorderIndex < postRaiseTargetIndex else {
+            return (
+                false,
+                "focus border stayed behind target after post-render raise: borderIndex=\(postRaiseBorderIndex) targetIndex=\(postRaiseTargetIndex)"
             )
         }
 
