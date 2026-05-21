@@ -23,10 +23,16 @@ enum LiveSpaceSwitchFocusBorderVerification {
             }
 
             let originalSpace = try activeSpaceID(for: display, using: spaceClient, displays: displays)
+            let axClient = AXClient(processID: -1)
             let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
+            NSApp.setActivationPolicy(.regular)
+            NSApp.finishLaunching()
+            NSApp.unhide(nil)
+            let firstTitle = "Narwhal live Space switch focus A"
+            let firstFrame = sampleFrame(in: display.visibleFrame, offset: .zero)
             let firstTarget = makeWindow(
-                title: "Narwhal live Space switch focus A",
-                axFrame: sampleFrame(in: display.visibleFrame, offset: .zero),
+                title: firstTitle,
+                axFrame: firstFrame,
                 display: display,
                 color: .systemBlue
             )
@@ -42,16 +48,15 @@ enum LiveSpaceSwitchFocusBorderVerification {
                 }
             }
 
-            firstTarget.orderFrontRegardless()
+            NSApp.activate(ignoringOtherApps: true)
+            firstTarget.makeKeyAndOrderFront(nil)
             RunLoop.current.run(until: Date().addingTimeInterval(0.12))
-            let firstID = WindowID(raw: CGWindowID(firstTarget.windowNumber))
-            overlay.render(OverlayModel.empty.showingFocusBorder(
-                FocusBorderTarget(windowID: firstID, frame: sampleFrame(in: display.visibleFrame, offset: .zero), cornerRadius: 15)
-            ))
+            let firstSnapshot = try focusedSnapshot(using: axClient, expectedTitle: firstTitle, context: "before Space switch")
+            overlay.render(OverlayModel.empty.showingFocusBorder(firstSnapshot.focusBorderTarget))
             RunLoop.current.run(until: Date().addingTimeInterval(0.12))
             try requireFocusBorderVisibleAbove(
                 overlay: overlay,
-                targetID: firstID,
+                targetID: firstSnapshot.id,
                 targetWindow: firstTarget,
                 context: "before Space switch"
             )
@@ -62,25 +67,25 @@ enum LiveSpaceSwitchFocusBorderVerification {
                 using: spaceClient,
                 displays: displays
             )
+            let secondTitle = "Narwhal live Space switch focus B"
             let secondFrame = sampleFrame(in: display.visibleFrame, offset: CGPoint(x: 36, y: 36))
             let nextTarget = makeWindow(
-                title: "Narwhal live Space switch focus B",
+                title: secondTitle,
                 axFrame: secondFrame,
                 display: display,
                 color: .systemGreen
             )
             secondTarget = nextTarget
-            nextTarget.orderFrontRegardless()
+            NSApp.activate(ignoringOtherApps: true)
+            nextTarget.makeKeyAndOrderFront(nil)
             RunLoop.current.run(until: Date().addingTimeInterval(0.18))
 
-            let secondID = WindowID(raw: CGWindowID(nextTarget.windowNumber))
-            overlay.render(OverlayModel.empty.showingFocusBorder(
-                FocusBorderTarget(windowID: secondID, frame: secondFrame, cornerRadius: 15)
-            ))
+            let secondSnapshot = try focusedSnapshot(using: axClient, expectedTitle: secondTitle, context: "after Space switch")
+            overlay.render(OverlayModel.empty.showingFocusBorder(secondSnapshot.focusBorderTarget))
             RunLoop.current.run(until: Date().addingTimeInterval(0.18))
             try requireFocusBorderVisibleAbove(
                 overlay: overlay,
-                targetID: secondID,
+                targetID: secondSnapshot.id,
                 targetWindow: nextTarget,
                 context: "after Space switch"
             )
@@ -100,8 +105,8 @@ enum LiveSpaceSwitchFocusBorderVerification {
                 [
                     "live Space-switch focus border verified:",
                     "spaces=\(originalSpace.raw),\(destinationSpace.raw)",
-                    "targetA=w\(firstID.raw)",
-                    "targetB=w\(secondID.raw)"
+                    "targetA=\(firstSnapshot.id.description)",
+                    "targetB=\(secondSnapshot.id.description)"
                 ].joined(separator: " ")
             )
         } catch let error as SpaceSwitchFocusBorderFailure {
@@ -240,6 +245,29 @@ enum LiveSpaceSwitchFocusBorderVerification {
         }
     }
 
+    private static func focusedSnapshot(
+        using axClient: AXClient,
+        expectedTitle: String,
+        context: String
+    ) throws -> FocusedWindowSnapshot {
+        let deadline = Date().addingTimeInterval(1.2)
+        var lastFailure = "focused window was not observed"
+        while Date() < deadline {
+            switch axClient.focusedWindowSnapshot() {
+            case .success(let snapshot) where snapshot.title == expectedTitle:
+                return snapshot
+            case .success(let snapshot):
+                lastFailure = "focused \(snapshot.id.description) title=\"\(snapshot.title)\""
+            case .failure(let error):
+                lastFailure = error.description
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.04))
+        }
+        throw SpaceSwitchFocusBorderFailure(
+            "live Space-switch focus border could not recover focused AX snapshot \(context): \(lastFailure)"
+        )
+    }
+
     private static func waitForFrontToBackWindowNumbers(containing required: [Int]) -> [Int]? {
         let deadline = Date().addingTimeInterval(1.0)
         while Date() < deadline {
@@ -278,7 +306,7 @@ enum LiveSpaceSwitchFocusBorderVerification {
     ) -> NSWindow {
         let window = NSWindow(
             contentRect: appKitFrame(forAXFrame: axFrame, display: display),
-            styleMask: [.borderless],
+            styleMask: [.titled],
             backing: .buffered,
             defer: false
         )
@@ -288,6 +316,7 @@ enum LiveSpaceSwitchFocusBorderVerification {
         window.hasShadow = false
         window.level = .normal
         window.collectionBehavior = [.ignoresCycle]
+        window.setFrame(appKitFrame(forAXFrame: axFrame, display: display), display: true)
         return window
     }
 
