@@ -273,7 +273,7 @@ final class Overlay {
         window.hasShadow = false
         window.ignoresMouseEvents = true
         window.level = .normal
-        window.collectionBehavior = [.ignoresCycle]
+        window.collectionBehavior = [.moveToActiveSpace, .ignoresCycle]
         return window
     }
 
@@ -322,7 +322,7 @@ final class Overlay {
         window.hasShadow = false
         window.ignoresMouseEvents = true
         window.level = .normal
-        window.collectionBehavior = [.ignoresCycle]
+        window.collectionBehavior = [.moveToActiveSpace, .ignoresCycle]
         return window
     }
 

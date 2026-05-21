@@ -42,6 +42,7 @@ run_required --verify-workspace-scope
 run_optional_multi_display
 run_required --verify-focused-unavailable-polling
 run_required --verify-space-focus-recovery
+run_required --verify-live-space-switch-focus-border
 run_required --verify-display-change-focus-border
 run_required --verify-live-command-workflows
 

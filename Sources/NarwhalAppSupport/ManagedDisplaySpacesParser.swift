@@ -28,22 +28,7 @@ public func managedDisplaySpacesTopology(
     rows: [ManagedDisplaySpacesDisplayRow],
     displays: [DisplayID: DisplayInfo]
 ) -> SpaceTopology? {
-    let displaysByFingerprint = Dictionary(
-        uniqueKeysWithValues: displays.compactMap { displayID, display -> (String, DisplayID)? in
-            guard let fingerprint = display.fingerprint?.lowercased() else { return nil }
-            return (fingerprint, displayID)
-        }
-    )
-    let displaysBySlot = displays.values.sorted { lhs, rhs in
-        if lhs.slot != rhs.slot { return lhs.slot < rhs.slot }
-        return lhs.id.raw < rhs.id.raw
-    }
-    let displayRows: [(DisplayID, ManagedDisplaySpacesDisplayRow)] = rows.enumerated().compactMap { index, row in
-        let displayID = row.fingerprint.flatMap { displaysByFingerprint[$0.lowercased()] }
-            ?? displaysBySlot[safe: index]?.id
-        guard let displayID else { return nil }
-        return (displayID, row)
-    }
+    let displayRows = managedDisplaySpaceRowsByDisplay(rows: rows, displays: displays)
     let activeSpaceByDisplay = Dictionary(
         displayRows.compactMap { displayID, row in
             row.activeSpace.map { (displayID, $0) }
@@ -67,16 +52,46 @@ public func managedDisplaySpacesTopology(
     )
 }
 
+public func managedDisplaySpaceRowsByDisplay(
+    rows: [ManagedDisplaySpacesDisplayRow],
+    displays: [DisplayID: DisplayInfo]
+) -> [DisplayID: ManagedDisplaySpacesDisplayRow] {
+    let displaysByFingerprint = Dictionary(
+        uniqueKeysWithValues: displays.compactMap { displayID, display -> (String, DisplayID)? in
+            guard let fingerprint = display.fingerprint?.lowercased() else { return nil }
+            return (fingerprint, displayID)
+        }
+    )
+    let displaysBySlot = displays.values.sorted { lhs, rhs in
+        if lhs.slot != rhs.slot { return lhs.slot < rhs.slot }
+        return lhs.id.raw < rhs.id.raw
+    }
+    let displayRows: [(DisplayID, ManagedDisplaySpacesDisplayRow)] = rows.enumerated().compactMap { index, row in
+        let displayID = row.fingerprint.flatMap { displaysByFingerprint[$0.lowercased()] }
+            ?? displaysBySlot[safe: index]?.id
+        guard let displayID else { return nil }
+        return (displayID, row)
+    }
+
+    return Dictionary(
+        displayRows,
+        uniquingKeysWith: { _, latest in latest }
+    )
+}
+
 public enum ManagedDisplaySpacesParser {
-    public static func parse(_ raw: CFArray, displays: [DisplayID: DisplayInfo]) -> SpaceTopology? {
+    public static func parseRows(_ raw: CFArray) -> [ManagedDisplaySpacesDisplayRow] {
         let displayRows = raw as NSArray
-        let rows = (0..<displayRows.count).map { index -> ManagedDisplaySpacesDisplayRow in
+        return (0..<displayRows.count).map { index -> ManagedDisplaySpacesDisplayRow in
             guard let row = displayRows[index] as? NSDictionary else {
                 return ManagedDisplaySpacesDisplayRow(fingerprint: nil, activeSpace: nil, spaces: [])
             }
             return displayRow(from: row)
         }
-        return managedDisplaySpacesTopology(rows: rows, displays: displays)
+    }
+
+    public static func parse(_ raw: CFArray, displays: [DisplayID: DisplayInfo]) -> SpaceTopology? {
+        managedDisplaySpacesTopology(rows: parseRows(raw), displays: displays)
     }
 
     private static func displayRow(from row: NSDictionary) -> ManagedDisplaySpacesDisplayRow {

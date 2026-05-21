@@ -71,6 +71,36 @@ struct ManagedDisplaySpacesParserTests {
         #expect(topology.windowSpace == [windowID: SpaceID(raw: 2)])
     }
 
+    @Test("Display row projection exposes all Spaces for live shell verifiers")
+    func displayRowProjectionExposesAllSpacesForLiveShellVerifiers() throws {
+        let displayID = DisplayID(raw: 12)
+        let rows = [
+            ManagedDisplaySpacesDisplayRow(
+                fingerprint: "display-fingerprint",
+                activeSpace: SpaceID(raw: 21),
+                spaces: [
+                    ManagedDisplaySpace(id: SpaceID(raw: 20), windowIDs: []),
+                    ManagedDisplaySpace(id: SpaceID(raw: 21), windowIDs: [WindowID(raw: 2101)]),
+                    ManagedDisplaySpace(id: SpaceID(raw: 22), windowIDs: [])
+                ]
+            )
+        ]
+
+        let projected = managedDisplaySpaceRowsByDisplay(
+            rows: rows,
+            displays: [
+                displayID: display(displayID, slot: 0, fingerprint: "DISPLAY-FINGERPRINT")
+            ]
+        )
+
+        #expect(projected[displayID]?.activeSpace == SpaceID(raw: 21))
+        #expect(projected[displayID]?.spaces.map(\.id) == [
+            SpaceID(raw: 20),
+            SpaceID(raw: 21),
+            SpaceID(raw: 22)
+        ])
+    }
+
     @Test("Topology builder rejects rows without any active Space")
     func topologyBuilderRejectsRowsWithoutAnyActiveSpace() {
         let topology = managedDisplaySpacesTopology(

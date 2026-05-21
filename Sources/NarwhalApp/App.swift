@@ -118,6 +118,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print(result.message)
             Darwin.exit(result.passed ? 0 : 1)
         }
+        if ProcessInfo.processInfo.arguments.contains("--verify-live-space-switch-focus-border") {
+            let result = LiveSpaceSwitchFocusBorderVerification.verifyFocusBorderMovesAcrossRealSpaceSwitch()
+            print(result.message)
+            Darwin.exit(result.passed ? 0 : 1)
+        }
         if ProcessInfo.processInfo.arguments.contains("--verify-display-change-focus-border") {
             let result = DisplayChangeFocusBorderVerification.verifyDisplayChangePreservesVisibleFocusBorder()
             print(result.message)
