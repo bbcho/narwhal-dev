@@ -288,6 +288,36 @@ struct AXClient {
 
     private func focusedWindowElement() -> Result<AXUIElement, AXClientError> {
         let systemElement = AXUIElementCreateSystemWide()
+        if let window = focusedUIElementWindow(from: systemElement) {
+            return .success(window)
+        }
+
+        let focusedApp: AXUIElement
+        let focusedAppError: AXClientError?
+        switch focusedApplicationElement(from: systemElement) {
+        case .success(let app):
+            focusedApp = app
+            focusedAppError = nil
+        case .failure(let error):
+            guard let app = frontmostApplicationElement() else {
+                return .failure(error)
+            }
+            focusedApp = app
+            focusedAppError = error
+        }
+
+        switch focusedWindowElement(in: focusedApp) {
+        case .success(let window):
+            return .success(window)
+        case .failure(let focusedWindowError):
+            if let focusedAppError {
+                return .failure(focusedAppError)
+            }
+            return .failure(focusedWindowError)
+        }
+    }
+
+    private func focusedApplicationElement(from systemElement: AXUIElement) -> Result<AXUIElement, AXClientError> {
         var focusedAppValue: CFTypeRef?
         let appError = AXUIElementCopyAttributeValue(
             systemElement,
@@ -301,8 +331,10 @@ struct AXClient {
             return .failure(.missingFocusedWindow)
         }
 
-        let focusedApp = focusedAppValue as! AXUIElement
+        return .success(focusedAppValue as! AXUIElement)
+    }
 
+    private func focusedWindowElement(in focusedApp: AXUIElement) -> Result<AXUIElement, AXClientError> {
         var focusedValue: CFTypeRef?
         let focusedError = AXUIElementCopyAttributeValue(
             focusedApp,
@@ -315,6 +347,14 @@ struct AXClient {
             return .success(focusedValue as! AXUIElement)
         }
 
+        if focusedError != .success {
+            return .failure(.copyAttributeFailed(kAXFocusedWindowAttribute, focusedError))
+        }
+
+        return .failure(.missingFocusedWindow)
+    }
+
+    private func focusedUIElementWindow(from systemElement: AXUIElement) -> AXUIElement? {
         var focusedElementValue: CFTypeRef?
         let elementError = AXUIElementCopyAttributeValue(
             systemElement,
@@ -326,15 +366,16 @@ struct AXClient {
            CFGetTypeID(focusedElementValue) == AXUIElementGetTypeID() {
             let focusedElement = focusedElementValue as! AXUIElement
             if let window = ancestorWindow(from: focusedElement) {
-                return .success(window)
+                return window
             }
         }
 
-        if focusedError != .success {
-            return .failure(.copyAttributeFailed(kAXFocusedWindowAttribute, focusedError))
-        }
+        return nil
+    }
 
-        return .failure(.missingFocusedWindow)
+    private func frontmostApplicationElement() -> AXUIElement? {
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else { return nil }
+        return AXUIElementCreateApplication(frontmost.processIdentifier)
     }
 
     private func ancestorWindow(from element: AXUIElement) -> AXUIElement? {

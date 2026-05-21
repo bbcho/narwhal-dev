@@ -7,7 +7,8 @@ final class AXObserverService {
     private static let pollInterval: TimeInterval = 0.15
     private static let frameTolerance: CGFloat = 1
 
-    private let axClient: AXClient
+    private let focusedWindowSnapshot: @MainActor () -> Result<FocusedWindowSnapshot, AXClientError>
+    private let windowSnapshot: @MainActor () -> AXWindowSnapshot
     private let echoSuppressor: AXEchoSuppressor
     private let reporter: StartupReporter
     private let activeSpaceByDisplay: @MainActor ([WindowMetadata]) -> [DisplayID: SpaceID]
@@ -17,6 +18,7 @@ final class AXObserverService {
     private var settleTimers: [Timer] = []
     private var workspaceObserver: NSObjectProtocol?
     private var focusedObservationState = FocusedWindowObservationState.empty
+    private var focusedAvailabilityLogState = FocusedWindowAvailabilityLogState.empty
     private var windowInventoryObservationState = WindowInventoryObservationState.empty
 
     init(
@@ -27,7 +29,26 @@ final class AXObserverService {
         spaceChanged: @escaping @MainActor () -> Void,
         emit: @escaping @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
     ) {
-        self.axClient = axClient
+        self.focusedWindowSnapshot = axClient.focusedWindowSnapshot
+        self.windowSnapshot = axClient.windowSnapshot
+        self.echoSuppressor = echoSuppressor
+        self.reporter = reporter
+        self.activeSpaceByDisplay = activeSpaceByDisplay
+        self.spaceChanged = spaceChanged
+        self.emit = emit
+    }
+
+    init(
+        focusedWindowSnapshot: @escaping @MainActor () -> Result<FocusedWindowSnapshot, AXClientError>,
+        windowSnapshot: @escaping @MainActor () -> AXWindowSnapshot,
+        echoSuppressor: AXEchoSuppressor,
+        reporter: StartupReporter,
+        activeSpaceByDisplay: @escaping @MainActor ([WindowMetadata]) -> [DisplayID: SpaceID],
+        spaceChanged: @escaping @MainActor () -> Void,
+        emit: @escaping @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
+    ) {
+        self.focusedWindowSnapshot = focusedWindowSnapshot
+        self.windowSnapshot = windowSnapshot
         self.echoSuppressor = echoSuppressor
         self.reporter = reporter
         self.activeSpaceByDisplay = activeSpaceByDisplay
@@ -62,6 +83,7 @@ final class AXObserverService {
         timer = nil
         settleTimers.forEach { $0.invalidate() }
         settleTimers.removeAll()
+        focusedAvailabilityLogState = .empty
         windowInventoryObservationState = .empty
         if let workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
@@ -89,7 +111,7 @@ final class AXObserverService {
     }
 
     private func activeSpaceNotificationOnlyChangedFocusedDisplay() -> Bool {
-        let snapshot = axClient.windowSnapshot()
+        let snapshot = windowSnapshot()
         guard case .complete = snapshot.quality else { return false }
         let nextActiveSpaceByDisplay = activeSpaceByDisplay(snapshot.windows)
         guard !windowInventoryObservationState.activeSpaceByDisplay.isEmpty,
@@ -122,7 +144,7 @@ final class AXObserverService {
 
     private func pollFocusedWindow() {
         let transition: FocusedWindowObservationTransition
-        switch axClient.focusedWindowSnapshot() {
+        switch focusedWindowSnapshot() {
         case .success(let value):
             transition = reduceFocusedWindowObservation(
                 state: focusedObservationState,
@@ -131,6 +153,10 @@ final class AXObserverService {
             )
             focusedObservationState = transition.state
             handleFocusedObservationEffects(transition.effects, snapshot: value)
+            handleFocusedAvailabilityEffects(reduceFocusedWindowAvailabilityLog(
+                state: focusedAvailabilityLogState,
+                input: .observed
+            ))
         case .failure(let error):
             transition = reduceFocusedWindowObservation(
                 state: focusedObservationState,
@@ -139,7 +165,13 @@ final class AXObserverService {
             )
             focusedObservationState = transition.state
             handleFocusedObservationEffects(transition.effects, snapshot: nil)
-            reporter.info("Focused-window snapshot unavailable; preserving last focus border: \(error.description)")
+            handleFocusedAvailabilityEffects(reduceFocusedWindowAvailabilityLog(
+                state: focusedAvailabilityLogState,
+                input: .unavailable(
+                    reason: error.description,
+                    hasLastFocusedWindow: focusedObservationState.geometry.windowID != nil
+                )
+            ))
         }
     }
 
@@ -161,8 +193,21 @@ final class AXObserverService {
         }
     }
 
+    private func handleFocusedAvailabilityEffects(_ transition: FocusedWindowAvailabilityTransition) {
+        focusedAvailabilityLogState = transition.state
+        for effect in transition.effects {
+            switch effect {
+            case .logUnavailable(let reason, let preservingLastFocus):
+                let action = preservingLastFocus ? "preserving last focus border" : "no previous focus border to preserve"
+                reporter.info("Focused-window snapshot unavailable; \(action): \(reason)")
+            case .logRecovered(let missedPolls):
+                reporter.info("Focused-window snapshot recovered after \(missedPolls) unavailable poll(s)")
+            }
+        }
+    }
+
     private func syncWindowInventory() {
-        let snapshot = axClient.windowSnapshot()
+        let snapshot = windowSnapshot()
         guard case .complete = snapshot.quality else { return }
         windowInventoryObservationState = windowInventoryObservationBaseline(
             windows: snapshot.windows,
@@ -171,7 +216,7 @@ final class AXObserverService {
     }
 
     private func pollVisibleWindowInventory() {
-        let snapshot = axClient.windowSnapshot()
+        let snapshot = windowSnapshot()
         guard case .complete = snapshot.quality else { return }
         let transition = observeWindowInventory(
             windows: snapshot.windows,
