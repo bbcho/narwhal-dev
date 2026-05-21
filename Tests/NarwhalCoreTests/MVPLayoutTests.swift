@@ -2056,6 +2056,91 @@ struct MVPLayoutTests {
         #expect(next.pendingRules == [firstSpaceWindow: .forceFloat])
     }
 
+    @Test("Display-change preservation defers active close pruning until display settled cleanup")
+    func displayChangePreservationDefersActiveClosePruningUntilDisplaySettledCleanup() throws {
+        let displayID = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let live = WindowID(raw: 11)
+        let closed = WindowID(raw: 12)
+        let tree = pushIntoTree(closed, .right, pushIntoTree(live, .left, .void))
+        let display = self.display(displayID, x: 0, width: 1200)
+        let world = World(
+            displays: [displayID: display],
+            activeSpace: activeSpace,
+            spaces: [
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [displayID: DisplaySpaceState(displayID: displayID, tree: tree, floating: [])],
+                    focused: closed
+                )
+            ],
+            windows: [
+                live: metadata(for: live),
+                closed: metadata(for: closed)
+            ],
+            windowDisplay: [
+                live: displayID,
+                closed: displayID
+            ],
+            windowConstraints: [closed: WindowConstraints(minWidth: 600)],
+            pendingRules: [closed: .forceFloat],
+            config: .default
+        )
+        let liveSnapshotWindows = [metadata(for: live)]
+
+        let displayChangedPolicy = environmentRefreshPolicy(
+            for: [.windowClosed(closed), .displayChanged],
+            duringSpaceTransition: false
+        )
+        #expect(displayChangedPolicy.scheduleDeferredCleanup)
+        #expect(!displayChangedPolicy.persistRestore)
+        #expect(displayChangedPolicy.reconciliationMode == .preserveLayouts)
+
+        let preservedSnapshot = EnvironmentSnapshot(
+            activeSpace: activeSpace,
+            displays: [displayID: display],
+            axSnapshot: AXWindowSnapshot(windows: liveSnapshotWindows, quality: .complete),
+            preserveSpaceLayouts: displayChangedPolicy.preserveSpaceLayouts,
+            reconciliationMode: displayChangedPolicy.reconciliationMode
+        )
+        let preserved = try requireWorld(
+            apply(.environmentChanged(preservedSnapshot), to: world),
+            "Expected display-change refresh to preserve layout memory"
+        )
+
+        #expect(Set(occupiedWindows(in: preserved.spaces[activeSpace]?.displays[displayID]?.tree ?? .void)) == [live, closed])
+        #expect(preserved.windows[closed] == metadata(for: closed))
+        #expect(preserved.windowConstraints == [closed: WindowConstraints(minWidth: 600)])
+        #expect(preserved.pendingRules == [closed: .forceFloat])
+
+        let displaySettledPolicy = environmentRefreshPolicy(
+            for: [.displaySettled],
+            duringSpaceTransition: false
+        )
+        #expect(!displaySettledPolicy.persistRestore)
+        #expect(displaySettledPolicy.applyPendingTileRules)
+        #expect(displaySettledPolicy.reconciliationMode == .activeWorkspaceCleanup)
+
+        let settledSnapshot = EnvironmentSnapshot(
+            activeSpace: activeSpace,
+            displays: [displayID: display],
+            axSnapshot: AXWindowSnapshot(windows: liveSnapshotWindows, quality: .complete),
+            preserveSpaceLayouts: displaySettledPolicy.preserveSpaceLayouts,
+            reconciliationMode: displaySettledPolicy.reconciliationMode
+        )
+        let cleaned = try requireWorld(
+            apply(.environmentChanged(settledSnapshot), to: preserved),
+            "Expected display-settled cleanup to prune active closed windows"
+        )
+
+        #expect(Set(occupiedWindows(in: cleaned.spaces[activeSpace]?.displays[displayID]?.tree ?? .void)) == [live])
+        #expect(cleaned.windows[closed] == nil)
+        #expect(cleaned.windowDisplay[closed] == nil)
+        #expect(cleaned.windowConstraints.isEmpty)
+        #expect(cleaned.pendingRules.isEmpty)
+        #expect(cleaned.spaces[activeSpace]?.focused == nil)
+    }
+
     @Test("Active Space pruning keeps metadata for windows still tracked in inactive Spaces")
     func activeSpacePruningKeepsMetadataForWindowsStillTrackedInInactiveSpaces() throws {
         let displayID = DisplayID(raw: 1)

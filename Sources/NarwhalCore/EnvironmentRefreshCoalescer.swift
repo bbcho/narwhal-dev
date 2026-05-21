@@ -2,6 +2,7 @@ public enum EnvironmentRefreshReason: Equatable, CustomStringConvertible, Sendab
     case windowOpened(WindowID)
     case windowClosed(WindowID)
     case displayChanged
+    case displaySettled
     case spaceSettled
     case spaceTransitionEnded
 
@@ -13,6 +14,8 @@ public enum EnvironmentRefreshReason: Equatable, CustomStringConvertible, Sendab
             return "window closed \(id.description)"
         case .displayChanged:
             return "display changed"
+        case .displaySettled:
+            return "display settled"
         case .spaceSettled:
             return "space settled"
         case .spaceTransitionEnded:
@@ -144,27 +147,42 @@ public func completeEnvironmentRefresh(
     )
 }
 
-public func shouldPreserveSpaceLayouts(
+public struct EnvironmentRefreshPolicy: Equatable, Sendable {
+    public let preserveSpaceLayouts: Bool
+    public let reconciliationMode: EnvironmentReconciliationMode
+    public let persistRestore: Bool
+    public let applyPendingTileRules: Bool
+    public let scheduleDeferredCleanup: Bool
+
+    fileprivate init(
+        preserveSpaceLayouts: Bool,
+        reconciliationMode: EnvironmentReconciliationMode,
+        persistRestore: Bool,
+        applyPendingTileRules: Bool,
+        scheduleDeferredCleanup: Bool
+    ) {
+        self.preserveSpaceLayouts = preserveSpaceLayouts
+        self.reconciliationMode = reconciliationMode
+        self.persistRestore = persistRestore
+        self.applyPendingTileRules = applyPendingTileRules
+        self.scheduleDeferredCleanup = scheduleDeferredCleanup
+    }
+}
+
+public func environmentRefreshPolicy(
     for reasons: [EnvironmentRefreshReason],
     duringSpaceTransition: Bool
-) -> Bool {
-    duringSpaceTransition
+) -> EnvironmentRefreshPolicy {
+    let preserveSpaceLayouts = duringSpaceTransition
         || reasons.contains(.displayChanged)
         || reasons.contains(.spaceSettled)
         || reasons.contains(.spaceTransitionEnded)
-}
 
-public func shouldPersistRestoreAfterEnvironmentRefresh(
-    reasons: [EnvironmentRefreshReason],
-    preservedSpaceLayouts: Bool = false
-) -> Bool {
-    guard !preservedSpaceLayouts else { return false }
-    return !reasons.contains(.spaceSettled)
-        && !reasons.contains(.spaceTransitionEnded)
-}
-
-public func shouldApplyPendingTileRulesAfterEnvironmentRefresh(
-    preservedSpaceLayouts: Bool
-) -> Bool {
-    !preservedSpaceLayouts
+    return EnvironmentRefreshPolicy(
+        preserveSpaceLayouts: preserveSpaceLayouts,
+        reconciliationMode: preserveSpaceLayouts ? .preserveLayouts : .activeWorkspaceCleanup,
+        persistRestore: !preserveSpaceLayouts && !reasons.contains(.displaySettled),
+        applyPendingTileRules: !preserveSpaceLayouts,
+        scheduleDeferredCleanup: reasons.contains(.displayChanged)
+    )
 }

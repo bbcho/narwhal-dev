@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let activeSpaceTransitionPreserveDuration: TimeInterval = 1.25
     private static let activeSpaceFocusRecoveryDuration: TimeInterval = 5.0
     private static let activeSpaceSettledRefreshDelays: [TimeInterval] = [0.35, 0.80]
+    private static let displaySettledRefreshDelay: TimeInterval = 6.0
     private static let restoreSaveDebounceInterval: TimeInterval = 0.25
 
     private let axClient = AXClient()
@@ -65,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var environmentRefreshCoalescer = EnvironmentRefreshCoalescerState.empty
     private var environmentRefreshCoalescingTimer: Timer?
     private var environmentRefreshCoalescingTimerGeneration: UInt64?
+    private var displaySettledRefreshTimer: Timer?
     private var spaceSettledRefreshTimers: [Timer] = []
     private var spaceTransitionPreserveTimer: Timer?
     private var spaceTransitionPreservation = SpaceTransitionPreservationState.empty
@@ -231,6 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environmentRefreshCoalescingTimer?.invalidate()
         environmentRefreshCoalescingTimer = nil
         environmentRefreshCoalescingTimerGeneration = nil
+        cancelDisplaySettledRefreshTimer()
         cancelSpaceTransitionTimers()
         runningServices?.stopAll()
         runningServices = nil
@@ -717,6 +720,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let service = DisplayObserverService(reporter: reporter) { [weak self] in
             self?.setTiledBorders([])
+            self?.cancelDisplaySettledRefreshTimer()
             self?.scheduleCoalescedEnvironmentRefresh(.displayChanged)
         }
         service.start()
@@ -2230,6 +2234,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    private func scheduleDelayedDisplaySettledRefresh(after delay: TimeInterval) {
+        cancelDisplaySettledRefreshTimer()
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] timer in
+            Task { @MainActor in
+                guard self?.displaySettledRefreshTimer === timer else { return }
+                self?.displaySettledRefreshTimer = nil
+                self?.scheduleCoalescedEnvironmentRefresh(.displaySettled)
+            }
+        }
+        displaySettledRefreshTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    @MainActor
     private func scheduleSpaceTransitionPreserveEnd(after delay: TimeInterval, generation: UInt64) {
         let timer = Timer(timeInterval: delay, repeats: false) { [weak self] timer in
             Task { @MainActor in
@@ -2259,6 +2277,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    private func cancelDisplaySettledRefreshTimer() {
+        displaySettledRefreshTimer?.invalidate()
+        displaySettledRefreshTimer = nil
+    }
+
+    @MainActor
     private func runCoalescedEnvironmentRefresh(generation: UInt64) async {
         if environmentRefreshCoalescingTimerGeneration == generation {
             environmentRefreshCoalescingTimer?.invalidate()
@@ -2270,13 +2294,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environmentRefreshCoalescer = fired.state
         guard case .run(let request) = fired.decision else { return }
 
-        let preserveSpaceLayouts = shouldPreserveSpaceLayouts(
+        let policy = environmentRefreshPolicy(
             for: request.reasons,
             duringSpaceTransition: spaceTransitionPreservation.isPreservingSpaceLayouts
         )
         let environment = await refreshEnvironment(
             reason: "coalesced \(request.description)",
-            preserveSpaceLayouts: preserveSpaceLayouts
+            preserveSpaceLayouts: policy.preserveSpaceLayouts,
+            reconciliationMode: policy.reconciliationMode
         )
         let completed: Bool
         if case .complete = environment.quality {
@@ -2293,15 +2318,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environmentRefreshCoalescer = completion.state
         switch completion.decision {
         case .cleared(let completedRequest):
-            if completed && shouldApplyPendingTileRulesAfterEnvironmentRefresh(
-                preservedSpaceLayouts: environment.preservedSpaceLayouts
-            ) {
+            if completed && policy.scheduleDeferredCleanup {
+                scheduleDelayedDisplaySettledRefresh(after: Self.displaySettledRefreshDelay)
+            }
+            if completed && policy.applyPendingTileRules && !environment.preservedSpaceLayouts {
                 await applyPendingTileRules(reason: "coalesced \(completedRequest.description)")
             }
-            if shouldPersistRestoreAfterEnvironmentRefresh(
-                reasons: completedRequest.reasons,
-                preservedSpaceLayouts: environment.preservedSpaceLayouts
-            ) {
+            if policy.persistRestore && !environment.preservedSpaceLayouts {
                 await persistRestore(reason: "coalesced \(completedRequest.description)")
             }
         case .retained(let pending):

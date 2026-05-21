@@ -96,80 +96,116 @@ struct EnvironmentRefreshCoalescerTests {
                 .windowOpened(WindowID(raw: 1)),
                 .windowClosed(WindowID(raw: 2)),
                 .displayChanged,
+                .displaySettled,
                 .spaceSettled
             ]
         )
 
         #expect(CoalescedEnvironmentRefresh(generation: 1, reasons: [.displayChanged]).description == "display changed")
-        #expect(request.description == "4 coalesced events: window opened w1, window closed w2, display changed, space settled")
+        #expect(CoalescedEnvironmentRefresh(generation: 1, reasons: [.displaySettled]).description == "display settled")
+        #expect(request.description == "5 coalesced events: window opened w1, window closed w2, display changed, display settled, space settled")
         #expect(CoalescedEnvironmentRefresh(
             generation: 2,
             reasons: [.spaceTransitionEnded]
         ).description == "space transition ended")
     }
 
-    @Test("Space transition preservation covers inventory-only refreshes")
-    func spaceTransitionPreservationCoversInventoryOnlyRefreshes() {
-        #expect(shouldPreserveSpaceLayouts(
+    @Test("Environment refresh policy separates reconciliation, persistence, and deferred cleanup")
+    func environmentRefreshPolicySeparatesEffects() {
+        expectPolicy(environmentRefreshPolicy(
             for: [.windowClosed(WindowID(raw: 44)), .windowOpened(WindowID(raw: 45))],
             duringSpaceTransition: true
-        ))
-        #expect(shouldPreserveSpaceLayouts(
+        ),
+            preserveSpaceLayouts: true,
+            reconciliationMode: .preserveLayouts,
+            persistRestore: false,
+            applyPendingTileRules: false,
+            scheduleDeferredCleanup: false
+        )
+        expectPolicy(environmentRefreshPolicy(
             for: [.windowClosed(WindowID(raw: 44)), .spaceSettled],
             duringSpaceTransition: false
-        ))
-        #expect(!shouldPreserveSpaceLayouts(
+        ),
+            preserveSpaceLayouts: true,
+            reconciliationMode: .preserveLayouts,
+            persistRestore: false,
+            applyPendingTileRules: false,
+            scheduleDeferredCleanup: false
+        )
+        expectPolicy(environmentRefreshPolicy(
             for: [.windowClosed(WindowID(raw: 44)), .windowOpened(WindowID(raw: 45))],
             duringSpaceTransition: false
-        ))
-        #expect(shouldPreserveSpaceLayouts(
+        ),
+            preserveSpaceLayouts: false,
+            reconciliationMode: .activeWorkspaceCleanup,
+            persistRestore: true,
+            applyPendingTileRules: true,
+            scheduleDeferredCleanup: false
+        )
+        expectPolicy(environmentRefreshPolicy(
             for: [.spaceSettled, .spaceTransitionEnded],
             duringSpaceTransition: false
-        ))
-        #expect(shouldPreserveSpaceLayouts(
+        ),
+            preserveSpaceLayouts: true,
+            reconciliationMode: .preserveLayouts,
+            persistRestore: false,
+            applyPendingTileRules: false,
+            scheduleDeferredCleanup: false
+        )
+        expectPolicy(environmentRefreshPolicy(
             for: [.displayChanged],
             duringSpaceTransition: false
-        ))
-        #expect(shouldPreserveSpaceLayouts(
+        ),
+            preserveSpaceLayouts: true,
+            reconciliationMode: .preserveLayouts,
+            persistRestore: false,
+            applyPendingTileRules: false,
+            scheduleDeferredCleanup: true
+        )
+        expectPolicy(environmentRefreshPolicy(
             for: [.windowOpened(WindowID(raw: 46)), .displayChanged],
             duringSpaceTransition: false
-        ))
+        ),
+            preserveSpaceLayouts: true,
+            reconciliationMode: .preserveLayouts,
+            persistRestore: false,
+            applyPendingTileRules: false,
+            scheduleDeferredCleanup: true
+        )
+        expectPolicy(environmentRefreshPolicy(
+            for: [.displaySettled],
+            duringSpaceTransition: false
+        ),
+            preserveSpaceLayouts: false,
+            reconciliationMode: .activeWorkspaceCleanup,
+            persistRestore: false,
+            applyPendingTileRules: true,
+            scheduleDeferredCleanup: false
+        )
+        expectPolicy(environmentRefreshPolicy(
+            for: [.displaySettled, .displayChanged],
+            duringSpaceTransition: false
+        ),
+            preserveSpaceLayouts: true,
+            reconciliationMode: .preserveLayouts,
+            persistRestore: false,
+            applyPendingTileRules: false,
+            scheduleDeferredCleanup: true
+        )
     }
 
-    @Test("Preserved refreshes do not persist restore state")
-    func preservedRefreshesDoNotPersistRestoreState() {
-        #expect(shouldPersistRestoreAfterEnvironmentRefresh(reasons: [.windowClosed(WindowID(raw: 44))]))
-        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(reasons: [.spaceSettled]))
-        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(reasons: [
-            .windowClosed(WindowID(raw: 44)),
-            .spaceSettled
-        ]))
-        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(reasons: [.spaceTransitionEnded]))
-        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(reasons: [
-            .spaceSettled,
-            .spaceTransitionEnded
-        ]))
-        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(
-            reasons: [.spaceSettled, .spaceTransitionEnded],
-            preservedSpaceLayouts: true
-        ))
-        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(
-            reasons: [.windowClosed(WindowID(raw: 44))],
-            preservedSpaceLayouts: true
-        ))
-        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(
-            reasons: [.displayChanged],
-            preservedSpaceLayouts: true
-        ))
-        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(
-            reasons: [.windowOpened(WindowID(raw: 46)), .displayChanged],
-            preservedSpaceLayouts: true
-        ))
-    }
-
-    @Test("Preserved refreshes defer pending tile rule application")
-    func preservedRefreshesDeferPendingTileRuleApplication() {
-        #expect(shouldApplyPendingTileRulesAfterEnvironmentRefresh(preservedSpaceLayouts: false))
-        #expect(!shouldApplyPendingTileRulesAfterEnvironmentRefresh(preservedSpaceLayouts: true))
+    private func expectPolicy(
+        _ policy: EnvironmentRefreshPolicy,
+        preserveSpaceLayouts: Bool,
+        reconciliationMode: EnvironmentReconciliationMode,
+        persistRestore: Bool,
+        applyPendingTileRules: Bool,
+        scheduleDeferredCleanup: Bool
+    ) {
+        #expect(policy.preserveSpaceLayouts == preserveSpaceLayouts)
+        #expect(policy.reconciliationMode == reconciliationMode)
+        #expect(policy.persistRestore == persistRestore)
+        #expect(policy.applyPendingTileRules == applyPendingTileRules)
+        #expect(policy.scheduleDeferredCleanup == scheduleDeferredCleanup)
     }
 }
