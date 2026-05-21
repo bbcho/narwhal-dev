@@ -126,10 +126,18 @@ struct EnvironmentRefreshCoalescerTests {
             for: [.spaceSettled, .spaceTransitionEnded],
             duringSpaceTransition: false
         ))
+        #expect(shouldPreserveSpaceLayouts(
+            for: [.displayChanged],
+            duringSpaceTransition: false
+        ))
+        #expect(shouldPreserveSpaceLayouts(
+            for: [.windowOpened(WindowID(raw: 46)), .displayChanged],
+            duringSpaceTransition: false
+        ))
     }
 
-    @Test("Space-settle refreshes do not persist restore state")
-    func spaceSettleRefreshesDoNotPersistRestoreState() {
+    @Test("Preserved refreshes do not persist restore state")
+    func preservedRefreshesDoNotPersistRestoreState() {
         #expect(shouldPersistRestoreAfterEnvironmentRefresh(reasons: [.windowClosed(WindowID(raw: 44))]))
         #expect(!shouldPersistRestoreAfterEnvironmentRefresh(reasons: [.spaceSettled]))
         #expect(!shouldPersistRestoreAfterEnvironmentRefresh(reasons: [
@@ -147,6 +155,14 @@ struct EnvironmentRefreshCoalescerTests {
         ))
         #expect(!shouldPersistRestoreAfterEnvironmentRefresh(
             reasons: [.windowClosed(WindowID(raw: 44))],
+            preservedSpaceLayouts: true
+        ))
+        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(
+            reasons: [.displayChanged],
+            preservedSpaceLayouts: true
+        ))
+        #expect(!shouldPersistRestoreAfterEnvironmentRefresh(
+            reasons: [.windowOpened(WindowID(raw: 46)), .displayChanged],
             preservedSpaceLayouts: true
         ))
     }

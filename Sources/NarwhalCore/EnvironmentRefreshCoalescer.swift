@@ -149,6 +149,7 @@ public func shouldPreserveSpaceLayouts(
     duringSpaceTransition: Bool
 ) -> Bool {
     duringSpaceTransition
+        || reasons.contains(.displayChanged)
         || reasons.contains(.spaceSettled)
         || reasons.contains(.spaceTransitionEnded)
 }
