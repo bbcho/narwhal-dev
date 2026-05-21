@@ -64,6 +64,7 @@ enum AXClientError: Error, CustomStringConvertible, Sendable {
     case applicationActivateFailed(pid_t)
     case frameDidNotConverge(target: CGRect, actual: CGRect, attempts: Int)
     case visibleWindowListUnavailable
+    case windowNotRaised(WindowID, blocker: WindowID?)
 
     var description: String {
         switch self {
@@ -97,6 +98,11 @@ enum AXClientError: Error, CustomStringConvertible, Sendable {
             return "frame write did not converge after \(attempts) attempts target=\(target.debugDescription) actual=\(actual.debugDescription)"
         case .visibleWindowListUnavailable:
             return "visible CG window list unavailable"
+        case .windowNotRaised(let windowID, let blocker):
+            if let blocker {
+                return "\(windowID.description) was not raised above overlapping window \(blocker.description)"
+            }
+            return "\(windowID.description) was not visible after raise"
         }
     }
 }
@@ -157,6 +163,33 @@ struct AXClient {
         })
 
         return .success(ids)
+    }
+
+    private func raisedVisibilityDecision(for target: WindowID) -> Result<WindowStackVisibilityDecision, AXClientError> {
+        guard
+            let windows = CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements],
+                kCGNullWindowID
+            ) as? [[String: Any]]
+        else {
+            return .failure(.visibleWindowListUnavailable)
+        }
+
+        let entries: [WindowStackEntry] = windows.compactMap { window in
+            guard
+                let layer = window[kCGWindowLayer as String] as? Int,
+                let ownerPID = window[kCGWindowOwnerPID as String] as? pid_t,
+                let number = window[kCGWindowNumber as String] as? CGWindowID,
+                let boundsDictionary = window[kCGWindowBounds as String] as? NSDictionary,
+                let frame = CGRect(dictionaryRepresentation: boundsDictionary),
+                inventoryFilter.accepts(layer: layer, ownerPID: ownerPID, frame: frame)
+            else {
+                return nil
+            }
+            return WindowStackEntry(id: WindowID(raw: number), frame: frame)
+        }
+
+        return .success(windowStackVisibility(target: target, frontToBackWindows: entries))
     }
 
     private func windowMetadata(from window: [String: Any]) -> WindowMetadata? {
@@ -261,7 +294,7 @@ struct AXClient {
     }
 
     func focusWindow(_ window: WindowMetadata) -> Result<Void, AXClientError> {
-        guard NSRunningApplication(processIdentifier: window.pid)?.activate(options: []) == true else {
+        guard activateApplication(processID: window.pid) else {
             return .failure(.applicationActivateFailed(window.pid))
         }
 
@@ -273,17 +306,103 @@ struct AXClient {
             return .failure(error)
         }
 
-        let raiseError = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
-        guard raiseError == .success else {
-            return .failure(.performActionFailed(kAXRaiseAction, raiseError))
+        let application = AXUIElementCreateApplication(window.pid)
+        var lastRaiseError: AXError?
+        var lastFocusError: AXClientError?
+        var lastVisibilityDecision: WindowStackVisibilityDecision?
+        for _ in 0..<3 {
+            switch bringApplicationForward(application) {
+            case .success:
+                break
+            case .failure(let error):
+                lastFocusError = error
+            }
+
+            switch setFocused(element, in: application) {
+            case .success:
+                break
+            case .failure(let error):
+                lastFocusError = error
+            }
+
+            let raiseError = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+            guard raiseError == .success else {
+                lastRaiseError = raiseError
+                continue
+            }
+
+            RunLoop.current.run(until: Date().addingTimeInterval(0.04))
+            switch raisedVisibilityDecision(for: window.id) {
+            case .success(.visible):
+                return .success(())
+            case .success(let decision):
+                lastVisibilityDecision = decision
+            case .failure(let error):
+                return .failure(error)
+            }
+        }
+
+        if let lastRaiseError {
+            return .failure(.performActionFailed(kAXRaiseAction, lastRaiseError))
+        }
+        if case .blockedBy(let blocker) = lastVisibilityDecision {
+            return .failure(.windowNotRaised(window.id, blocker: blocker))
+        }
+        if case .targetMissing = lastVisibilityDecision {
+            return .failure(.windowNotRaised(window.id, blocker: nil))
+        }
+        if let lastFocusError {
+            return .failure(lastFocusError)
+        }
+        return .failure(.windowNotRaised(window.id, blocker: nil))
+    }
+
+    private func activateApplication(processID: pid_t) -> Bool {
+        if processID == getpid() {
+            NSApp.activate(ignoringOtherApps: true)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.04))
+            return true
+        }
+        return NSRunningApplication(processIdentifier: processID)?.activate(options: []) == true
+    }
+
+    private func bringApplicationForward(_ application: AXUIElement) -> Result<Void, AXClientError> {
+        setBool(true, attribute: kAXFrontmostAttribute, on: application)
+    }
+
+    private func setFocused(_ element: AXUIElement, in application: AXUIElement) -> Result<Void, AXClientError> {
+        var firstError: AXClientError?
+        var didSetFocus = false
+
+        let appFocusedWindowError = AXUIElementSetAttributeValue(
+            application,
+            kAXFocusedWindowAttribute as CFString,
+            element
+        )
+        if appFocusedWindowError == .success {
+            didSetFocus = true
+        } else {
+            firstError = .setAttributeFailed(kAXFocusedWindowAttribute, appFocusedWindowError)
         }
 
         switch setBool(true, attribute: kAXMainAttribute, on: element) {
         case .success:
-            return .success(())
-        case .failure:
-            return setBool(true, attribute: kAXFocusedAttribute, on: element)
+            didSetFocus = true
+        case .failure(let error):
+            firstError = firstError ?? error
         }
+
+        switch setBool(true, attribute: kAXFocusedAttribute, on: element) {
+        case .success:
+            didSetFocus = true
+        case .failure(let error):
+            firstError = firstError ?? error
+        }
+
+        if didSetFocus {
+            return .success(())
+        }
+        return .failure(firstError ?? .missingFocusedWindow)
     }
 
     private func focusedWindowElement() -> Result<AXUIElement, AXClientError> {

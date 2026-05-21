@@ -27,6 +27,7 @@ enum LiveCommandWorkflowVerification {
 
             var coverage = LiveCommandWorkflowCoverage.empty
             try verifyZeroWindowFailures(display: primaryDisplay, coverage: &coverage)
+            try verifyFocusCycleRaisesTargetWithAX(display: primaryDisplay, coverage: &coverage)
             for count in 1...6 {
                 try verifyWindowCountWorkflow(count: count, display: primaryDisplay, coverage: &coverage)
             }
@@ -705,6 +706,59 @@ enum LiveCommandWorkflowVerification {
         try raiseAndVerify(first.window.id, liveWindows: liveWindows, context: context)
     }
 
+    private static func verifyFocusCycleRaisesTargetWithAX(
+        display: DisplayInfo,
+        coverage: inout LiveCommandWorkflowCoverage
+    ) throws {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.finishLaunching()
+        NSApp.unhide(nil)
+
+        let windows = makeFocusableWindows(display: display)
+        defer {
+            windows.forEach { $0.window.orderOut(nil) }
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+        try requireVisible(windows, context: "focusCycle AX raise setup")
+
+        let world = workflowWorld(windows: windows, displays: [display], activeDisplay: display)
+        let focused = windows[0].id
+        let target: FocusPlanResult
+        switch focusCycleCandidatePlans(in: world, from: focused, direction: .next) {
+        case .success(let candidates):
+            guard let first = candidates.first else {
+                throw LiveCommandWorkflowFailure("focusCycle AX raise had no candidates")
+            }
+            target = first
+        case .failure(let error):
+            throw LiveCommandWorkflowFailure("focusCycle AX raise rejected: \(error.message)")
+        }
+
+        windows[0].window.orderFrontRegardless()
+        windows[1].window.orderFrontRegardless()
+        windows[2].window.orderFrontRegardless()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+        try requireLiveWindowNotFront(
+            target.window.id,
+            liveWindows: windows,
+            context: "focusCycle AX raise precondition"
+        )
+
+        switch AXClient(processID: -1).focusWindow(target.window) {
+        case .success:
+            break
+        case .failure(let error):
+            throw LiveCommandWorkflowFailure("focusCycle AX raise failed focusing \(target.window.id.description): \(error.description)")
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+        try requireFrontLiveWindow(
+            target.window.id,
+            liveWindows: windows,
+            context: "focusCycle AX raise"
+        )
+        coverage = coverage.recordingCommand("focusCycle")
+    }
+
     private static func verifyOverlayTracksAndClearsTiledBorders(
         world: World,
         liveWindows: [LiveCommandWorkflowWindow],
@@ -982,6 +1036,45 @@ enum LiveCommandWorkflowVerification {
         }
     }
 
+    private static func makeFocusableWindows(display: DisplayInfo) -> [LiveCommandWorkflowWindow] {
+        let baseFrame = centeredFrame(in: display.visibleFrame, width: 520, height: 360)
+        return (0..<3).map { index in
+            let frame = baseFrame.offsetBy(dx: CGFloat(index * 28), dy: CGFloat(index * 18))
+            let appKitFrame = appKitFrame(forAXFrame: frame, display: display)
+            let window = NSWindow(
+                contentRect: appKitFrame,
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "Narwhal live focus-cycle AX raise \(index + 1)"
+            window.backgroundColor = verificationColors[index % verificationColors.count]
+            window.isOpaque = true
+            window.hasShadow = false
+            window.level = .normal
+            window.collectionBehavior = [.ignoresCycle]
+            window.setFrame(appKitFrame, display: false)
+            window.makeKeyAndOrderFront(nil)
+
+            let id = WindowID(raw: CGWindowID(window.windowNumber))
+            return LiveCommandWorkflowWindow(
+                id: id,
+                displayID: display.id,
+                window: window,
+                metadata: WindowMetadata(
+                    id: id,
+                    bundleID: BundleID(raw: "dev.narwhal.live-command-workflow-verifier"),
+                    title: window.title,
+                    role: "AXWindow",
+                    pid: getpid(),
+                    frame: frame,
+                    isResizable: true,
+                    isMinimized: false
+                )
+            )
+        }
+    }
+
     private static func sampleFrame(in visibleFrame: CGRect, index: Int, count: Int) -> CGRect {
         let columns = min(3, max(1, count))
         let rows = Int(ceil(Double(max(1, count)) / Double(columns)))
@@ -996,6 +1089,15 @@ enum LiveCommandWorkflowVerification {
             y: visibleFrame.minY + CGFloat(row) * cellHeight + 18,
             width: min(width, max(120, visibleFrame.width - 36)),
             height: min(height, max(100, visibleFrame.height - 36))
+        )
+    }
+
+    private static func centeredFrame(in visibleFrame: CGRect, width: CGFloat, height: CGFloat) -> CGRect {
+        CGRect(
+            x: visibleFrame.midX - min(width, visibleFrame.width - 80) / 2,
+            y: visibleFrame.midY - min(height, visibleFrame.height - 80) / 2,
+            width: min(width, visibleFrame.width - 80),
+            height: min(height, visibleFrame.height - 80)
         )
     }
 
@@ -1057,6 +1159,46 @@ enum LiveCommandWorkflowVerification {
         guard frontLive == target.window.windowNumber else {
             throw LiveCommandWorkflowFailure("\(context) did not raise \(windowID.description) to front; front verifier window=\(frontLive)")
         }
+    }
+
+    private static func requireLiveWindowNotFront(
+        _ windowID: WindowID,
+        liveWindows: [LiveCommandWorkflowWindow],
+        context: String
+    ) throws {
+        let frontLive = try frontLiveWindowNumber(liveWindows: liveWindows, context: context)
+        guard let target = liveWindow(windowID, in: liveWindows) else {
+            throw LiveCommandWorkflowFailure("\(context) target \(windowID.description) has no live window")
+        }
+        guard frontLive != target.window.windowNumber else {
+            throw LiveCommandWorkflowFailure("\(context) target \(windowID.description) unexpectedly started as front window")
+        }
+    }
+
+    private static func requireFrontLiveWindow(
+        _ windowID: WindowID,
+        liveWindows: [LiveCommandWorkflowWindow],
+        context: String
+    ) throws {
+        let frontLive = try frontLiveWindowNumber(liveWindows: liveWindows, context: context)
+        guard let target = liveWindow(windowID, in: liveWindows) else {
+            throw LiveCommandWorkflowFailure("\(context) target \(windowID.description) has no live window")
+        }
+        guard frontLive == target.window.windowNumber else {
+            throw LiveCommandWorkflowFailure("\(context) did not raise \(windowID.description) to front; front verifier window=\(frontLive)")
+        }
+    }
+
+    private static func frontLiveWindowNumber(
+        liveWindows: [LiveCommandWorkflowWindow],
+        context: String
+    ) throws -> Int {
+        let ordered = frontToBackWindowNumbers()
+        let liveNumbers = Set(liveWindows.map { $0.window.windowNumber })
+        guard let frontLive = ordered.first(where: { liveNumbers.contains($0) }) else {
+            throw LiveCommandWorkflowFailure("\(context) could not find verifier windows in window-server order")
+        }
+        return frontLive
     }
 
     private static func requireVisible(

@@ -1207,7 +1207,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
              .windowsAttributeInvalid,
              .setAttributeFailed,
              .frameDidNotConverge,
-             .visibleWindowListUnavailable:
+             .visibleWindowListUnavailable,
+             .windowNotRaised:
             return false
         }
     }
