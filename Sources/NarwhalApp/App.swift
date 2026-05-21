@@ -118,6 +118,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print(result.message)
             Darwin.exit(result.passed ? 0 : 1)
         }
+        if ProcessInfo.processInfo.arguments.contains("--verify-display-change-focus-border") {
+            let result = DisplayChangeFocusBorderVerification.verifyDisplayChangePreservesVisibleFocusBorder()
+            print(result.message)
+            Darwin.exit(result.passed ? 0 : 1)
+        }
         if ProcessInfo.processInfo.arguments.contains("--verify-live-command-workflows") {
             let result = LiveCommandWorkflowVerification.verifyCommandWorkflows()
             print(result.message)
@@ -701,7 +706,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return {}
         }
         let service = DisplayObserverService(reporter: reporter) { [weak self] in
-            self?.clearBorderOverlays()
+            self?.setTiledBorders([])
             self?.scheduleCoalescedEnvironmentRefresh(.displayChanged)
         }
         service.start()

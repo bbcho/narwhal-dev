@@ -115,7 +115,9 @@ focus-border visibility, and window-server stacking. True multi-display movement
 is verified only when the machine has at least two usable displays; otherwise the
 live suite reports that segment as skipped. Multi-Space state isolation is covered
 by the Space focus recovery verifier with real AppKit windows and separate
-workspace model state.
+workspace model state. Display-change focus preservation is covered by a live
+verifier that clears tiled borders while AX focus is unavailable and then checks
+that the focus border remains visible above its target window.
 
 ## Coding Guidelines
 
