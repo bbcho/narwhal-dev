@@ -42,12 +42,13 @@ struct RestoreManagerTests {
             try RestoreManager(url: paths.file).load()
         }
 
-        guard case .decodeFailed(let message) = error else {
-            Issue.record("Expected decodeFailed, got \(error.description)")
-            throw RestoreManagerTestError.unexpectedError
+        switch error {
+        case .decodeFailed(let message):
+            #expect(message.isEmpty == false)
+            #expect(error.description == "restore JSON decode failed: \(message)")
+        default:
+            #expect(Bool(false), "Expected decodeFailed, got \(error.description)")
         }
-        #expect(message.isEmpty == false)
-        #expect(error.description == "restore JSON decode failed: \(message)")
     }
 
     @Test("Invalid stored world throws validation failure")
@@ -342,7 +343,6 @@ private func requireRestoreManagerError(
 ) throws -> RestoreManagerError {
     do {
         _ = try operation()
-        Issue.record("Expected RestoreManagerError")
         throw RestoreManagerTestError.unexpectedSuccess
     } catch let error as RestoreManagerError {
         return error
@@ -351,7 +351,6 @@ private func requireRestoreManagerError(
 
 private enum RestoreManagerTestError: Error {
     case unexpectedSuccess
-    case unexpectedError
 }
 
 private final class RecordedRestoreSaves {
