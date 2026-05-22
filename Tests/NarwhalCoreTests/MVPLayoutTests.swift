@@ -3615,14 +3615,14 @@ struct MVPLayoutTests {
         case .success(let world):
             return world
         case .failure(let error):
-            Issue.record("\(message): \(error.message)")
-            throw TestAbort()
+            #expect(Bool(false), "\(message): \(error.message)")
+            throw error
         }
     }
 
     private func requireSpace(_ world: World, _ spaceID: SpaceID, _ message: String) throws -> SpaceState {
         guard let space = world.spaces[spaceID] else {
-            Issue.record("\(message)")
+            #expect(Bool(false), "\(message)")
             throw TestAbort()
         }
         return space
@@ -3632,9 +3632,9 @@ struct MVPLayoutTests {
         switch result {
         case .success(let layout):
             return layout
-        case .failure:
-            Issue.record("\(message)")
-            throw TestAbort()
+        case .failure(let error):
+            #expect(Bool(false), "\(message): \(error)")
+            throw error
         }
     }
 
