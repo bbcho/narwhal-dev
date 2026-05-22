@@ -73,37 +73,31 @@ public func workspaceLayout(
 }
 
 public func tiledBorderTargets(of world: World) -> Result<[FocusBorderTarget], UnsatisfiableLayout> {
-    switch flattenedLayout(of: world) {
-    case .success(let layout):
-        let targets = layout.tiled
-            .compactMap { windowID, layoutFrame -> FocusBorderTarget? in
-                guard let window = world.windows[windowID] else { return nil }
-                let frame = window.frame.isFinitePositive ? window.frame : layoutFrame
-                return FocusBorderTarget(window: window, frame: frame)
-            }
-            .sorted { $0.windowID.raw < $1.windowID.raw }
-        return .success(targets)
-    case .failure(let unsatisfiable):
-        return .failure(unsatisfiable)
-    }
+    flattenedLayout(of: world)
+        .map { layout in
+            layout.tiled
+                .compactMap { windowID, layoutFrame -> FocusBorderTarget? in
+                    guard let window = world.windows[windowID] else { return nil }
+                    let frame = window.frame.isFinitePositive ? window.frame : layoutFrame
+                    return FocusBorderTarget(window: window, frame: frame)
+                }
+                .sorted { $0.windowID.raw < $1.windowID.raw }
+        }
 }
 
 public func pendingTileRuleApplications(in world: World) -> Result<[(WindowID, ZoneID)], UnsatisfiableLayout> {
-    switch flattenedLayout(of: world) {
-    case .success(let layout):
-        let activeWindowIDs = Set(layout.tiled.keys).union(layout.floatingZOrder)
-        let pending = world.pendingRules
-            .compactMap { windowID, action -> (WindowID, ZoneID)? in
-                guard activeWindowIDs.contains(windowID),
-                      case .tileToZone(let zoneID) = action
-                else { return nil }
-                return (windowID, zoneID)
-            }
-            .sorted { $0.0.raw < $1.0.raw }
-        return .success(pending)
-    case .failure(let unsatisfiable):
-        return .failure(unsatisfiable)
-    }
+    flattenedLayout(of: world)
+        .map { layout in
+            let activeWindowIDs = Set(layout.tiled.keys).union(layout.floatingZOrder)
+            return world.pendingRules
+                .compactMap { windowID, action -> (WindowID, ZoneID)? in
+                    guard activeWindowIDs.contains(windowID),
+                          case .tileToZone(let zoneID) = action
+                    else { return nil }
+                    return (windowID, zoneID)
+                }
+                .sorted { $0.0.raw < $1.0.raw }
+        }
 }
 
 public struct PendingTileRuleApplicationPlan: Equatable, Sendable {
@@ -119,33 +113,26 @@ public struct PendingTileRuleApplicationPlan: Equatable, Sendable {
 public func applyingPendingTileRules(
     in world: World
 ) -> Result<PendingTileRuleApplicationPlan?, CommandError> {
-    let pending: [(WindowID, ZoneID)]
-    switch pendingTileRuleApplications(in: world) {
-    case .success(let value):
-        pending = value
-    case .failure(let unsatisfiable):
-        return .failure(.layoutUnsatisfiable(unsatisfiable))
-    }
-    guard !pending.isEmpty else { return .success(nil) }
+    pendingTileRuleApplications(in: world)
+        .mapError(CommandError.layoutUnsatisfiable)
+        .flatMap { pending in
+            guard !pending.isEmpty else { return .success(nil) }
 
-    let result = pending.reduce(
-        Result<PendingTileRuleApplicationAccumulator, CommandError>.success(.initial(world))
-    ) { partial, application in
-        partial.flatMap { accumulator in
-            accumulator.applying(windowID: application.0, zoneID: application.1)
+            return pending.reduce(
+                Result<PendingTileRuleApplicationAccumulator, CommandError>.success(.initial(world))
+            ) { partial, application in
+                partial.flatMap { accumulator in
+                    accumulator.applying(windowID: application.0, zoneID: application.1)
+                }
+            }
+            .map { accumulator in
+                guard accumulator.world != world else { return nil }
+                return PendingTileRuleApplicationPlan(
+                    world: accumulator.world,
+                    focusedWindowID: accumulator.focusedWindowID
+                )
+            }
         }
-    }
-
-    switch result {
-    case .success(let accumulator):
-        guard accumulator.world != world else { return .success(nil) }
-        return .success(PendingTileRuleApplicationPlan(
-            world: accumulator.world,
-            focusedWindowID: accumulator.focusedWindowID
-        ))
-    case .failure(let error):
-        return .failure(error)
-    }
 }
 
 private func framesByWindow(in node: Node, frame: CGRect, innerGap: Double) -> [WindowID: CGRect] {
