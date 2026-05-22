@@ -9,6 +9,9 @@ import NarwhalCore
 @MainActor
 enum LiveSpaceSwitchFocusBorderVerification {
     static func verifyFocusBorderMovesAcrossRealSpaceSwitch() -> (passed: Bool, message: String) {
+        if isSystemLocked() {
+            return (true, "skipped: system locked / loginwindow frontmost")
+        }
         let spaceClient = SpaceClient()
         do {
             let displays = DisplayClient().currentDisplays()
@@ -27,7 +30,7 @@ enum LiveSpaceSwitchFocusBorderVerification {
             let originalSpace = try activeSpaceID(for: display, using: spaceClient, displays: displays)
             let axClient = AXClient(processID: -1)
             let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
-            NSApp.setActivationPolicy(.regular)
+            NSApp.setActivationPolicy(.accessory)
             NSApp.finishLaunching()
             NSApp.unhide(nil)
             let firstTitle = "Narwhal live Space switch focus A"

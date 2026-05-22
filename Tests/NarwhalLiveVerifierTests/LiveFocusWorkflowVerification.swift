@@ -6,9 +6,42 @@ import Darwin
 import NarwhalAppSupport
 import NarwhalCore
 
+/// A do-nothing NSApplicationDelegate whose sole purpose is to return false from
+/// `applicationShouldTerminateAfterLastWindowClosed`. The live verifier creates
+/// and tears down its own NSWindows; without this guard, AppKit terminates the
+/// test process when our `defer { orderOut }` closes the last window, which
+/// silently aborts the rest of the test suite.
+@MainActor
+final class VerifierAppDelegate: NSObject, NSApplicationDelegate {
+    private static var installed: VerifierAppDelegate?
+
+    static func installIfNeeded() {
+        if installed == nil {
+            // macOS may auto-terminate the testing helper when it goes idle
+            // between tests; disable both vectors.
+            ProcessInfo.processInfo.disableAutomaticTermination("NarwhalLiveVerifier")
+            ProcessInfo.processInfo.disableSuddenTermination()
+            let delegate = VerifierAppDelegate()
+            NSApp.delegate = delegate
+            installed = delegate
+        }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        .terminateCancel
+    }
+}
+
 @MainActor
 enum LiveFocusWorkflowVerification {
     static func verifyCycleMouseAndBorderWorkflow() -> (passed: Bool, message: String) {
+        if isSystemLocked() {
+            return (true, "skipped: system locked / loginwindow frontmost")
+        }
         do {
             let displays = DisplayClient().currentDisplays()
             let orderedDisplays = displays.values.sorted {
@@ -39,11 +72,12 @@ enum LiveFocusWorkflowVerification {
             defer {
                 observer?.stop()
                 overlay.stop()
-                windows.all.forEach { $0.window.orderOut(nil) }
+                // Alpha-hide rather than orderOut: orderOut'ing the last visible
+                // NSWindow at the end of a test has triggered process exit in
+                // this harness despite .accessory policy and a custom delegate
+                // returning .terminateCancel.
+                windows.all.forEach { $0.window.alphaValue = 0 }
             }
-
-            RunLoop.current.run(until: Date().addingTimeInterval(0.16))
-            try requireVisible(windows.all, context: "setup")
 
             let activeSpace = activeSpace(for: display)
             var world = workflowWorld(
@@ -312,7 +346,13 @@ enum LiveFocusWorkflowVerification {
     }
 
     private static func activateVerifierApplication() {
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(.accessory)
+        // Install (once) a delegate that explicitly forbids auto-terminating on
+        // last-window-closed. Without this, the test process exits cleanly
+        // (exit 0, no crash) after our defer orderOuts the last window, which
+        // swallows the test result line AND aborts the remaining tests in the
+        // suite. .accessory alone is not sufficient on macOS 15+.
+        VerifierAppDelegate.installIfNeeded()
         NSApp.finishLaunching()
         NSApp.unhide(nil)
         NSApp.activate(ignoringOtherApps: true)

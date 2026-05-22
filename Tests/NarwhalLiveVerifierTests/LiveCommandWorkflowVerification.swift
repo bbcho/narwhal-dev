@@ -9,6 +9,9 @@ import NarwhalCore
 @MainActor
 enum LiveCommandWorkflowVerification {
     static func verifyCommandWorkflows() -> (passed: Bool, message: String) {
+        if isSystemLocked() {
+            return (true, "skipped: system locked / loginwindow frontmost")
+        }
         do {
             let displays = DisplayClient().currentDisplays()
             let orderedDisplays = displays.values.sorted {
@@ -712,7 +715,10 @@ enum LiveCommandWorkflowVerification {
         display: DisplayInfo,
         coverage: inout LiveCommandWorkflowCoverage
     ) throws {
-        NSApp.setActivationPolicy(.regular)
+        // See LiveFocusWorkflowVerification.activateVerifierApplication for why
+        // we use .accessory: prevents AppKit auto-terminate on the deferred
+        // window cleanup at end of test.
+        NSApp.setActivationPolicy(.accessory)
         NSApp.finishLaunching()
         NSApp.unhide(nil)
 

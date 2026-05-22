@@ -111,6 +111,80 @@ final class Overlay {
         for target in targets.sorted(by: { $0.windowID.raw < $1.windowID.raw }) {
             showTiledBorder(target)
         }
+        // Cross-process window ordering is unreliable on macOS 15+ for
+        // ad-hoc-signed apps (SLSOrderWindow returns success but no-ops). To
+        // guarantee borders never appear above unrelated windows, hide any
+        // border whose tile is currently obscured by a foreign window above it.
+        enforceTiledBorderObscurationVisibility(targets: targets)
+    }
+
+    /// After borders are rendered and (best-effort) ordered, walk the live CG
+    /// window list and hide any tile border whose target tile is currently
+    /// covered by some foreign (non-tile) window above it. This is the only
+    /// reliable way to keep tile borders from drawing over unrelated windows
+    /// when the WindowServer refuses to honor our re-order requests.
+    private func enforceTiledBorderObscurationVisibility(targets: [FocusBorderTarget]) {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else { return }
+
+        let ourPID = getpid()
+        let tileIDs = Set(targets.map(\.windowID.raw))
+
+        // Index windows by their position in front-to-back order so we can ask
+        // "is this CGWindowID above another in z-order?"
+        struct Entry {
+            let cgID: CGWindowID
+            let pid: pid_t
+            let frame: CGRect
+            let isOwn: Bool
+        }
+        var entries: [Entry] = []
+        for w in windows {
+            guard let cgID = w[kCGWindowNumber as String] as? CGWindowID,
+                  let pid = w[kCGWindowOwnerPID as String] as? pid_t,
+                  let layer = w[kCGWindowLayer as String] as? Int,
+                  layer == NSWindow.Level.normal.rawValue,
+                  let boundsDict = w[kCGWindowBounds as String] as? NSDictionary,
+                  let cgFrame = CGRect(dictionaryRepresentation: boundsDict)
+            else { continue }
+            entries.append(Entry(
+                cgID: cgID,
+                pid: pid,
+                frame: appKitFrame(forAXFrame: cgFrame),
+                isOwn: pid == ourPID
+            ))
+        }
+
+        for target in targets {
+            guard let borderWindow = tiledBorderWindows[target.windowID] else { continue }
+            let tileFrame = appKitFrame(forAXFrame: target.frame)
+            // Find the target tile's index in front-to-back order.
+            guard let tileIndex = entries.firstIndex(where: { $0.cgID == target.windowID.raw }) else {
+                // Tile isn't on-screen; hide its border just in case.
+                if borderWindow.isVisible { borderWindow.orderOut(nil) }
+                continue
+            }
+            // Walk entries above the tile (lower index = further front). If any
+            // foreign, non-tile window overlaps the tile frame, the border is
+            // obscured.
+            var obscured = false
+            for above in entries[0..<tileIndex] {
+                if above.isOwn { continue }
+                if tileIDs.contains(above.cgID) { continue }
+                if above.frame.intersects(tileFrame) {
+                    obscured = true
+                    break
+                }
+            }
+            // Use alphaValue, not orderOut: orderOut releases the WindowServer
+            // window number, and a subsequent orderFront creates a new one at
+            // the top of the level — defeating the hide and leaving an orphan
+            // border in the CG window list. alphaValue=0 keeps the window in
+            // place, just transparent.
+            borderWindow.alphaValue = obscured ? 0.0 : 1.0
+        }
     }
 
 #if NARWHAL_ENABLE_VERIFIERS
