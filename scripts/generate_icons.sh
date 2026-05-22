@@ -1,90 +1,82 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Regenerates Narwhal's app and menubar icons from Packaging/Assets/AppIconSource.png.
+#
+# Source: AppIconSource.png must be a 1024x1024 RGBA PNG with transparency.
+# Outputs:
+#   - NarwhalIcon.icns           (Dock / Finder / Applications)
+#   - NarwhalIcon.iconset/       (intermediate per-size PNGs)
+#   - NarwhalToolbarIcon.png     (menubar @1x, 18x18, black silhouette template)
+#   - NarwhalToolbarIcon@2x.png  (menubar @2x, 36x36, black silhouette template)
+#
+# The menubar icons are extracted as alpha silhouettes; macOS tints them based on
+# menu bar theme. For a hand-tuned menubar glyph, replace these PNGs directly.
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 assets_dir="$repo_root/Packaging/Assets"
+source_png="$assets_dir/AppIconSource.png"
 iconset="$assets_dir/NarwhalIcon.iconset"
-app_svg="$assets_dir/NarwhalAppIcon.svg"
-toolbar_svg="$assets_dir/NarwhalToolbarIcon.svg"
 
 command -v magick >/dev/null 2>&1 || {
-  echo "ImageMagick is required to render SVG icons. Install it with: brew install imagemagick" >&2
+  echo "ImageMagick is required. Install: brew install imagemagick" >&2
   exit 1
 }
 command -v iconutil >/dev/null 2>&1 || {
-  echo "iconutil is required to inspect macOS app icons." >&2
+  echo "iconutil is required (ships with Xcode Command Line Tools)." >&2
   exit 1
 }
+
+if [ ! -f "$source_png" ]; then
+  echo "missing $source_png" >&2
+  echo "Drop a 1024x1024 RGBA PNG at that path and rerun." >&2
+  exit 1
+fi
 
 rm -rf "$iconset"
 mkdir -p "$iconset"
 
-render_png() {
-  local size="$1"
-  local output="$2"
-  magick -background none "$app_svg" \
-    -resize "${size}x${size}" \
-    -alpha on \
-    -type TrueColorAlpha \
-    -define png:color-type=6 \
-    "PNG32:$output"
+render_app() {
+  local size="$1" output="$2"
+  magick "$source_png" -resize "${size}x${size}" \
+    -alpha on -type TrueColorAlpha -define png:color-type=6 "PNG32:$output"
 }
 
-render_png 16 "$iconset/icon_16x16.png"
-render_png 32 "$iconset/icon_16x16@2x.png"
-render_png 32 "$iconset/icon_32x32.png"
-render_png 64 "$iconset/icon_32x32@2x.png"
-render_png 128 "$iconset/icon_128x128.png"
-render_png 256 "$iconset/icon_128x128@2x.png"
-render_png 256 "$iconset/icon_256x256.png"
-render_png 512 "$iconset/icon_256x256@2x.png"
-render_png 512 "$iconset/icon_512x512.png"
-render_png 1024 "$iconset/icon_512x512@2x.png"
+render_app 16   "$iconset/icon_16x16.png"
+render_app 32   "$iconset/icon_16x16@2x.png"
+render_app 32   "$iconset/icon_32x32.png"
+render_app 64   "$iconset/icon_32x32@2x.png"
+render_app 128  "$iconset/icon_128x128.png"
+render_app 256  "$iconset/icon_128x128@2x.png"
+render_app 256  "$iconset/icon_256x256.png"
+render_app 512  "$iconset/icon_256x256@2x.png"
+render_app 512  "$iconset/icon_512x512.png"
+render_app 1024 "$iconset/icon_512x512@2x.png"
 
-python3 - "$assets_dir/NarwhalIcon.icns" \
-  icp4 "$iconset/icon_16x16.png" \
-  icp5 "$iconset/icon_32x32.png" \
-  icp6 "$iconset/icon_32x32@2x.png" \
-  ic07 "$iconset/icon_128x128.png" \
-  ic08 "$iconset/icon_256x256.png" \
-  ic09 "$iconset/icon_512x512.png" \
-  ic10 "$iconset/icon_512x512@2x.png" <<'PY'
-import struct
-import sys
+iconutil -c icns "$iconset" -o "$assets_dir/NarwhalIcon.icns"
 
-out_path = sys.argv[1]
-pairs = sys.argv[2:]
-if len(pairs) % 2 != 0:
-    raise SystemExit("icns chunk arguments must be type/path pairs")
+# Menubar icons. Generates black silhouette (NarwhalToolbarIcon{,@2x}.png) for
+# light menu bars and an inverted white silhouette (NarwhalToolbarIconDark{,@2x}.png)
+# for dark menu bars. Menubar.swift swaps based on effectiveAppearance because
+# isTemplate on NSImage(contentsOf:)-loaded PNGs is unreliable.
+toolbar_source="$assets_dir/ToolbarIconSource.png"
+if [ ! -f "$toolbar_source" ]; then
+  echo "missing $toolbar_source (black-on-transparent narwhal source)" >&2
+  exit 1
+fi
 
-chunks = []
-for chunk_type, path in zip(pairs[0::2], pairs[1::2]):
-    if len(chunk_type) != 4:
-        raise SystemExit(f"invalid icns chunk type: {chunk_type}")
-    with open(path, "rb") as handle:
-        data = handle.read()
-    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise SystemExit(f"{path} is not a PNG")
-    chunks.append(chunk_type.encode("ascii") + struct.pack(">I", len(data) + 8) + data)
+# Black silhouette → light-mode menubar.
+magick "$toolbar_source" -resize 36x36 \
+  -define png:color-type=6 "PNG32:$assets_dir/NarwhalToolbarIcon@2x.png"
+magick "$toolbar_source" -resize 18x18 \
+  -define png:color-type=6 "PNG32:$assets_dir/NarwhalToolbarIcon.png"
 
-payload = b"".join(chunks)
-with open(out_path, "wb") as handle:
-    handle.write(b"icns" + struct.pack(">I", len(payload) + 8) + payload)
-PY
-
-magick -background none "$toolbar_svg" \
-  -resize 18x18 \
-  -alpha on \
-  -type TrueColorAlpha \
-  -define png:color-type=6 \
-  "PNG32:$assets_dir/NarwhalToolbarIcon.png"
-magick -background none "$toolbar_svg" \
-  -resize 36x36 \
-  -alpha on \
-  -type TrueColorAlpha \
-  -define png:color-type=6 \
-  "PNG32:$assets_dir/NarwhalToolbarIcon@2x.png"
+# White silhouette → dark-mode menubar. Invert RGB only; preserve alpha.
+magick "$toolbar_source" -channel RGB -negate +channel -resize 36x36 \
+  -define png:color-type=6 "PNG32:$assets_dir/NarwhalToolbarIconDark@2x.png"
+magick "$toolbar_source" -channel RGB -negate +channel -resize 18x18 \
+  -define png:color-type=6 "PNG32:$assets_dir/NarwhalToolbarIconDark.png"
 
 echo "Generated $assets_dir/NarwhalIcon.icns"
 echo "Generated $assets_dir/NarwhalToolbarIcon.png"

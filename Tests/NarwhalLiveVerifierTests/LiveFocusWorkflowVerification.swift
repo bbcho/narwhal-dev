@@ -173,6 +173,34 @@ enum LiveFocusWorkflowVerification {
                 context: "mouse-focused floating over tiled border"
             )
 
+            // Regression: with focus on a *different* floating window (not the one over
+            // the tile), the unfocused floating window must still cover the tile border.
+            // See Overlay.orderTiledBorderWindow.
+            windows.floatA.window.orderFrontRegardless()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            windows.floatB.window.orderFrontRegardless()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            try focusVerifierWindow(
+                windows.floatB,
+                using: axClient,
+                context: "regression: focus floatB so floatA is unfocused over tile"
+            )
+            try waitFor(
+                timeout: 2.0,
+                description: "regression focus observer did not move focus border to \(windows.floatB.id.description)"
+            ) {
+                observer?.pollFocusedWindowNow()
+                return observedFocuses.last == windows.floatB.id
+                    && overlay.debugFocusBorderWindowID() == windows.floatB.id
+            }
+            try requireFloatingWindowCoversTiledBorder(
+                overlay: overlay,
+                floating: windows.floatA,
+                tiledID: tiledBorderID,
+                display: display,
+                context: "regression: unfocused floating must stay above tile border"
+            )
+
             return (
                 true,
                 [
@@ -181,7 +209,8 @@ enum LiveFocusWorkflowVerification {
                     "cycle=\(windows.floatA.id.description)->\(windows.floatB.id.description)",
                     "mouseFocus=\(windows.floatA.id.description)",
                     "focusBorderVisible=true",
-                    "tiledBorderBelowFloating=true"
+                    "tiledBorderBelowFloating=true",
+                    "unfocusedFloatStaysAboveBorder=true"
                 ].joined(separator: " ")
             )
         } catch let error as LiveFocusWorkflowFailure {

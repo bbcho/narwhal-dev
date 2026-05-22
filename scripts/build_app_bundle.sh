@@ -116,6 +116,8 @@ cp "$repo_root/DefaultConfig/init.lua" "$resources/DefaultConfig/init.lua"
 cp "$repo_root/Packaging/Assets/NarwhalIcon.icns" "$resources/NarwhalIcon.icns"
 cp "$repo_root/Packaging/Assets/NarwhalToolbarIcon.png" "$resources/NarwhalToolbarIcon.png"
 cp "$repo_root/Packaging/Assets/NarwhalToolbarIcon@2x.png" "$resources/NarwhalToolbarIcon@2x.png"
+cp "$repo_root/Packaging/Assets/NarwhalToolbarIconDark.png" "$resources/NarwhalToolbarIconDark.png"
+cp "$repo_root/Packaging/Assets/NarwhalToolbarIconDark@2x.png" "$resources/NarwhalToolbarIconDark@2x.png"
 cp "$lua_dylib" "$frameworks/liblua.dylib"
 chmod 755 "$app_executable" "$ctl_executable" "$frameworks/liblua.dylib"
 

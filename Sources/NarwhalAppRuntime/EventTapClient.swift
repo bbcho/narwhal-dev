@@ -3,6 +3,7 @@ import Foundation
 import NarwhalAppSupport
 import NarwhalCore
 
+@MainActor
 final class EventTapClient {
     private var modifier: ModifierSet
     private let reporter: StartupReporter
@@ -25,10 +26,6 @@ final class EventTapClient {
         self.dragChanged = dragChanged
         self.dragEnded = dragEnded
         self.drop = drop
-    }
-
-    deinit {
-        stop()
     }
 
     func start() throws {
@@ -76,6 +73,7 @@ final class EventTapClient {
     }
 
     private func handle(type: CGEventType, location: CGPoint, flagsRaw: UInt64) {
+        dispatchPrecondition(condition: .onQueue(.main))
         switch type {
         case .tapDisabledByTimeout:
             if let eventTap {
@@ -120,10 +118,13 @@ final class EventTapClient {
         }
     }
 
+    // Safe iff the run loop source is on the main loop (see start() / CFRunLoopGetMain).
     private static let eventTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
         guard let userInfo else { return Unmanaged.passUnretained(event) }
         let client = Unmanaged<EventTapClient>.fromOpaque(userInfo).takeUnretainedValue()
-        client.handle(type: type, location: event.location, flagsRaw: event.flags.rawValue)
+        MainActor.assumeIsolated {
+            client.handle(type: type, location: event.location, flagsRaw: event.flags.rawValue)
+        }
         return Unmanaged.passUnretained(event)
     }
 }

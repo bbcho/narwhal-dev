@@ -1,6 +1,50 @@
 import AppKit
+import Darwin
 import NarwhalAppSupport
 import NarwhalCore
+
+// KNOWN LIMITATION (macOS 15+, unsigned/ad-hoc apps): the WindowServer silently
+// refuses cross-process window ordering for apps without Developer ID + specific
+// entitlements. `SLSOrderWindow` / `CGSOrderWindow` return success but do not
+// actually move our window across the boundary of another app's window. The
+// calls below are best-effort — they work when the foreign window is at a
+// compatible level, but in the general case tile borders may still appear above
+// unfocused floating windows that overlap the tiled window. This is the same
+// constraint that requires yabai/AeroSpace to disable SIP. Documented in README
+// under "Known limitations". For the symptom-free fix you'd need to (a) sign with
+// Developer ID and request entitlements, or (b) implement the
+// hide-when-obscured strategy in `renderTiledBorders`.
+private typealias CGSConnectionIDFunc = @convention(c) () -> Int32
+private typealias CGSOrderWindowFunc = @convention(c) (Int32, UInt32, Int32, UInt32) -> Int32
+
+private let overlayCGSHandle = dlopen(
+    "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",
+    RTLD_LAZY
+)
+
+private func loadOverlayCGS<T>(_ name: String, as type: T.Type) -> T? {
+    if let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), name) {
+        return unsafeBitCast(symbol, to: type)
+    }
+    if let overlayCGSHandle, let symbol = dlsym(overlayCGSHandle, name) {
+        return unsafeBitCast(symbol, to: type)
+    }
+    return nil
+}
+
+// SkyLight renamed CGS* to SLS* in macOS 10.15+. The legacy CGS* symbols are
+// kept as stubs in some macOS versions and may silently no-op for foreign
+// windows, so prefer SLS* first.
+private let cgsMainConnectionID: CGSConnectionIDFunc? =
+    loadOverlayCGS("SLSMainConnectionID", as: CGSConnectionIDFunc.self)
+    ?? loadOverlayCGS("CGSMainConnectionID", as: CGSConnectionIDFunc.self)
+    ?? loadOverlayCGS("_CGSDefaultConnection", as: CGSConnectionIDFunc.self)
+private let cgsOrderWindow: CGSOrderWindowFunc? =
+    loadOverlayCGS("SLSOrderWindow", as: CGSOrderWindowFunc.self)
+    ?? loadOverlayCGS("CGSOrderWindow", as: CGSOrderWindowFunc.self)
+
+private let kCGSOrderAbove: Int32 = 1
+private let kCGSOrderBelow: Int32 = -1
 
 enum OverlayTone {
     case info
@@ -332,14 +376,91 @@ final class Overlay {
 
     private func orderTiledBorderWindow(_ window: NSWindow, above targetWindowID: WindowID) {
         window.level = windowLevelMatchingTarget(targetWindowID)
+        // Materialize the window (`order(.above, relativeTo:)` assigns a windowNumber
+        // even when relativeTo is a foreign window — AppKit falls back to "front of
+        // level group" in that case).
         window.order(.above, relativeTo: Int(targetWindowID.raw))
+        // Best-effort: ask the WindowServer to position the border above its target
+        // tile and below any overlapping floating window above the tile. On macOS
+        // 15+ for ad-hoc-signed apps these calls return success but no-op; see the
+        // top-of-file note. Borders may still appear over unfocused floating
+        // windows in that case.
+        let connectionID = cgsMainConnectionID?() ?? 0
+        if window.windowNumber > 0, connectionID != 0, let orderWindow = cgsOrderWindow {
+            _ = orderWindow(
+                connectionID,
+                UInt32(window.windowNumber),
+                kCGSOrderAbove,
+                targetWindowID.raw
+            )
+            pinTiledBorderBelowOverlappingForeignWindows(
+                window,
+                targetWindowID: targetWindowID,
+                connectionID: connectionID,
+                orderWindow: orderWindow
+            )
+        }
+    }
+
+    /// Pins the given border window below the lowest foreign window that is
+    /// above `targetWindowID` in CG front-to-back order and overlaps the border
+    /// frame. No-op if no such window exists.
+    private func pinTiledBorderBelowOverlappingForeignWindows(
+        _ borderWindow: NSWindow,
+        targetWindowID: WindowID,
+        connectionID: Int32,
+        orderWindow: CGSOrderWindowFunc
+    ) {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else { return }
+
+        let ourPID = getpid()
+        let borderFrame = borderWindow.frame
+        var lowestAboveTarget: CGWindowID?
+
+        for entry in windows {
+            guard let cgID = entry[kCGWindowNumber as String] as? CGWindowID else { continue }
+            // CG list is front-to-back; stop once we hit (or pass) the target tile.
+            if cgID == targetWindowID.raw { break }
+            // Skip our own windows (border + focus border + HUD).
+            if let pid = entry[kCGWindowOwnerPID as String] as? pid_t, pid == ourPID { continue }
+            // Only consider standard windows in the normal level group.
+            if let layer = entry[kCGWindowLayer as String] as? Int, layer != NSWindow.Level.normal.rawValue { continue }
+            guard let boundsDict = entry[kCGWindowBounds as String] as? NSDictionary,
+                  let cgFrame = CGRect(dictionaryRepresentation: boundsDict)
+            else { continue }
+            let appKitOverlapFrame = appKitFrame(forAXFrame: cgFrame)
+            if appKitOverlapFrame.intersects(borderFrame) {
+                lowestAboveTarget = cgID
+            }
+        }
+
+        guard let pinBelow = lowestAboveTarget else { return }
+        _ = orderWindow(
+            connectionID,
+            UInt32(borderWindow.windowNumber),
+            kCGSOrderBelow,
+            pinBelow
+        )
     }
 
     private func orderUnfocusedTiledBordersBelowFocusedWindow(_ target: FocusBorderTarget) {
         let focusedFrame = appKitFrame(forAXFrame: target.frame)
+        let connectionID = cgsMainConnectionID?() ?? 0
         for (windowID, tiledWindow) in tiledBorderWindows where windowID != target.windowID {
             guard tiledWindow.frame.intersects(focusedFrame) else { continue }
+            // Best-effort cross-process reorder; see top-of-file note re: macOS 15+.
             tiledWindow.order(.below, relativeTo: Int(target.windowID.raw))
+            if tiledWindow.windowNumber > 0, connectionID != 0, let orderWindow = cgsOrderWindow {
+                _ = orderWindow(
+                    connectionID,
+                    UInt32(tiledWindow.windowNumber),
+                    kCGSOrderBelow,
+                    target.windowID.raw
+                )
+            }
         }
     }
 

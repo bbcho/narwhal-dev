@@ -36,7 +36,9 @@ final class Menubar {
     private var reload: (() -> Void)?
     private var reset: (() -> Void)?
     private var quit: (() -> Void)?
-    private let statusIcon = NarwhalIconResources.statusItemIcon()
+    private let lightIcon = NarwhalIconResources.statusItemIcon(variant: .light)
+    private let darkIcon = NarwhalIconResources.statusItemIcon(variant: .dark)
+    private var appearanceObservation: NSKeyValueObservation?
 
     func start(reload: @escaping () -> Void, reset: @escaping () -> Void, quit: @escaping () -> Void) {
         guard statusItem == nil else { return }
@@ -128,9 +130,22 @@ final class Menubar {
     private func configureStatusButton(_ button: NSStatusBarButton?) {
         guard let button else { return }
         button.title = ""
-        button.image = statusIcon
         button.imagePosition = .imageOnly
         button.toolTip = "Narwhal"
+        refreshButtonImage(button)
+        // macOS doesn't reliably honor isTemplate on NSImage(contentsOf:)-loaded
+        // images, so swap explicit light/dark PNGs based on effectiveAppearance.
+        appearanceObservation = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor in
+                guard let self, let button = self.statusItem?.button else { return }
+                self.refreshButtonImage(button)
+            }
+        }
+    }
+
+    private func refreshButtonImage(_ button: NSStatusBarButton) {
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        button.image = isDark ? (darkIcon ?? lightIcon) : (lightIcon ?? darkIcon)
     }
 
     private var needsAttention: Bool {
@@ -196,18 +211,23 @@ struct MenubarStatusButtonSnapshot {
 #endif
 
 enum NarwhalIconResources {
-    static let statusItemImageName = "NarwhalToolbarIcon"
+    enum Variant {
+        case light  // black silhouette on light menubars
+        case dark   // white silhouette on dark menubars
+
+        var resourceName: String {
+            switch self {
+            case .light: return "NarwhalToolbarIcon"
+            case .dark: return "NarwhalToolbarIconDark"
+            }
+        }
+    }
 
     @MainActor
-    static func statusItemIcon() -> NSImage? {
-        if let image = NSImage(named: NSImage.Name(statusItemImageName)) {
-            image.setName(NSImage.Name(statusItemImageName))
-            image.isTemplate = true
-            return image
-        }
-        if let image = imageFromBundleResource(statusItemImageName) ?? imageFromRepositoryAsset(statusItemImageName) {
-            image.setName(NSImage.Name(statusItemImageName))
-            image.isTemplate = true
+    static func statusItemIcon(variant: Variant) -> NSImage? {
+        let name = variant.resourceName
+        if let image = imageFromBundleResource(name) ?? imageFromRepositoryAsset(name) {
+            image.setName(NSImage.Name(name))
             return image
         }
         return nil

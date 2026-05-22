@@ -15,11 +15,12 @@ enum MenubarIconVerification {
         guard snapshot.hasImage else {
             return (false, "menubar status item has no image")
         }
-        guard snapshot.imageName == NarwhalIconResources.statusItemImageName else {
-            return (false, "menubar status item image is \(snapshot.imageName ?? "nil")")
-        }
-        guard snapshot.isTemplate else {
-            return (false, "menubar status item image is not a template image")
+        let expectedNames: Set<String> = [
+            NarwhalIconResources.Variant.light.resourceName,
+            NarwhalIconResources.Variant.dark.resourceName
+        ]
+        guard let name = snapshot.imageName, expectedNames.contains(name) else {
+            return (false, "menubar status item image is \(snapshot.imageName ?? "nil") (expected one of \(expectedNames))")
         }
         guard snapshot.title.isEmpty, snapshot.imagePosition == NSControl.ImagePosition.imageOnly else {
             return (

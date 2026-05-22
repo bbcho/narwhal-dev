@@ -117,3 +117,26 @@ Config, state, logs, and IPC:
 - Restore state: `~/Library/Application Support/narwhal/state.json`.
 - Log file: `/tmp/narwhal.log`.
 - IPC socket: `/tmp/narwhal-$(id -u).sock`.
+
+## Known Limitations
+
+- **Tile borders may appear above unfocused floating windows.** macOS 15+
+  silently blocks cross-process window-ordering APIs (`SLSOrderWindow`,
+  `CGSOrderWindow`) for apps without a Developer ID and the right
+  entitlements. Narwhal's tile-border windows therefore sometimes draw on
+  top of unfocused windows that visually overlap a tile, even though the
+  intent is to keep them strictly between the tile and any obscuring
+  window. The same constraint is why tools like yabai require disabling
+  SIP. Workarounds: (a) sign Narwhal with a Developer ID + the relevant
+  entitlements, or (b) accept the cosmetic glitch.
+- **Some apps cannot be focused via `kAXRaiseAction`.** A small set of
+  system apps (notably System Settings) refuses the AX raise action.
+  Narwhal detects this on first failure and excludes the offending window
+  from focus-cycle candidates for the rest of the session. The window
+  remains tileable and usable; it just won't appear in the `control-
+  option-I/U` rotation.
+- **Accessibility trust is revoked on every rebuild.** Each `swift build`
+  produces a new ad-hoc signature, which macOS treats as a new identity.
+  After `scripts/install_local.sh` you may need to toggle Narwhal off and
+  back on in System Settings → Privacy & Security → Accessibility. The
+  installed binary keeps trust across reboots once granted.

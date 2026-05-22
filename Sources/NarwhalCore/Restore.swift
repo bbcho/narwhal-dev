@@ -196,7 +196,42 @@ public func validateStoredWorld(_ stored: StoredWorld) -> Result<StoredWorld, Re
         }
     }
 
+    for workspace in stored.workspaces ?? [] {
+        for layout in workspace.space.layouts {
+            if let error = validateStoredNode(layout.tree) {
+                return .failure(error)
+            }
+        }
+    }
+    if let activeSpace = stored.activeSpace {
+        for layout in activeSpace.layouts {
+            if let error = validateStoredNode(layout.tree) {
+                return .failure(error)
+            }
+        }
+    }
+
     return .success(stored)
+}
+
+private func validateStoredNode(_ node: StoredNode) -> RestoreError? {
+    switch node {
+    case .void, .leaf:
+        return nil
+    case .split(let split):
+        guard split.cells.count >= 2 else {
+            return .invalidStoredWorld("StoredSplit needs >= 2 cells")
+        }
+        for cell in split.cells {
+            guard cell.weight.isFinite, cell.weight > 0 else {
+                return .invalidStoredWorld("StoredCell weight must be finite and > 0")
+            }
+            if let error = validateStoredNode(cell.node) {
+                return error
+            }
+        }
+        return nil
+    }
 }
 
 public func storedWorld(from world: World) -> StoredWorld {
@@ -326,7 +361,7 @@ public func restoreWorld(
         windowSpace: windowSpace,
         observedVisibleWindows: [:],
         windowConstraints: [:],
-        pendingRules: restoredPendingRules(stored.pendingRules, matcher: projection.matcher),
+        pendingRules: restoredPendingRules(validatedStored.pendingRules, matcher: projection.matcher),
         config: config
     )
 }
@@ -400,11 +435,7 @@ private struct RestoreMatcher {
                 }
                 return lhs.1 < rhs.1
             }
-        guard let first = ranked.first else { return nil }
-        if ranked.count > 1 && ranked[0].1 == ranked[1].1 {
-            return nil
-        }
-        return first.0
+        return ranked.first?.0
     }
 }
 
@@ -795,7 +826,7 @@ private func makeStoredCell(weight: Double, node: StoredNode) -> StoredCell {
     case .success(let cell):
         return cell
     case .failure(let error):
-        preconditionFailure("Invalid StoredCell in restore projection: \(error)")
+        preconditionFailure("Unreachable — validateStoredWorld must run before restoreNode (\(error))")
     }
 }
 
@@ -804,7 +835,7 @@ private func makeStoredSplit(axis: Axis, cells: [StoredCell]) -> StoredSplit {
     case .success(let split):
         return split
     case .failure(let error):
-        preconditionFailure("Invalid StoredSplit in restore projection: \(error)")
+        preconditionFailure("Unreachable — validateStoredWorld must run before restoreNode (\(error))")
     }
 }
 
@@ -813,7 +844,7 @@ private func makeCell(weight: Double, node: Node) -> Cell {
     case .success(let cell):
         return cell
     case .failure(let error):
-        preconditionFailure("Invalid Cell in restore remap: \(error)")
+        preconditionFailure("Unreachable — validateStoredWorld must run before restoreNode (\(error))")
     }
 }
 
@@ -822,7 +853,7 @@ private func makeSplit(axis: Axis, cells: [Cell]) -> Split {
     case .success(let split):
         return split
     case .failure(let error):
-        preconditionFailure("Invalid Split in restore remap: \(error)")
+        preconditionFailure("Unreachable — validateStoredWorld must run before restoreNode (\(error))")
     }
 }
 

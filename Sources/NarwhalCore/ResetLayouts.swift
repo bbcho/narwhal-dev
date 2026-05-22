@@ -50,7 +50,7 @@ public func maximizeResetLayout(windowID: WindowID, in world: World) -> Result<L
         return .failure(.activeSpaceUnavailable)
     }
     guard let displayID = world.windowDisplay[windowID] else {
-        return .failure(.displayNotFound(DisplayID(raw: 0)))
+        return .failure(.displayUnknownForWindow(windowID))
     }
     guard let display = world.displays[displayID] else {
         return .failure(.displayNotFound(displayID))

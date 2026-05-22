@@ -98,7 +98,7 @@ private func applyEject(_ windowID: WindowID, to world: World) -> Result<World, 
         ?? floatingDisplay(containing: windowID, in: space)
         ?? world.windowDisplay[windowID]
     guard let displayID else {
-        return .failure(.displayNotFound(DisplayID(raw: 0)))
+        return .failure(.displayUnknownForWindow(windowID))
     }
     guard world.displays[displayID] != nil else {
         return .failure(.displayNotFound(displayID))
@@ -159,7 +159,7 @@ private func applyMoveToNextDisplay(_ windowID: WindowID, to world: World) -> Re
         currentDisplayID = world.windowDisplay[windowID]
     }
     guard let currentDisplayID else {
-        return .failure(.displayNotFound(DisplayID(raw: 0)))
+        return .failure(.displayUnknownForWindow(windowID))
     }
     guard let targetDisplayID = nextDisplayID(after: currentDisplayID, in: world.displays) else {
         return .failure(.displayNotFound(currentDisplayID))
@@ -244,7 +244,10 @@ private func applyFocusCycle(_ direction: FocusCycleDirection, to world: World) 
         from: focusedWindowID,
         direction: direction
     ) else {
-        return .failure(.windowNotFound(focusedWindowID ?? WindowID(raw: 0)))
+        guard let focusedWindowID else {
+            return .failure(.noFocusedWindow)
+        }
+        return .failure(.windowNotFound(focusedWindowID))
     }
     return applyFocus(targetWindowID, to: world)
 }
@@ -527,7 +530,7 @@ private func retileTarget(
         return .failure(.windowNotResizable(windowID))
     }
     guard let displayID = requestedDisplayID ?? world.windowDisplay[windowID] else {
-        return .failure(.displayNotFound(DisplayID(raw: 0)))
+        return .failure(.displayUnknownForWindow(windowID))
     }
     guard world.displays[displayID] != nil else {
         return .failure(.displayNotFound(displayID))

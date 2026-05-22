@@ -3,6 +3,7 @@ import Foundation
 import NarwhalAppSupport
 import NarwhalCore
 
+@MainActor
 final class HotkeyManager {
     private var bindings: [HotkeyBinding]
     private let reporter: StartupReporter
@@ -20,10 +21,6 @@ final class HotkeyManager {
         self.bindings = bindings
         self.reporter = reporter
         self.fire = fire
-    }
-
-    deinit {
-        stop()
     }
 
     func start() throws {
@@ -137,6 +134,7 @@ final class HotkeyManager {
     }
 
     private func fire(id: UInt32) {
+        dispatchPrecondition(condition: .onQueue(.main))
         guard let action = hotkeyAction(for: id, in: actionsByID) else {
             reporter.error("Unknown hotkey id \(id)")
             return
@@ -144,6 +142,7 @@ final class HotkeyManager {
         fire(action)
     }
 
+    // Safe iff Carbon dispatches on main; GetApplicationEventTarget() guarantees this.
     private static let handleHotkeyEvent: EventHandlerUPP = { _, event, userData in
         guard let event, let userData else { return OSStatus(eventNotHandledErr) }
 
@@ -160,7 +159,9 @@ final class HotkeyManager {
         guard status == noErr else { return status }
 
         let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
-        manager.fire(id: hotkeyID.id)
+        MainActor.assumeIsolated {
+            manager.fire(id: hotkeyID.id)
+        }
         return noErr
     }
 }

@@ -21,6 +21,7 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
     case connectionClosed
     case lineTooLong(maxBytes: Int)
     case invalidUTF8
+    case alreadyRunning(path: String)
 
     public var description: String {
         switch self {
@@ -48,6 +49,8 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
             return "IPC line exceeded \(maxBytes) bytes"
         case .invalidUTF8:
             return "IPC payload was not valid UTF-8"
+        case .alreadyRunning(let path):
+            return "Another narwhal daemon is already serving \(path)"
         }
     }
 
@@ -56,6 +59,8 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
     }
 }
 
+/// Not thread-safe. Sequential use across threads requires external synchronization.
+/// CLI usage is single-threaded.
 public final class IPCClient {
     private let socketPath: String
     private let maxLineBytes: Int
@@ -146,6 +151,10 @@ public final class IPCServer: @unchecked Sendable {
         }
 
         do {
+            if probeExistingDaemon(path: socketPath) {
+                Darwin.close(socketFD)
+                throw IPCTransportError.alreadyRunning(path: socketPath)
+            }
             Darwin.unlink(socketPath)
             try withSocketAddress(path: socketPath) { address, length in
                 guard Darwin.bind(socketFD, address, length) == 0 else {
@@ -182,7 +191,21 @@ public final class IPCServer: @unchecked Sendable {
             let clientFD = Darwin.accept(socketFD, nil, nil)
             if clientFD < 0 {
                 let currentErrno = errno
-                if state.isRunning && currentErrno != EBADF && currentErrno != EINVAL {
+                if currentErrno == EBADF || currentErrno == EINVAL {
+                    return
+                }
+                if [EINTR, EAGAIN, EWOULDBLOCK, ECONNABORTED, EMFILE, ENFILE].contains(currentErrno) {
+                    if state.isRunning {
+                        log("IPC accept transient errno=\(currentErrno) (\(String(cString: strerror(currentErrno)))); continuing")
+                    }
+                    // EMFILE/ENFILE: back off to let descriptors free. Cancellation here just
+                    // skips the sleep; the next loop iteration checks Task.isCancelled.
+                    if currentErrno == EMFILE || currentErrno == ENFILE {
+                        try? await Task.sleep(nanoseconds: 50_000_000)
+                    }
+                    continue
+                }
+                if state.isRunning {
                     log(IPCTransportError.acceptFailed(errno: currentErrno).description)
                 }
                 return
@@ -197,6 +220,25 @@ public final class IPCServer: @unchecked Sendable {
                 await processConnection(clientFD)
             }
         }
+    }
+
+    private func probeExistingDaemon(path: String) -> Bool {
+        let probeFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard probeFD >= 0 else { return false }
+        defer { Darwin.close(probeFD) }
+        var alive = false
+        do {
+            try withSocketAddress(path: path) { address, length in
+                // Blocking connect on a UNIX socket: stale socket file returns ECONNREFUSED
+                // immediately; live daemon returns 0. Non-blocking errnos cannot occur here.
+                if Darwin.connect(probeFD, address, length) == 0 {
+                    alive = true
+                }
+            }
+        } catch {
+            // address construction failed; treat as no daemon present.
+        }
+        return alive
     }
 
     private func processConnection(_ clientFD: Int32) async {

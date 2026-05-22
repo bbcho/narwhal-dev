@@ -35,6 +35,8 @@ public enum CommandError: Error, Equatable, Sendable {
     case activeSpaceUnavailable
     case spaceNotFound(SpaceID)
     case displayNotFound(DisplayID)
+    case displayUnknownForWindow(WindowID)
+    case noFocusedWindow
     case noNeighbor(Direction)
     case invalidResizeDelta
     case resizeWouldCollapseSplit(WindowID, Direction)
@@ -59,6 +61,10 @@ public enum CommandError: Error, Equatable, Sendable {
             return "space_not_found"
         case .displayNotFound:
             return "display_not_found"
+        case .displayUnknownForWindow:
+            return "display_unknown_for_window"
+        case .noFocusedWindow:
+            return "no_focused_window"
         case .noNeighbor:
             return "no_neighbor"
         case .invalidResizeDelta:

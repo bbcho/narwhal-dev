@@ -115,9 +115,15 @@ enum AXFrameWriteOutcome: Sendable {
 
 struct AXClient {
     private let inventoryFilter: WindowInventoryFilter
+    private static let messagingTimeout: Float = 1.0
 
     init(processID: pid_t = getpid()) {
         inventoryFilter = WindowInventoryFilter(currentProcessID: processID)
+    }
+
+    private static func bounded(_ element: AXUIElement) -> AXUIElement {
+        AXUIElementSetMessagingTimeout(element, messagingTimeout)
+        return element
     }
 
     func windowSnapshot() -> AXWindowSnapshot {
@@ -331,6 +337,11 @@ struct AXClient {
                 continue
             }
 
+            // Service the run loop for 40ms so AppKit can propagate the raise.
+            // KNOWN HAZARD: reentrancy — main-queue work (hotkeys, IPC, drag) can
+            // interleave during this wait. Async conversion would close this hole
+            // but cascades into ~55 RunLoop.run sites across the live verifier tests.
+            // Tracked as follow-up; see plan §What This Plan Does NOT Touch.
             RunLoop.current.run(until: Date().addingTimeInterval(0.04))
             switch raisedVisibilityDecision(for: window.id) {
             case .success(.visible):
@@ -360,6 +371,7 @@ struct AXClient {
     private func activateApplication(processID: pid_t) -> Bool {
         if processID == getpid() {
             NSApp.activate(ignoringOtherApps: true)
+            // See focusWindow comment re: reentrancy/test-infra tradeoff.
             RunLoop.current.run(until: Date().addingTimeInterval(0.04))
             return true
         }
@@ -450,7 +462,7 @@ struct AXClient {
             return .failure(.missingFocusedWindow)
         }
 
-        return .success(focusedAppValue as! AXUIElement)
+        return .success(Self.bounded(focusedAppValue as! AXUIElement))
     }
 
     private func focusedWindowElement(in focusedApp: AXUIElement) -> Result<AXUIElement, AXClientError> {
@@ -463,7 +475,7 @@ struct AXClient {
         if focusedError == .success,
            let focusedValue,
            CFGetTypeID(focusedValue) == AXUIElementGetTypeID() {
-            return .success(focusedValue as! AXUIElement)
+            return .success(Self.bounded(focusedValue as! AXUIElement))
         }
 
         if focusedError != .success {
@@ -483,7 +495,7 @@ struct AXClient {
         if elementError == .success,
            let focusedElementValue,
            CFGetTypeID(focusedElementValue) == AXUIElementGetTypeID() {
-            let focusedElement = focusedElementValue as! AXUIElement
+            let focusedElement = Self.bounded(focusedElementValue as! AXUIElement)
             if let window = ancestorWindow(from: focusedElement) {
                 return window
             }
@@ -515,7 +527,7 @@ struct AXClient {
                 return nil
             }
 
-            current = parentValue as! AXUIElement
+            current = Self.bounded(parentValue as! AXUIElement)
         }
 
         return nil

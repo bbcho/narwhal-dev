@@ -154,7 +154,10 @@ public func focusCyclePlan(
         from: focusedWindowID,
         direction: direction
     ) else {
-        return .failure(.windowNotFound(focusedWindowID ?? WindowID(raw: 0)))
+        guard let focusedWindowID else {
+            return .failure(.noFocusedWindow)
+        }
+        return .failure(.windowNotFound(focusedWindowID))
     }
     return focusPlan(in: world, windowID: targetWindowID)
 }
@@ -170,7 +173,10 @@ public func focusCycleCandidatePlans(
         direction: direction
     )
     guard !candidateIDs.isEmpty else {
-        return .failure(.windowNotFound(focusedWindowID ?? WindowID(raw: 0)))
+        guard let focusedWindowID else {
+            return .failure(.noFocusedWindow)
+        }
+        return .failure(.windowNotFound(focusedWindowID))
     }
 
     let layout: Layout?
@@ -190,7 +196,10 @@ public func focusCycleCandidatePlans(
         return FocusPlanResult(window: target, frame: layout?.tiled[windowID] ?? target.frame)
     }
     guard !candidates.isEmpty else {
-        return .failure(.windowNotFound(focusedWindowID ?? WindowID(raw: 0)))
+        guard let focusedWindowID else {
+            return .failure(.noFocusedWindow)
+        }
+        return .failure(.windowNotFound(focusedWindowID))
     }
     return .success(candidates)
 }
@@ -240,7 +249,10 @@ public func focusPreviousPlan(
         currentWindowID: current,
         activeWindowIDs: activeWindowIDs
     ) else {
-        return .failure(.windowNotFound(current ?? WindowID(raw: 0)))
+        guard let current else {
+            return .failure(.noFocusedWindow)
+        }
+        return .failure(.windowNotFound(current))
     }
     return focusPlan(in: world, windowID: targetWindowID)
 }

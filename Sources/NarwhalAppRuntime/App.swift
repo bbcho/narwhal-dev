@@ -55,6 +55,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var runningServices: RunningServices?
     private var servicesStarted = false
     private var isPaused = false
+    // Session-scoped set of WindowIDs that have refused kAXRaiseAction with an
+    // unrecoverable error (attributeUnsupported / actionUnsupported). The World
+    // is rebuilt from the OS on every focus-cycle press, so we can't rely on
+    // removing the window from a Space — env refresh re-discovers it. The
+    // blocklist filters cycle candidates at the call site instead.
+    private var axRaiseBlocklist: Set<WindowID> = []
 
     static func main() {
         let app = NSApplication.shared
@@ -126,9 +132,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard loadStartupConfigOrTerminate() else { return }
 
+        // Start the menubar BEFORE the Accessibility check so the user always has a
+        // visible indicator that Narwhal is alive, even while waiting for permission.
+        startMenubar()
+
         let status = reportAccessibilityStatus(prompt: true)
         guard status.isTrusted else {
             reporter.info("Waiting for Accessibility permission before starting AX work")
+            showOperatorFeedback("Narwhal needs Accessibility permission", tone: .warning, showsHUD: false)
             accessibilityPollTimer = Timer.scheduledTimer(
                 timeInterval: 2.0,
                 target: self,
@@ -783,7 +794,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reporter.info("Hotkey waiting for Space transition to settle: \(description)")
         let deadline = Date().addingTimeInterval(Self.activeSpaceTransitionPreserveDuration + 0.5)
         while spaceTransitionPreservation.isPreservingSpaceLayouts && Date() < deadline {
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch is CancellationError {
+                return false
+            } catch {
+                return false
+            }
         }
         guard !spaceTransitionPreservation.isPreservingSpaceLayouts else {
             reporter.error("Hotkey skipped because Space transition did not settle: \(description)")
@@ -962,8 +979,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         switch await worldActor.planFocusCycleCandidates(from: focusedWindowID, direction: direction) {
-        case .success(let results):
+        case .success(let allResults):
+            let results = allResults.filter { !axRaiseBlocklist.contains($0.window.id) }
+            let droppedCount = allResults.count - results.count
+            if droppedCount > 0 {
+                reporter.info("Focus cycle \(direction.rawValue) skipped \(droppedCount) AX-raise-hostile candidate(s)")
+            }
             reporter.info("Focus cycle \(direction.rawValue) planned \(results.count) candidate(s)")
+            if results.isEmpty {
+                showOperatorFeedback("No cyclable window", tone: .info, showsHUD: false)
+                return false
+            }
             for (index, result) in results.enumerated() {
                 if await focusWindow(
                     result,
@@ -1042,11 +1068,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showOperatorFeedback("\(reason) -> \(result.window.id.description)", tone: .success, showsHUD: false)
             return true
         case .failure(let error):
-            reporter.error("\(reason) failed focusing \(result.window.id.description): \(error.description)")
+            reporter.error(
+                "\(reason) failed focusing \(result.window.id.description) "
+                + "(bundle=\(result.window.bundleID.raw) title=\"\(result.window.title)\"): "
+                + error.description
+            )
             if shouldRemoveFailedFocusTarget(error, reason: reason) {
                 await worldActor.removeWindowFromActiveSpace(result.window.id)
                 await updateTiledBordersFromWorld()
                 reporter.info("Removed stale focus target \(result.window.id.description) from active Space after focus failure")
+            }
+            if shouldBlocklistFromCycle(error) {
+                if axRaiseBlocklist.insert(result.window.id).inserted {
+                    reporter.info(
+                        "Added \(result.window.id.description) (bundle=\(result.window.bundleID.raw)) "
+                        + "to AX-raise blocklist; future focus cycles will skip it"
+                    )
+                }
             }
             if !suppressFailureFeedback {
                 showOperatorFeedback("\(reason) failed", tone: .error)
@@ -1055,13 +1093,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func shouldBlocklistFromCycle(_ error: AXClientError) -> Bool {
+        // Permanent (for the session) AX-raise refusals — the target app does not
+        // expose kAXRaiseAction at all (e.g., System Settings). Env refresh will
+        // keep re-discovering the window, so we must remember it ourselves.
+        if case let .performActionFailed(action, axError) = error,
+           action == kAXRaiseAction,
+           axError == .attributeUnsupported || axError == .actionUnsupported {
+            return true
+        }
+        return false
+    }
+
     private func shouldRemoveFailedFocusTarget(_ error: AXClientError, reason: String) -> Bool {
         let isCycling = reason.hasPrefix("focus cycle") || reason == "focus previous"
         switch error {
         case .windowElementNotFound:
             return true
         case .performActionFailed(let action, let axError):
-            return isCycling && action == kAXRaiseAction && axError == .cannotComplete
+            // .cannotComplete: app unresponsive / window gone. .attributeUnsupported /
+            // .actionUnsupported: the target app doesn't expose kAXRaiseAction at all
+            // (some Electron/web apps, some control panels, some menu-only apps). In
+            // all three cases the window is not focus-cyclable; drop it from the active
+            // Space so the cycle stops getting stuck on it.
+            return isCycling
+                && action == kAXRaiseAction
+                && (axError == .cannotComplete
+                    || axError == .attributeUnsupported
+                    || axError == .actionUnsupported)
         case .applicationActivateFailed:
             return isCycling
         case .copyAttributeFailed,
@@ -1554,7 +1613,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 nextRefresh = Date().addingTimeInterval(0.45)
             }
 
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 150_000_000)
+            } catch is CancellationError {
+                activeSpaceFocusRecoveryDeadline = nil
+                return nil
+            } catch {
+                activeSpaceFocusRecoveryDeadline = nil
+                return nil
+            }
         }
 
         activeSpaceFocusRecoveryDeadline = nil

@@ -26,7 +26,7 @@ struct CommandWorkflowMatrixTests {
             }
         }
 
-        #expect(apply(.focusCycle(.next), to: world) == .failure(.windowNotFound(WindowID(raw: 0))))
+        #expect(apply(.focusCycle(.next), to: world) == .failure(.noFocusedWindow))
         #expect(apply(.focusDirection(.right), to: world) == .failure(.activeSpaceUnavailable))
     }
 
@@ -92,7 +92,7 @@ struct CommandWorkflowMatrixTests {
                 } else {
                     #expect(Bool(false), "Focus cycle succeeded without focused window at count \(count)")
                 }
-            case .failure(.windowNotFound):
+            case .failure(.windowNotFound), .failure(.noFocusedWindow):
                 #expect(expectedSet.isEmpty)
             case .failure(let error):
                 #expect(Bool(false), "Unexpected focus cycle error at count \(count): \(error.message)")

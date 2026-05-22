@@ -86,8 +86,8 @@ enum LiveCommandWorkflowVerification {
             }
             coverage = coverage.recordingCommand(name)
         }
-        guard case .failure(.windowNotFound) = apply(.focusCycle(.next), to: world) else {
-            throw LiveCommandWorkflowFailure("zero-window focus cycle did not reject with windowNotFound")
+        guard case .failure(.noFocusedWindow) = apply(.focusCycle(.next), to: world) else {
+            throw LiveCommandWorkflowFailure("zero-window focus cycle did not reject with noFocusedWindow")
         }
         coverage = coverage.recordingCommand("focusCycle")
     }
