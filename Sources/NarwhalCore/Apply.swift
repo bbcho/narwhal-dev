@@ -50,12 +50,7 @@ public func apply(_ command: Command, to world: World) -> Result<World, CommandE
 }
 
 private func applyPush(_ windowID: WindowID, direction: Direction, to world: World) -> Result<World, CommandError> {
-    switch retileTarget(windowID, displayID: nil, in: world) {
-    case .success(let target):
-        return worldByRetiling(target, insertion: .edge(direction), in: world)
-    case .failure(let error):
-        return .failure(error)
-    }
+    applyRetile(windowID, displayID: nil, insertion: .edge(direction), to: world)
 }
 
 private func applyDropAtZone(
@@ -87,12 +82,7 @@ private func applyDropAtZone(
 }
 
 private func applyCenter(_ windowID: WindowID, to world: World) -> Result<World, CommandError> {
-    switch retileTarget(windowID, displayID: nil, in: world) {
-    case .success(let target):
-        return worldByRetiling(target, insertion: .center, in: world)
-    case .failure(let error):
-        return .failure(error)
-    }
+    applyRetile(windowID, displayID: nil, insertion: .center, to: world)
 }
 
 private func applyEject(_ windowID: WindowID, to world: World) -> Result<World, CommandError> {
@@ -156,12 +146,7 @@ private func applyToggleFloat(_ windowID: WindowID, to world: World) -> Result<W
         return applyEject(windowID, to: world)
     }
 
-    switch retileTarget(windowID, displayID: nil, in: world) {
-    case .success(let target):
-        return worldByRetiling(target, insertion: .center, in: world)
-    case .failure(let error):
-        return .failure(error)
-    }
+    return applyRetile(windowID, displayID: nil, insertion: .center, to: world)
 }
 
 private func applyMoveToNextDisplay(_ windowID: WindowID, to world: World) -> Result<World, CommandError> {
@@ -179,12 +164,7 @@ private func applyMoveToNextDisplay(_ windowID: WindowID, to world: World) -> Re
     guard let targetDisplayID = nextDisplayID(after: currentDisplayID, in: world.displays) else {
         return .failure(.displayNotFound(currentDisplayID))
     }
-    switch retileTarget(windowID, displayID: targetDisplayID, in: world) {
-    case .success(let target):
-        return worldByRetiling(target, insertion: .center, in: world)
-    case .failure(let error):
-        return .failure(error)
-    }
+    return applyRetile(windowID, displayID: targetDisplayID, insertion: .center, to: world)
 }
 
 private func applyFocus(_ windowID: WindowID, to world: World) -> Result<World, CommandError> {
@@ -557,6 +537,20 @@ private func retileTarget(
     }
 
     return .success(RetileTarget(windowID: windowID, displayID: displayID, activeSpace: activeSpace))
+}
+
+private func applyRetile(
+    _ windowID: WindowID,
+    displayID: DisplayID?,
+    insertion: RetileInsertion,
+    to world: World
+) -> Result<World, CommandError> {
+    switch retileTarget(windowID, displayID: displayID, in: world) {
+    case .success(let target):
+        return worldByRetiling(target, insertion: insertion, in: world)
+    case .failure(let error):
+        return .failure(error)
+    }
 }
 
 private func worldByRetiling(_ target: RetileTarget, insertion: RetileInsertion, in world: World) -> Result<World, CommandError> {
