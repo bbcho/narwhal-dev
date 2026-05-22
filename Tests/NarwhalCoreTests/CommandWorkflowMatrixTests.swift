@@ -90,12 +90,12 @@ struct CommandWorkflowMatrixTests {
                 if let focused = next.spaces[SpaceID(raw: 1)]?.focused {
                     #expect(expectedSet.contains(focused), "Focus cycle selected non-candidate \(focused) at count \(count)")
                 } else {
-                    Issue.record("Focus cycle succeeded without focused window at count \(count)")
+                    #expect(Bool(false), "Focus cycle succeeded without focused window at count \(count)")
                 }
             case .failure(.windowNotFound):
                 #expect(expectedSet.isEmpty)
             case .failure(let error):
-                Issue.record("Unexpected focus cycle error at count \(count): \(error.message)")
+                #expect(Bool(false), "Unexpected focus cycle error at count \(count): \(error.message)")
             }
         }
     }
@@ -122,7 +122,7 @@ struct CommandWorkflowMatrixTests {
             try assertWorldInvariants(next, note: note)
             return next
         case .failure(let error):
-            Issue.record("Command \(command) failed in \(note): \(error.message)")
+            #expect(Bool(false), "Command \(command) failed in \(note): \(error.message)")
             throw WorkflowFailure()
         }
     }
