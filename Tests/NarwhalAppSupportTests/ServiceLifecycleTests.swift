@@ -129,13 +129,7 @@ struct ServiceLifecycleTests {
     private func requireSuccess(
         _ result: Result<RunningServices, ServiceStartupError>
     ) throws -> RunningServices {
-        switch result {
-        case .success(let services):
-            return services
-        case .failure(let error):
-            Issue.record("Expected startup success, got \(error.description)")
-            throw error
-        }
+        try result.get()
     }
 
     private func requireFailure(
@@ -143,9 +137,7 @@ struct ServiceLifecycleTests {
     ) throws -> ServiceStartupError {
         switch result {
         case .success:
-            let error = FakeStartupError.unexpectedSuccess
-            Issue.record("Expected startup failure")
-            throw error
+            throw FakeStartupError.unexpectedSuccess
         case .failure(let error):
             return error
         }
@@ -154,13 +146,7 @@ struct ServiceLifecycleTests {
     private func requireInjectionSuccess(
         _ result: Result<[ServiceStartStep], ServiceStartFailureInjectionError>
     ) throws -> [ServiceStartStep] {
-        switch result {
-        case .success(let steps):
-            return steps
-        case .failure(let error):
-            Issue.record("Expected injection success, got \(error.description)")
-            throw error
-        }
+        try result.get()
     }
 
     private func requireInjectionFailure(
@@ -168,9 +154,7 @@ struct ServiceLifecycleTests {
     ) throws -> ServiceStartFailureInjectionError {
         switch result {
         case .success:
-            let error = FakeStartupError.unexpectedSuccess
-            Issue.record("Expected injection failure")
-            throw error
+            throw FakeStartupError.unexpectedSuccess
         case .failure(let error):
             return error
         }
