@@ -17,7 +17,7 @@ enum StartupConfigSource: Equatable {
     case userFile(URL)
 }
 
-enum MissingConfigFilePolicy {
+enum MissingConfigFilePolicy: Equatable {
     case useBuiltInDefault
     case fail
 }

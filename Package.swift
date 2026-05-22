@@ -71,6 +71,14 @@ let package = Package(
             ]
         ),
         .testTarget(
+            name: "NarwhalAppRuntimeTests",
+            dependencies: [
+                "NarwhalAppRuntime",
+                "NarwhalAppSupport",
+                .product(name: "Testing", package: "swift-testing")
+            ]
+        ),
+        .testTarget(
             name: "NarwhalLiveVerifierTests",
             dependencies: [
                 "NarwhalAppRuntime",

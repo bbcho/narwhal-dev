@@ -5,34 +5,6 @@ import NarwhalAppSupport
 import NarwhalCore
 import NarwhalIPC
 
-private enum StartupArgumentError: Error, CustomStringConvertible {
-    case missingRestoreStatePath
-    case missingDebugFailServiceStartName
-
-    var description: String {
-        switch self {
-        case .missingRestoreStatePath:
-            return "--restore-state requires a file path"
-        case .missingDebugFailServiceStartName:
-            return "--debug-fail-service-start requires a service name"
-        }
-    }
-}
-
-private enum ServiceStartupRequestError: Error, CustomStringConvertible {
-    case startupArgument(StartupArgumentError)
-    case failureInjection(ServiceStartFailureInjectionError)
-
-    var description: String {
-        switch self {
-        case .startupArgument(let error):
-            return error.description
-        case .failureInjection(let error):
-            return error.description
-        }
-    }
-}
-
 @MainActor
 public enum NarwhalApplication {
     public static func main() {
@@ -58,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
     private var overlayModel = OverlayModel.empty
     private let menubar = Menubar()
+    private let startupArguments = StartupArguments.current
     private var worldActor = WorldActor()
     private let reporter = StartupReporter()
     private var config = Config.default
@@ -86,7 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-        if let verifierFlag = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--verify-") }) {
+        if let verifierFlag = instance.startupArguments.verifierFlag {
             print("NarwhalApp was built without verifier support; rerun \(verifierFlag) through scripts/live_verify_all.sh")
             Darwin.exit(2)
         }
@@ -100,13 +73,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard configureRestoreManagerOrTerminate() else { return }
 
-        if ProcessInfo.processInfo.arguments.contains("--check-config") {
+        switch startupArguments.command {
+        case .checkConfig:
             let ok = loadStartupConfig()
             reporter.info("NarwhalApp stopped")
             Darwin.exit(ok ? 0 : 1)
-        }
-
-        if ProcessInfo.processInfo.arguments.contains("--check-environment") {
+        case .checkEnvironment:
             guard loadStartupConfig() else {
                 reporter.info("NarwhalApp stopped")
                 Darwin.exit(1)
@@ -132,14 +104,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Darwin.exit(0)
             }
             return
-        }
-
-        if ProcessInfo.processInfo.arguments.contains("--push-left") {
+        case .pushLeft:
             runPushOnceAndTerminate(.left)
             return
-        }
-
-        if ProcessInfo.processInfo.arguments.contains("--focused-window") {
+        case .focusedWindow:
             let status = reportAccessibilityStatus(prompt: false)
             if status.isTrusted {
                 _ = reportFocusedWindowSnapshot()
@@ -148,12 +116,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             NSApplication.shared.terminate(nil)
             return
-        }
-
-        if ProcessInfo.processInfo.arguments.contains("--check-accessibility") {
+        case .checkAccessibility:
             reportAccessibilityStatus(prompt: false)
             NSApplication.shared.terminate(nil)
             return
+        case .normal:
+            break
         }
 
         guard loadStartupConfigOrTerminate() else { return }
@@ -388,7 +356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @discardableResult
     private func configureRestoreManagerOrTerminate() -> Bool {
-        switch restoreStateURLFromArguments() {
+        switch startupArguments.restoreStateURL {
         case .success(let url):
             let manager = RestoreManager(url: url)
             restorePersistence = restorePersistence(for: manager)
@@ -403,18 +371,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func restoreStateURLFromArguments() -> Result<URL, StartupArgumentError> {
-        let arguments = ProcessInfo.processInfo.arguments
-        guard let index = arguments.firstIndex(of: "--restore-state") else {
-            return .success(RestoreManager.defaultURL)
-        }
-        let pathIndex = arguments.index(after: index)
-        guard arguments.indices.contains(pathIndex) else {
-            return .failure(.missingRestoreStatePath)
-        }
-        return .success(URL(fileURLWithPath: arguments[pathIndex]).standardizedFileURL)
-    }
-
     private func restorePersistence(for manager: RestoreManager) -> RestorePersistence {
         RestorePersistence(
             manager: manager,
@@ -422,18 +378,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [reporter] event in
             logRestoreSaveEvent(event, reporter: reporter)
         }
-    }
-
-    private func debugServiceStartFailureFromArguments() -> Result<String?, StartupArgumentError> {
-        let arguments = ProcessInfo.processInfo.arguments
-        guard let index = arguments.firstIndex(of: "--debug-fail-service-start") else {
-            return .success(nil)
-        }
-        let nameIndex = arguments.index(after: index)
-        guard arguments.indices.contains(nameIndex) else {
-            return .failure(.missingDebugFailServiceStartName)
-        }
-        return .success(arguments[nameIndex])
     }
 
     @discardableResult
@@ -452,30 +396,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startupConfigLoad() -> Result<StartupConfigLoad, StartupConfigError> {
-        switch startupConfigRequestFromArguments() {
+        switch startupArguments.startupConfigRequest {
         case .success(let request):
             return StartupConfigLoader(configURL: request.url, missingFilePolicy: request.missingFilePolicy).load()
         case .failure(let error):
             return .failure(error)
         }
-    }
-
-    private func startupConfigRequestFromArguments() -> Result<StartupConfigRequest, StartupConfigError> {
-        let arguments = ProcessInfo.processInfo.arguments
-        guard let index = arguments.firstIndex(of: "--config") else {
-            return .success(StartupConfigRequest(
-                url: StartupConfigLoader.defaultUserConfigURL,
-                missingFilePolicy: .useBuiltInDefault
-            ))
-        }
-        let pathIndex = arguments.index(after: index)
-        guard arguments.indices.contains(pathIndex) else {
-            return .failure(.missingConfigPathArgument)
-        }
-        return .success(StartupConfigRequest(
-            url: URL(fileURLWithPath: arguments[pathIndex]).standardizedFileURL,
-            missingFilePolicy: .fail
-        ))
     }
 
     private func logStartupConfig(_ loaded: StartupConfigLoad) {
@@ -518,7 +444,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !servicesStarted else { return }
 
         let steps: [ServiceStartStep]
-        switch serviceStartStepsFromArguments() {
+        switch startupArguments.serviceStartSteps(serviceStartSteps()) {
         case .success(let value):
             steps = value
         case .failure(let error):
@@ -539,23 +465,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.error(error.description)
             reporter.info("Runtime service startup failed; terminating")
             NSApplication.shared.terminate(nil)
-        }
-    }
-
-    private func serviceStartStepsFromArguments() -> Result<[ServiceStartStep], ServiceStartupRequestError> {
-        let failureTarget: String?
-        switch debugServiceStartFailureFromArguments() {
-        case .success(let value):
-            failureTarget = value
-        case .failure(let error):
-            return .failure(.startupArgument(error))
-        }
-
-        switch NarwhalAppSupport.serviceStartSteps(serviceStartSteps(), injectingFailureAt: failureTarget) {
-        case .success(let steps):
-            return .success(steps)
-        case .failure(let error):
-            return .failure(.failureInjection(error))
         }
     }
 
@@ -688,7 +597,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard configFileWatcherService == nil else {
             return {}
         }
-        switch startupConfigRequestFromArguments() {
+        switch startupArguments.startupConfigRequest {
         case .success(let request):
             let service = ConfigFileWatcherService(configURL: request.url, reporter: reporter) { [weak self] in
                 Task { @MainActor in
