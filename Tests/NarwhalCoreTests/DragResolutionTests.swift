@@ -89,10 +89,7 @@ struct DragResolutionTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.dropAtZone(window, targetDisplay, ZoneID(raw: "right-half")), to: world) else {
-            Issue.record("Expected half-zone drop to succeed")
-            return
-        }
+        let next = try apply(.dropAtZone(window, targetDisplay, ZoneID(raw: "right-half")), to: world).get()
 
         let sourceSlots = slots(in: try #require(next.spaces[spaceID]?.displays[sourceDisplay]?.tree))
         let targetFrames = layout(
@@ -123,10 +120,7 @@ struct DragResolutionTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.dropAtZone(window, display, ZoneID(raw: "center")), to: world) else {
-            Issue.record("Expected center-zone drop to succeed")
-            return
-        }
+        let next = try apply(.dropAtZone(window, display, ZoneID(raw: "center")), to: world).get()
 
         let frames = layout(
             spaceState: try #require(next.spaces[SpaceID(raw: 1)]),
@@ -232,10 +226,7 @@ struct DragResolutionTests {
             config: config
         )
 
-        guard case .success(let next) = apply(.dropAtZone(dropped, display, ZoneID(raw: "subtree")), to: world) else {
-            Issue.record("Expected subtree-zone drop to succeed")
-            return
-        }
+        let next = try apply(.dropAtZone(dropped, display, ZoneID(raw: "subtree")), to: world).get()
 
         let nextTree = try #require(next.spaces[space]?.displays[display]?.tree)
         #expect(slots(in: nextTree) == [
@@ -343,10 +334,7 @@ struct DragResolutionTests {
         display: DisplayID,
         world: World
     ) throws -> CGRect? {
-        guard case .success(let next) = apply(.dropAtZone(window, display, ZoneID(raw: zoneID)), to: world) else {
-            Issue.record("Expected quarter-zone drop \(zoneID) to succeed")
-            throw DragResolutionTestError.unexpectedFailure
-        }
+        let next = try apply(.dropAtZone(window, display, ZoneID(raw: zoneID)), to: world).get()
 
         return layout(
             spaceState: try #require(next.spaces[SpaceID(raw: 1)]),
@@ -368,8 +356,4 @@ struct DragResolutionTests {
             isMinimized: false
         )
     }
-}
-
-private enum DragResolutionTestError: Error {
-    case unexpectedFailure
 }
