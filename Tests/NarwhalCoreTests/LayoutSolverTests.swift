@@ -67,18 +67,18 @@ struct LayoutSolverTests {
             constraints: [a: WindowConstraints(minWidth: 500)]
         )
 
-        guard case .solved(let solved, .adjusted(let adjustments)) = result else {
-            Issue.record("Expected adjusted solved layout, got \(String(describing: result))")
-            return
+        switch result {
+        case .solved(let solved, .adjusted(let adjustments)):
+            #expect(solved.tiled[a] == CGRect(x: 0, y: 0, width: 500, height: 800))
+            #expect(solved.tiled[d] == CGRect(x: 500, y: 0, width: 486, height: 400))
+            #expect(solved.tiled[c] == CGRect(x: 500, y: 400, width: 486, height: 400))
+            #expect(solved.tiled[b] == CGRect(x: 986, y: 0, width: 486, height: 800))
+            #expect(adjustments.count == 1)
+            #expect(adjustments.first?.windowID == a)
+            #expect(adjustments.first?.reason == .minimumWidth(500))
+        default:
+            #expect(Bool(false), "Expected adjusted solved layout, got \(String(describing: result))")
         }
-
-        #expect(solved.tiled[a] == CGRect(x: 0, y: 0, width: 500, height: 800))
-        #expect(solved.tiled[d] == CGRect(x: 500, y: 0, width: 486, height: 400))
-        #expect(solved.tiled[c] == CGRect(x: 500, y: 400, width: 486, height: 400))
-        #expect(solved.tiled[b] == CGRect(x: 986, y: 0, width: 486, height: 800))
-        #expect(adjustments.count == 1)
-        #expect(adjustments.first?.windowID == a)
-        #expect(adjustments.first?.reason == .minimumWidth(500))
     }
 
     @Test("Unsatisfiable horizontal minimums return a domain failure")
@@ -136,7 +136,7 @@ struct LayoutSolverTests {
     }
 
     @Test("Constraint observations merge monotonically")
-    func observedConstraintsMergeByMaximum() {
+    func observedConstraintsMergeByMaximum() throws {
         let display = DisplayID(raw: 1)
         let space = SpaceID(raw: 1)
         let window = WindowID(raw: 1)
@@ -163,13 +163,10 @@ struct LayoutSolverTests {
 
         #expect(next.windowConstraints[window] == WindowConstraints(minWidth: 500, minHeight: 350))
 
-        guard case .success(let commandNext) = apply(
+        let commandNext = try apply(
             .windowConstraintObserved(window, WindowConstraints(minWidth: 525, minHeight: 325)),
             to: next
-        ) else {
-            Issue.record("Expected windowConstraintObserved command to succeed")
-            return
-        }
+        ).get()
 
         #expect(commandNext.windowConstraints[window] == WindowConstraints(minWidth: 525, minHeight: 350))
     }
