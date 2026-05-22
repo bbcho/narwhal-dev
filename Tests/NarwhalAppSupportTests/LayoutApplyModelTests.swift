@@ -195,14 +195,15 @@ struct LayoutApplyModelTests {
 
         let decision = plannedLayoutApplyDecision(plan: plan, applyResult: applyResult, retryOnClamp: true)
 
-        guard case .fail(let appliedFrames, let failureCount, let summary) = decision else {
-            Issue.record("Expected failure decision")
-            return
+        switch decision {
+        case .fail(let appliedFrames, let failureCount, let summary):
+            #expect(appliedFrames == [:])
+            #expect(failureCount == 1)
+            #expect(summary.contains(failed.description))
+            #expect(summary.contains("AX failed"))
+        default:
+            #expect(Bool(false), "Expected failure decision")
         }
-        #expect(appliedFrames == [:])
-        #expect(failureCount == 1)
-        #expect(summary.contains(failed.description))
-        #expect(summary.contains("AX failed"))
     }
 
     @Test("Planned layout apply decision carries clamp retry data")
@@ -220,15 +221,16 @@ struct LayoutApplyModelTests {
 
         let decision = plannedLayoutApplyDecision(plan: plan, applyResult: applyResult, retryOnClamp: false)
 
-        guard case .clamp(let appliedFrames, let observedConstraints, let shouldRetry, let summary) = decision else {
-            Issue.record("Expected clamp decision")
-            return
+        switch decision {
+        case .clamp(let appliedFrames, let observedConstraints, let shouldRetry, let summary):
+            #expect(appliedFrames == applyResult.applied)
+            #expect(observedConstraints == [clamped: observed])
+            #expect(!shouldRetry)
+            #expect(summary.contains(clamped.description))
+            #expect(summary.contains("minWidth=180.0"))
+        default:
+            #expect(Bool(false), "Expected clamp decision")
         }
-        #expect(appliedFrames == applyResult.applied)
-        #expect(observedConstraints == [clamped: observed])
-        #expect(!shouldRetry)
-        #expect(summary.contains(clamped.description))
-        #expect(summary.contains("minWidth=180.0"))
     }
 
     private func commandPlanFixture(
