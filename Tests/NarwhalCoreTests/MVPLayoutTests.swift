@@ -1491,10 +1491,7 @@ struct MVPLayoutTests {
             )
         )
 
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: World.empty) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.environmentChanged(snapshot), to: World.empty), "Expected environmentChanged to succeed")
 
         #expect(next.activeSpace == space)
         #expect(next.displays == displays)
@@ -1561,10 +1558,7 @@ struct MVPLayoutTests {
             )
         )
 
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.environmentChanged(snapshot), to: world), "Expected environmentChanged to succeed")
 
         #expect(next.activeSpace == secondSpace)
         #expect(next.windows.keys.sorted { $0.raw < $1.raw } == [
@@ -1635,10 +1629,7 @@ struct MVPLayoutTests {
             preserveSpaceLayouts: true
         )
 
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.environmentChanged(snapshot), to: world), "Expected environmentChanged to succeed")
 
         #expect(next.activeSpace == secondSpace)
         #expect(next.windows[firstSpaceLeft]?.frame == staleFirstSpaceFrame)
@@ -1699,10 +1690,7 @@ struct MVPLayoutTests {
             )
         )
 
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.environmentChanged(snapshot), to: world), "Expected environmentChanged to succeed")
 
         #expect(next.activeSpace == secondSpace)
         #expect(next.windows[firstSpaceWindow]?.frame == staleFirstSpaceFrame)
@@ -1769,10 +1757,7 @@ struct MVPLayoutTests {
             )
         )
 
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.environmentChanged(snapshot), to: world), "Expected environmentChanged to succeed")
 
         #expect(next.activeSpace == secondSpace)
         #expect(next.windows[firstSpaceWindow] == metadata(for: firstSpaceWindow))
@@ -1848,10 +1833,7 @@ struct MVPLayoutTests {
             )
         )
 
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.environmentChanged(snapshot), to: world), "Expected environmentChanged to succeed")
 
         #expect(next.windows[firstSpaceWindow] == metadata(for: firstSpaceWindow))
         #expect(next.windows[activeLiveFloating]?.frame == liveFrame)
@@ -1917,10 +1899,7 @@ struct MVPLayoutTests {
         )
 
         #expect(environmentSnapshotPreservesSpaceLayouts(snapshot, in: world))
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.environmentChanged(snapshot), to: world), "Expected environmentChanged to succeed")
 
         #expect(next.windows[firstSpaceWindow]?.frame == inactiveFrame)
         #expect(next.windows[secondSpaceFloating]?.frame == activeFrame)
@@ -2187,10 +2166,10 @@ struct MVPLayoutTests {
             preserveSpaceLayouts: true
         )
 
-        guard case .success(let preservingWorld) = apply(.environmentChanged(preservingSnapshot), to: world) else {
-            Issue.record("Expected preserving environmentChanged to succeed")
-            return
-        }
+        let preservingWorld = try requireWorld(
+            apply(.environmentChanged(preservingSnapshot), to: world),
+            "Expected preserving environmentChanged to succeed"
+        )
 
         #expect(preservingWorld.windows[newWindow] == liveMetadata)
         #expect(preservingWorld.spaces[secondSpace] == nil)
@@ -2202,10 +2181,10 @@ struct MVPLayoutTests {
             axSnapshot: AXWindowSnapshot(windows: [liveMetadata], quality: .complete)
         )
 
-        guard case .success(let next) = apply(.environmentChanged(cleanupSnapshot), to: preservingWorld) else {
-            Issue.record("Expected cleanup environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(
+            apply(.environmentChanged(cleanupSnapshot), to: preservingWorld),
+            "Expected cleanup environmentChanged to succeed"
+        )
 
         #expect(next.spaces[firstSpace]?.displays[displayID]?.tree == firstTree)
         #expect(next.spaces[secondSpace]?.displays[displayID]?.floating == [newWindow])
@@ -2270,10 +2249,7 @@ struct MVPLayoutTests {
         )
 
         #expect(environmentSnapshotPreservesSpaceLayouts(snapshot, in: world))
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.environmentChanged(snapshot), to: world), "Expected environmentChanged to succeed")
 
         #expect(next.spaces[activeSpace]?.displays[displayID]?.tree == activeTree)
         #expect(next.spaces[activeSpace]?.displays[displayID]?.floating == [activeFloating])
