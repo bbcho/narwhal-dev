@@ -2746,10 +2746,7 @@ struct MVPLayoutTests {
             )
         )
 
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: oldWorld) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.environmentChanged(snapshot), to: oldWorld), "Expected environmentChanged to succeed")
 
         #expect(next.activeSpace == nil)
         #expect(next.windows == [window: metadata(for: window, frame: CGRect(x: 100, y: 50, width: 400, height: 300))])
@@ -2809,10 +2806,7 @@ struct MVPLayoutTests {
             axSnapshot: AXWindowSnapshot(windows: [liveMetadata], quality: .complete)
         )
 
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: oldWorld) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.environmentChanged(snapshot), to: oldWorld), "Expected environmentChanged to succeed")
 
         #expect(next.activeSpace == nil)
         #expect(next.windows[firstWindow] == metadata(for: firstWindow))
@@ -2858,10 +2852,7 @@ struct MVPLayoutTests {
             axSnapshot: AXWindowSnapshot(windows: [metadata(for: first)], quality: .complete)
         )
 
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.environmentChanged(snapshot), to: world), "Expected environmentChanged to succeed")
 
         let nextTree = next.spaces[space]?.displays[displayID]?.tree
         #expect(next.windows == [first: metadata(for: first)])
@@ -2903,10 +2894,7 @@ struct MVPLayoutTests {
             )
         )
 
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.environmentChanged(snapshot), to: world), "Expected environmentChanged to succeed")
 
         #expect(next.activeSpace == newSpace)
         #expect(next.displays == [newDisplay: display(newDisplay, x: 1000, width: 1200)])
@@ -2941,10 +2929,7 @@ struct MVPLayoutTests {
             )
         )
 
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.environmentChanged(snapshot), to: world), "Expected environmentChanged to succeed")
 
         #expect(next.activeSpace == nil)
         #expect(next.displays == [displayID: display(displayID, x: 0, width: 1200)])
@@ -2967,10 +2952,7 @@ struct MVPLayoutTests {
             dragModifier: [.shift]
         )
 
-        guard case .success(let next) = apply(.reloadConfig(config), to: World.empty) else {
-            Issue.record("Expected reloadConfig to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.reloadConfig(config), to: World.empty), "Expected reloadConfig to succeed")
 
         #expect(next.config == config)
     }
@@ -3104,10 +3086,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.push(window, .left), to: world) else {
-            Issue.record("Expected push to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.push(window, .left), to: world), "Expected push to succeed")
 
         let tree = next.spaces[space]?.displays[display]?.tree
         #expect(tree.map(occupiedWindows(in:)) == [window])
@@ -3147,10 +3126,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.push(window, .right), to: world) else {
-            Issue.record("Expected push to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.push(window, .right), to: world), "Expected push to succeed")
 
         #expect(slots(in: try #require(next.spaces[space]?.displays[leftDisplay]?.tree)) == [
             TreeSlot(path: [0], occupancy: .empty),
@@ -3209,19 +3185,8 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.swapInTree(a, .right), to: world) else {
-            Issue.record("Expected swap right to succeed")
-            return
-        }
-
-        let nextFrames: [WindowID: CGRect]
-        switch flattenedLayout(of: next) {
-        case .success(let layout):
-            nextFrames = layout.tiled
-        case .failure(let unsatisfiable):
-            Issue.record("Expected swapped layout to solve, got \(unsatisfiable)")
-            return
-        }
+        let next = try requireWorld(apply(.swapInTree(a, .right), to: world), "Expected swap right to succeed")
+        let nextFrames = try requireLayout(flattenedLayout(of: next), "Expected swapped layout to solve").tiled
         #expect(nextFrames[b] == CGRect(x: 0, y: 0, width: 500, height: 800))
         #expect(nextFrames[a] == CGRect(x: 500, y: 0, width: 500, height: 800))
         #expect(next.spaces[space]?.focused == a)
@@ -3406,10 +3371,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let reset) = apply(.resetLayout, to: world) else {
-            Issue.record("Expected resetLayout to succeed")
-            return
-        }
+        let reset = try requireWorld(apply(.resetLayout, to: world), "Expected resetLayout to succeed")
 
         #expect(reset.displays == [display: displayInfo])
         #expect(reset.windows == world.windows)
