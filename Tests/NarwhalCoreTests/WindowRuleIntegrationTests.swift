@@ -5,7 +5,7 @@ import Testing
 @Suite("Window rule integration")
 struct WindowRuleIntegrationTests {
     @Test("Window opened applies force-float rule to world state")
-    func windowOpenedAppliesForceFloatRule() {
+    func windowOpenedAppliesForceFloatRule() throws {
         let display = DisplayID(raw: 1)
         let space = SpaceID(raw: 1)
         let window = WindowID(raw: 10)
@@ -18,10 +18,7 @@ struct WindowRuleIntegrationTests {
             ])
         )
 
-        guard case .success(let next) = apply(.windowOpened(metadata), to: world) else {
-            Issue.record("Expected windowOpened to succeed")
-            return
-        }
+        let next = try apply(.windowOpened(metadata), to: world).get()
 
         #expect(next.windows == [window: metadata])
         #expect(next.windowDisplay == [window: display])
@@ -31,7 +28,7 @@ struct WindowRuleIntegrationTests {
     }
 
     @Test("Window opened applies ignore rule by leaving the window untracked")
-    func windowOpenedAppliesIgnoreRule() {
+    func windowOpenedAppliesIgnoreRule() throws {
         let display = DisplayID(raw: 1)
         let space = SpaceID(raw: 1)
         let metadata = metadata(WindowID(raw: 20), bundleID: "com.example.ignore")
@@ -43,10 +40,7 @@ struct WindowRuleIntegrationTests {
             ])
         )
 
-        guard case .success(let next) = apply(.windowOpened(metadata), to: world) else {
-            Issue.record("Expected windowOpened to succeed")
-            return
-        }
+        let next = try apply(.windowOpened(metadata), to: world).get()
 
         #expect(next.windows.isEmpty)
         #expect(next.windowDisplay.isEmpty)
@@ -56,7 +50,7 @@ struct WindowRuleIntegrationTests {
     }
 
     @Test("Window opened applies pin-to-display rule using display slot before frame ownership")
-    func windowOpenedAppliesPinToDisplayRule() {
+    func windowOpenedAppliesPinToDisplayRule() throws {
         let left = DisplayID(raw: 1)
         let right = DisplayID(raw: 2)
         let space = SpaceID(raw: 1)
@@ -77,10 +71,7 @@ struct WindowRuleIntegrationTests {
             ])
         )
 
-        guard case .success(let next) = apply(.windowOpened(metadata), to: world) else {
-            Issue.record("Expected windowOpened to succeed")
-            return
-        }
+        let next = try apply(.windowOpened(metadata), to: world).get()
 
         #expect(next.windows == [window: metadata])
         #expect(next.windowDisplay == [window: right])
@@ -91,7 +82,7 @@ struct WindowRuleIntegrationTests {
     }
 
     @Test("Window opened records tile-to-zone rule for later placement")
-    func windowOpenedRecordsTileToZoneRule() {
+    func windowOpenedRecordsTileToZoneRule() throws {
         let display = DisplayID(raw: 1)
         let space = SpaceID(raw: 1)
         let window = WindowID(raw: 40)
@@ -104,10 +95,7 @@ struct WindowRuleIntegrationTests {
             ])
         )
 
-        guard case .success(let next) = apply(.windowOpened(metadata), to: world) else {
-            Issue.record("Expected windowOpened to succeed")
-            return
-        }
+        let next = try apply(.windowOpened(metadata), to: world).get()
 
         #expect(next.windows == [window: metadata])
         #expect(next.windowDisplay == [window: display])
@@ -117,7 +105,7 @@ struct WindowRuleIntegrationTests {
     }
 
     @Test("Pending tile rule application tiles active floating windows and clears applied rules")
-    func pendingTileRuleApplicationTilesActiveFloatingWindows() {
+    func pendingTileRuleApplicationTilesActiveFloatingWindows() throws {
         let display = DisplayID(raw: 1)
         let space = SpaceID(raw: 1)
         let window = WindowID(raw: 50)
@@ -139,10 +127,7 @@ struct WindowRuleIntegrationTests {
             config: .default
         )
 
-        guard case .success(.some(let plan)) = applyingPendingTileRules(in: world) else {
-            Issue.record("Expected pending tile rule application to succeed")
-            return
-        }
+        let plan = try #require(try applyingPendingTileRules(in: world).get())
 
         #expect(plan.focusedWindowID == window)
         #expect(plan.world.pendingRules.isEmpty)
@@ -152,7 +137,7 @@ struct WindowRuleIntegrationTests {
     }
 
     @Test("Pending tile rule application ignores inactive pending windows")
-    func pendingTileRuleApplicationIgnoresInactiveWindows() {
+    func pendingTileRuleApplicationIgnoresInactiveWindows() throws {
         let display = DisplayID(raw: 1)
         let space = SpaceID(raw: 1)
         let window = WindowID(raw: 60)
@@ -174,10 +159,7 @@ struct WindowRuleIntegrationTests {
             config: .default
         )
 
-        guard case .success(nil) = applyingPendingTileRules(in: world) else {
-            Issue.record("Expected inactive pending rule to produce no plan")
-            return
-        }
+        #expect(try applyingPendingTileRules(in: world).get() == nil)
     }
 
     @Test("Pending tile rule application returns command failures explicitly")
@@ -208,7 +190,7 @@ struct WindowRuleIntegrationTests {
     }
 
     @Test("Window closed command prunes metadata, ownership, pending rules, constraints, focus, and tree leaves")
-    func windowClosedPrunesWorldState() {
+    func windowClosedPrunesWorldState() throws {
         let display = DisplayID(raw: 1)
         let space = SpaceID(raw: 1)
         let first = WindowID(raw: 1)
@@ -234,10 +216,7 @@ struct WindowRuleIntegrationTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.windowClosed(closed), to: world) else {
-            Issue.record("Expected windowClosed to succeed")
-            return
-        }
+        let next = try apply(.windowClosed(closed), to: world).get()
 
         #expect(next.windows == [first: metadata(first, bundleID: "com.example.keep")])
         #expect(next.windowDisplay == [first: display])
@@ -253,7 +232,7 @@ struct WindowRuleIntegrationTests {
     }
 
     @Test("Complete environment refresh applies rules only to newly discovered windows")
-    func environmentRefreshAppliesRulesToNewWindowsOnly() {
+    func environmentRefreshAppliesRulesToNewWindowsOnly() throws {
         let left = DisplayID(raw: 1)
         let right = DisplayID(raw: 2)
         let space = SpaceID(raw: 1)
@@ -301,10 +280,7 @@ struct WindowRuleIntegrationTests {
             )
         )
 
-        guard case .success(let next) = apply(.environmentChanged(snapshot), to: world) else {
-            Issue.record("Expected environmentChanged to succeed")
-            return
-        }
+        let next = try apply(.environmentChanged(snapshot), to: world).get()
 
         #expect(next.windows == [
             existing: existingMetadata,
