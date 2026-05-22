@@ -33,10 +33,7 @@ struct ApplyCommandTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.moveToNextDisplay(window), to: world) else {
-            Issue.record("Expected moveToNextDisplay to succeed")
-            return
-        }
+        let next = try apply(.moveToNextDisplay(window), to: world).get()
 
         #expect(next.windowDisplay[window] == right)
         #expect(next.spaces[space]?.focused == window)
@@ -84,16 +81,10 @@ struct ApplyCommandTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.focusCycle(.next), to: world) else {
-            Issue.record("Expected focusCycle to succeed")
-            return
-        }
+        let next = try apply(.focusCycle(.next), to: world).get()
         #expect(next.spaces[space]?.focused == firstFloating)
 
-        guard case .success(let wrapped) = apply(.focusCycle(.previous), to: next) else {
-            Issue.record("Expected focusCycle to wrap")
-            return
-        }
+        let wrapped = try apply(.focusCycle(.previous), to: next).get()
         #expect(wrapped.spaces[space]?.focused == secondFloating)
     }
 
@@ -136,10 +127,7 @@ struct ApplyCommandTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.focusCycle(.next), to: world) else {
-            Issue.record("Expected focusCycle to succeed")
-            return
-        }
+        let next = try apply(.focusCycle(.next), to: world).get()
 
         #expect(next.spaces[activeSpace]?.focused == activeFloating)
         #expect(next.spaces[inactiveSpace]?.focused == inactiveFloating)
@@ -197,10 +185,7 @@ struct ApplyCommandTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.focusCycle(.next), to: world) else {
-            Issue.record("Expected focusCycle to succeed")
-            return
-        }
+        let next = try apply(.focusCycle(.next), to: world).get()
 
         #expect(next.spaces[activeSpace]?.focused == activeFloating)
         #expect(next.spaces[inactiveSpace]?.focused == inactiveFloating)
@@ -250,10 +235,7 @@ struct ApplyCommandTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.focus(inactiveFloating), to: world) else {
-            Issue.record("Expected focus to succeed")
-            return
-        }
+        let next = try apply(.focus(inactiveFloating), to: world).get()
 
         #expect(next.spaces[activeSpace]?.focused == activeFloating)
         #expect(next.spaces[inactiveSpace]?.focused == inactiveFloating)
@@ -305,10 +287,7 @@ struct ApplyCommandTests {
         )
 
         let movedFrame = CGRect(x: 500, y: 40, width: 100, height: 100)
-        guard case .success(let next) = apply(.windowMovedExternally(inactiveWindow, movedFrame), to: world) else {
-            Issue.record("Expected external move to succeed")
-            return
-        }
+        let next = try apply(.windowMovedExternally(inactiveWindow, movedFrame), to: world).get()
 
         #expect(next.windowSpace[inactiveWindow] == inactiveSpace)
         #expect(next.spaces[inactiveSpace]?.displays[display]?.tree == inactiveTree)
@@ -403,10 +382,7 @@ struct ApplyCommandTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.focusDirection(.right), to: world) else {
-            Issue.record("Expected focusDirection to succeed")
-            return
-        }
+        let next = try apply(.focusDirection(.right), to: world).get()
 
         #expect(next.spaces[activeSpace]?.focused == activeRight)
         #expect(next.spaces[inactiveSpace]?.focused == inactiveRight)
@@ -454,10 +430,7 @@ struct ApplyCommandTests {
         )
 
         var generator = SeededGenerator(seed: 1)
-        guard case .success(let layout) = shuffledResetLayout(in: world, using: &generator) else {
-            Issue.record("Expected shuffle reset layout to succeed")
-            return
-        }
+        let layout = try shuffledResetLayout(in: world, using: &generator).get()
 
         #expect(Set(layout.tiled.keys) == [first, second, third, fourth])
         for frame in layout.tiled.values {
@@ -507,10 +480,7 @@ struct ApplyCommandTests {
             config: .default
         )
 
-        guard case .success(let layout) = cascadeResetLayout(in: world) else {
-            Issue.record("Expected cascade reset layout to succeed")
-            return
-        }
+        let layout = try cascadeResetLayout(in: world).get()
 
         #expect(layout.tiled[first] == CGRect(x: 0, y: 0, width: 500, height: 400))
         #expect(layout.tiled[second] == CGRect(x: 32, y: 32, width: 500, height: 400))
@@ -539,10 +509,7 @@ struct ApplyCommandTests {
             config: .default
         )
 
-        guard case .success(let layout) = maximizeResetLayout(windowID: window, in: world) else {
-            Issue.record("Expected maximize reset layout to succeed")
-            return
-        }
+        let layout = try maximizeResetLayout(windowID: window, in: world).get()
 
         #expect(layout.tiled == [window: CGRect(x: 0, y: 0, width: 1000, height: 800)])
     }
