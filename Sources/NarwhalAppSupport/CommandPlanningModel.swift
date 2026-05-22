@@ -46,26 +46,22 @@ public func commandPlan(
     generation: LayoutGeneration,
     scope: CommandPlanScope = .activeWorkspaces
 ) -> Result<CommandPlanResult, CommandError> {
-    switch commandLayout(of: oldWorld, scope: scope) {
-    case .success(let oldLayout):
-        switch commandLayout(of: newWorld, scope: scope) {
-        case .success(let newLayout):
-            return .success(commandPlanResult(
-                newWorld: newWorld,
-                focusedWindowID: focusedWindowID,
-                undoWorld: undoWorld,
-                desiredLayout: DesiredLayout(
-                    generation: generation,
-                    layout: newLayout,
-                    delta: diff(old: oldLayout, new: newLayout)
+    commandLayout(of: oldWorld, scope: scope)
+        .flatMap { oldLayout in
+            commandLayout(of: newWorld, scope: scope).map { newLayout in
+                commandPlanResult(
+                    newWorld: newWorld,
+                    focusedWindowID: focusedWindowID,
+                    undoWorld: undoWorld,
+                    desiredLayout: DesiredLayout(
+                        generation: generation,
+                        layout: newLayout,
+                        delta: diff(old: oldLayout, new: newLayout)
+                    )
                 )
-            ))
-        case .failure(let unsatisfiable):
-            return .failure(.layoutUnsatisfiable(unsatisfiable))
+            }
         }
-    case .failure(let unsatisfiable):
-        return .failure(.layoutUnsatisfiable(unsatisfiable))
-    }
+        .mapError(CommandError.layoutUnsatisfiable)
 }
 
 public func customLayoutCommandPlan(
@@ -76,48 +72,46 @@ public func customLayoutCommandPlan(
     undoWorld: World?,
     generation: LayoutGeneration
 ) -> Result<CommandPlanResult, CommandError> {
-    switch flattenedLayout(of: oldWorld) {
-    case .success(let oldLayout):
-        return .success(commandPlanResult(
-            newWorld: newWorld,
-            focusedWindowID: focusedWindowID,
-            undoWorld: undoWorld,
-            desiredLayout: DesiredLayout(
-                generation: generation,
-                layout: newLayout,
-                delta: diff(old: oldLayout, new: newLayout)
+    flattenedLayout(of: oldWorld)
+        .map { oldLayout in
+            commandPlanResult(
+                newWorld: newWorld,
+                focusedWindowID: focusedWindowID,
+                undoWorld: undoWorld,
+                desiredLayout: DesiredLayout(
+                    generation: generation,
+                    layout: newLayout,
+                    delta: diff(old: oldLayout, new: newLayout)
+                )
             )
-        ))
-    case .failure(let unsatisfiable):
-        return .failure(.layoutUnsatisfiable(unsatisfiable))
-    }
+        }
+        .mapError(CommandError.layoutUnsatisfiable)
 }
 
 public func currentLayoutCommandPlan(
     in world: World,
     generation: LayoutGeneration
 ) -> Result<CommandPlanResult?, CommandError> {
-    switch flattenedLayout(of: world) {
-    case .success(let layout):
-        guard !layout.tiled.isEmpty else { return .success(nil) }
-        return .success(commandPlanResult(
-            newWorld: world,
-            focusedWindowID: nil,
-            undoWorld: nil,
-            desiredLayout: DesiredLayout(
-                generation: generation,
-                layout: layout,
-                delta: LayoutDelta(
-                    moves: layout.tiled,
-                    raises: [],
-                    hides: [],
-                    shows: Set(layout.tiled.keys)
+    flattenedLayout(of: world)
+        .map { layout -> CommandPlanResult? in
+            guard !layout.tiled.isEmpty else { return nil }
+            return commandPlanResult(
+                newWorld: world,
+                focusedWindowID: nil,
+                undoWorld: nil,
+                desiredLayout: DesiredLayout(
+                    generation: generation,
+                    layout: layout,
+                    delta: LayoutDelta(
+                        moves: layout.tiled,
+                        raises: [],
+                        hides: [],
+                        shows: Set(layout.tiled.keys)
+                    )
                 )
             )
-        ))
-    case .failure(let unsatisfiable):
-        return .failure(.layoutUnsatisfiable(unsatisfiable))
-    }
+        }
+        .mapError(CommandError.layoutUnsatisfiable)
 }
 
 public func focusDirectionPlan(
