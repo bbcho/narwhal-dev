@@ -354,7 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let result = await worldActor.refreshEnvironment(snapshot)
         let preserved = result.preservedSpaceLayouts ? " preservedSpaceLayouts=true" : ""
         reporter.info(
-            "Environment refreshed (\(reason)): activeSpace=\(result.activeSpace?.raw.description ?? "nil") displays=\(result.displayCount) windows=\(result.windowCount) quality=\(describe(result.quality)) topology=\(topology.quality.rawValue) mode=\(snapshot.reconciliationMode.rawValue) mapped=\(result.mappedWindowCount)/\(result.observedWindowCount) spaceWindows=\(topology.windowSpace.count)\(preserved)"
+            "Environment refreshed (\(reason)): activeSpace=\(result.activeSpace?.raw.description ?? "nil") displays=\(result.displayCount) windows=\(result.windowCount) quality=\(AppDelegateText.describe(result.quality)) topology=\(topology.quality.rawValue) mode=\(snapshot.reconciliationMode.rawValue) mapped=\(result.mappedWindowCount)/\(result.observedWindowCount) spaceWindows=\(topology.windowSpace.count)\(preserved)"
         )
         updateOperatingStatus { status in
             status.activeSpace = result.activeSpace
@@ -804,7 +804,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if isPaused, pausesTilingBlocks(action) {
-            reporter.info("Hotkey ignored while Narwhal is paused: \(describe(action))")
+            reporter.info("Hotkey ignored while Narwhal is paused: \(AppDelegateText.describe(action))")
             showOperatorFeedback("Narwhal paused", tone: .warning, showsHUD: false)
             return
         }
@@ -851,8 +851,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .openFinderWindow:
             performOpenFinderWindow()
         case .command(let template):
-            reporter.error("Hotkey action not implemented in this build: \(describe(template))")
-            showOperatorFeedback("Command unavailable: \(describe(template))", tone: .error)
+            reporter.error("Hotkey action not implemented in this build: \(AppDelegateText.describe(template))")
+            showOperatorFeedback("Command unavailable: \(AppDelegateText.describe(template))", tone: .error)
         case .reloadConfig:
             await reloadConfig(reason: "hotkey")
         case .showCommands:
@@ -870,7 +870,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               spaceTransitionPreservation.isPreservingSpaceLayouts
         else { return true }
 
-        let description = describe(action)
+        let description = AppDelegateText.describe(action)
         reporter.info("Hotkey waiting for Space transition to settle: \(description)")
         let deadline = Date().addingTimeInterval(Self.activeSpaceTransitionPreserveDuration + 0.5)
         while spaceTransitionPreservation.isPreservingSpaceLayouts && Date() < deadline {
@@ -1191,7 +1191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
         guard case .complete = environment.quality else {
-            reporter.error("Undo rejected before planning: environment snapshot is \(describe(environment.quality))")
+            reporter.error("Undo rejected before planning: environment snapshot is \(AppDelegateText.describe(environment.quality))")
             showOperatorFeedback("Undo failed: incomplete snapshot", tone: .error)
             return false
         }
@@ -1396,7 +1396,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
         guard case .complete = environment.quality else {
-            reporter.error("Shuffle rejected before planning: environment snapshot is \(describe(environment.quality))")
+            reporter.error("Shuffle rejected before planning: environment snapshot is \(AppDelegateText.describe(environment.quality))")
             showOperatorFeedback("Shuffle failed: incomplete snapshot", tone: .error)
             return false
         }
@@ -1435,7 +1435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
         guard case .complete = environment.quality else {
-            reporter.error("Cascade rejected before planning: environment snapshot is \(describe(environment.quality))")
+            reporter.error("Cascade rejected before planning: environment snapshot is \(AppDelegateText.describe(environment.quality))")
             showOperatorFeedback("Cascade failed: incomplete snapshot", tone: .error)
             return false
         }
@@ -1489,7 +1489,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func dragPreview(at location: CGPoint, displays: [DisplayID: DisplayInfo]) -> DragZonePreview? {
         guard let display = displays.values
-            .filter({ contains(location, in: $0.visibleFrame) })
+            .filter({ AppDelegateGeometry.contains(location, in: $0.visibleFrame) })
             .sorted(by: { $0.id.raw < $1.id.raw })
             .first
         else {
@@ -1501,11 +1501,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             x: (location.x - display.visibleFrame.minX) / display.visibleFrame.width,
             y: (location.y - display.visibleFrame.minY) / display.visibleFrame.height
         )
-        let matches = config.zones.filter { contains(proportional, in: $0.bounds) }
+        let matches = config.zones.filter { AppDelegateGeometry.contains(proportional, in: $0.bounds) }
         guard matches.count == 1, let zone = matches.first else {
             if matches.count > 1 {
                 return DragZonePreview(
-                    frame: badgeFrame(around: location),
+                    frame: AppDelegateGeometry.badgeFrame(around: location),
                     title: "Overlapping zones",
                     valid: false
                 )
@@ -1514,8 +1514,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         return DragZonePreview(
-            frame: absoluteFrame(for: zone.bounds, in: display.visibleFrame),
-            title: "Drop: \(dropActionDescription(zone.action))",
+            frame: AppDelegateGeometry.absoluteFrame(for: zone.bounds, in: display.visibleFrame),
+            title: "Drop: \(AppDelegateText.dropActionDescription(zone.action))",
             valid: true
         )
     }
@@ -2017,7 +2017,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func loadRestoreState(using snapshot: EnvironmentSnapshot) async -> Bool {
         guard snapshot.axSnapshot.quality == .complete else {
-            reporter.error("Restore skipped because environment snapshot is \(describe(snapshot.axSnapshot.quality))")
+            reporter.error("Restore skipped because environment snapshot is \(AppDelegateText.describe(snapshot.axSnapshot.quality))")
             return true
         }
 
@@ -2058,7 +2058,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             let clampSummary = applyResult.clamps
                 .map {
-                    "\($0.windowID.description) target=\($0.targetFrame.debugDescription) actual=\($0.actualFrame.debugDescription) observed=\($0.observed.debugDescription)"
+                    "\($0.windowID.description) target=\($0.targetFrame.debugDescription) actual=\($0.actualFrame.debugDescription) observed=\($0.observed.appDebugDescription)"
                 }
                 .joined(separator: "; ")
             let failureSummary = applyResult.failures
@@ -2446,7 +2446,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard case .complete = environment.quality else {
             return CommandExecutionFailure(
                 code: "environment_incomplete",
-                message: "\(operation) requires a complete AX snapshot; got \(describe(environment.quality))"
+                message: "\(operation) requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
             )
         }
 
@@ -2494,7 +2494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard case .complete = environment.quality else {
             return CommandExecutionFailure(
                 code: "environment_incomplete",
-                message: "IPC push requires a complete AX snapshot; got \(describe(environment.quality))"
+                message: "IPC push requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
             )
         }
 
@@ -2533,7 +2533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard case .complete = environment.quality else {
             return CommandExecutionFailure(
                 code: "environment_incomplete",
-                message: "IPC center requires a complete AX snapshot; got \(describe(environment.quality))"
+                message: "IPC center requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
             )
         }
 
@@ -2572,7 +2572,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard case .complete = environment.quality else {
             return CommandExecutionFailure(
                 code: "environment_incomplete",
-                message: "IPC eject requires a complete AX snapshot; got \(describe(environment.quality))"
+                message: "IPC eject requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
             )
         }
 
@@ -2611,7 +2611,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard case .complete = environment.quality else {
             return CommandExecutionFailure(
                 code: "environment_incomplete",
-                message: "IPC toggleFloat requires a complete AX snapshot; got \(describe(environment.quality))"
+                message: "IPC toggleFloat requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
             )
         }
 
@@ -2650,7 +2650,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard case .complete = environment.quality else {
             return CommandExecutionFailure(
                 code: "environment_incomplete",
-                message: "IPC focus requires a complete AX snapshot; got \(describe(environment.quality))"
+                message: "IPC focus requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
             )
         }
 
@@ -2689,7 +2689,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard case .complete = environment.quality else {
             return CommandExecutionFailure(
                 code: "environment_incomplete",
-                message: "IPC swap requires a complete AX snapshot; got \(describe(environment.quality))"
+                message: "IPC swap requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
             )
         }
 
@@ -2732,7 +2732,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard case .complete = environment.quality else {
             return CommandExecutionFailure(
                 code: "environment_incomplete",
-                message: "IPC resize requires a complete AX snapshot; got \(describe(environment.quality))"
+                message: "IPC resize requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
             )
         }
 
@@ -2781,189 +2781,5 @@ private func logRestoreSaveEvent(_ event: RestoreSaveEvent, reporter: StartupRep
         reporter.info("Restore state saved (\(result.reason)) to \(result.urlPath)")
     case .failed(let failure):
         reporter.error("Restore state save failed (\(failure.reason)): \(failure.message)")
-    }
-}
-
-private extension WindowConstraints {
-    var debugDescription: String {
-        "minWidth=\(minWidth.map { String($0) } ?? "nil") minHeight=\(minHeight.map { String($0) } ?? "nil")"
-    }
-}
-
-private struct CommandExecutionFailure {
-    let code: String
-    let message: String
-}
-
-private struct FocusedLayoutContext {
-    let metadata: WindowMetadata
-    let displays: [DisplayID: DisplayInfo]
-
-    var id: WindowID {
-        metadata.id
-    }
-
-    var frame: CGRect {
-        metadata.frame
-    }
-
-    var logDescription: String {
-        "id=\(metadata.id.description) pid=\(metadata.pid) bundle=\(metadata.bundleID.raw) title=\"\(metadata.title)\" role=\(metadata.role) frame=\(metadata.frame.debugDescription)"
-    }
-}
-
-private struct DragZonePreview {
-    let frame: CGRect
-    let title: String
-    let valid: Bool
-}
-
-private func contains(_ point: CGPoint, in frame: CGRect) -> Bool {
-    point.x >= frame.minX
-        && point.x < frame.maxX
-        && point.y >= frame.minY
-        && point.y < frame.maxY
-}
-
-private func contains(_ point: CGPoint, in rect: ProportionalRect) -> Bool {
-    point.x >= CGFloat(rect.x)
-        && point.x < CGFloat(rect.x + rect.w)
-        && point.y >= CGFloat(rect.y)
-        && point.y < CGFloat(rect.y + rect.h)
-}
-
-private func absoluteFrame(for rect: ProportionalRect, in displayFrame: CGRect) -> CGRect {
-    CGRect(
-        x: displayFrame.minX + CGFloat(rect.x) * displayFrame.width,
-        y: displayFrame.minY + CGFloat(rect.y) * displayFrame.height,
-        width: CGFloat(rect.w) * displayFrame.width,
-        height: CGFloat(rect.h) * displayFrame.height
-    )
-}
-
-private func badgeFrame(around location: CGPoint) -> CGRect {
-    CGRect(x: location.x - 90, y: location.y - 22, width: 180, height: 44)
-}
-
-private func dropActionDescription(_ action: ZoneAction) -> String {
-    switch action {
-    case .insertAsHalf(let direction):
-        return "\(edgeName(direction)) lane"
-    case .insertAsQuarter(let corner):
-        return "\(cornerName(corner)) quarter"
-    case .insertAsCenter:
-        return "center lane"
-    case .insertAtSubtree(let path):
-        return "subtree \(path)"
-    }
-}
-
-private func describe(_ action: HotkeyAction) -> String {
-    switch action {
-    case .command(let template):
-        return describe(template)
-    case .openFinderWindow:
-        return "open Finder window"
-    case .reloadConfig:
-        return "reload config"
-    case .showCommands:
-        return "show commands"
-    }
-}
-
-private func edgeName(_ direction: Direction) -> String {
-    switch direction {
-    case .left:
-        return "left"
-    case .right:
-        return "right"
-    case .up:
-        return "top"
-    case .down:
-        return "bottom"
-    }
-}
-
-private func cornerName(_ corner: Corner) -> String {
-    switch corner {
-    case .topLeft:
-        return "top-left"
-    case .topRight:
-        return "top-right"
-    case .bottomLeft:
-        return "bottom-left"
-    case .bottomRight:
-        return "bottom-right"
-    }
-}
-
-private func describe(_ template: CommandTemplate) -> String {
-    switch template {
-    case .push(let direction):
-        return "push \(direction.rawValue)"
-    case .center:
-        return "center"
-    case .eject:
-        return "eject"
-    case .swap(let direction):
-        return "swap \(direction.rawValue)"
-    case .resizeSplit(let direction, let delta):
-        return "resize \(direction.rawValue) \(delta)"
-    case .focusDirection(let direction):
-        return "focus \(direction.rawValue)"
-    case .focusCycle(let direction):
-        return "focus cycle \(direction.rawValue)"
-    case .focusPrevious:
-        return "focus previous"
-    case .toggleFloat:
-        return "toggleFloat"
-    case .balance:
-        return "balance"
-    case .shuffle:
-        return "shuffle"
-    case .cascade:
-        return "cascade"
-    case .maximizeReset:
-        return "max reset"
-    case .undoLayout:
-        return "undo layout"
-    case .moveToNextDisplay:
-        return "move display"
-    case .togglePause:
-        return "toggle pause"
-    case .resetLayout:
-        return "resetLayout"
-    }
-}
-
-private enum FinderWindowOpenError: Error, CustomStringConvertible {
-    case fileViewerRejected(path: String)
-
-    var description: String {
-        switch self {
-        case .fileViewerRejected(let path):
-            return "Finder file viewer rejected path \(path)"
-        }
-    }
-}
-
-private enum FinderWindowOpener {
-    @MainActor
-    static func openHomeWindow() throws {
-        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
-        guard NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: homePath) else {
-            throw FinderWindowOpenError.fileViewerRejected(path: homePath)
-        }
-    }
-}
-
-private func describe(_ quality: AXSnapshotQuality) -> String {
-    switch quality {
-    case .complete:
-        return "complete"
-    case .partial(let errors):
-        return "partial(\(errors.count) errors)"
-    case .permissionDenied(let message):
-        return "permissionDenied(\(message))"
     }
 }

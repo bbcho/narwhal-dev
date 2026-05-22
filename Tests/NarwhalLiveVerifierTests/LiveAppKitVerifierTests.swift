@@ -14,76 +14,83 @@ import Testing
 )
 struct LiveAppKitVerifierTests {
     @Test("Command overlay layout")
-    func commandOverlayLayout() {
-        expectPassed(CommandOverlayVerification.verifyDefaultTwoColumnLayout())
+    func commandOverlayLayout() throws {
+        try expectPassed(CommandOverlayVerification.verifyDefaultTwoColumnLayout())
     }
 
     @Test("Focus border radius and stacking")
-    func focusBorderRadiusAndStacking() {
-        expectPassed(FocusBorderVerification.verifyPerWindowCornerRadii())
+    func focusBorderRadiusAndStacking() throws {
+        try expectPassed(FocusBorderVerification.verifyPerWindowCornerRadii())
     }
 
     @Test("Menubar icon")
-    func menubarIcon() {
-        expectPassed(MenubarIconVerification.verifyStatusItemUsesToolbarIcon())
+    func menubarIcon() throws {
+        try expectPassed(MenubarIconVerification.verifyStatusItemUsesToolbarIcon())
     }
 
     @Test("Observation replay")
-    func observationReplay() {
-        expectPassed(ObservationReplayVerification.verifyPartialTopologyReplay())
+    func observationReplay() throws {
+        try expectPassed(ObservationReplayVerification.verifyPartialTopologyReplay())
     }
 
     @Test("Workspace scope")
-    func workspaceScope() {
-        expectPassed(WorkspaceScopeVerification.verifyFocusedCommandsStayOnOneDisplay())
+    func workspaceScope() throws {
+        try expectPassed(WorkspaceScopeVerification.verifyFocusedCommandsStayOnOneDisplay())
     }
 
     @Test("Live multi-display workflow")
-    func liveMultiDisplayWorkflow() {
+    func liveMultiDisplayWorkflow() throws {
         let result = LiveMultiDisplayVerification.verifyDisplayScopedPushAndCycle()
         if !result.passed,
            result.message.contains("requires at least two displays")
             || result.message.contains("requires two usable displays") {
             return
         }
-        expectPassed(result)
+        try expectPassed(result)
     }
 
     @Test("Focused-unavailable polling")
-    func focusedUnavailablePolling() {
-        expectPassed(FocusedUnavailablePollingVerification.verifyUnavailableFocusIsNotLoggedEveryPoll())
+    func focusedUnavailablePolling() throws {
+        try expectPassed(FocusedUnavailablePollingVerification.verifyUnavailableFocusIsNotLoggedEveryPoll())
     }
 
     @Test("Space focus recovery")
-    func spaceFocusRecovery() {
-        expectPassed(SpaceFocusRecoveryVerification.verifyWorkspaceFocusFallbackMovesOnlyActiveSpace())
+    func spaceFocusRecovery() throws {
+        try expectPassed(SpaceFocusRecoveryVerification.verifyWorkspaceFocusFallbackMovesOnlyActiveSpace())
     }
 
     @Test("Live Space switch focus border")
-    func liveSpaceSwitchFocusBorder() {
-        expectPassed(LiveSpaceSwitchFocusBorderVerification.verifyFocusBorderMovesAcrossRealSpaceSwitch())
+    func liveSpaceSwitchFocusBorder() throws {
+        try expectPassed(LiveSpaceSwitchFocusBorderVerification.verifyFocusBorderMovesAcrossRealSpaceSwitch())
     }
 
     @Test("Display-change focus border")
-    func displayChangeFocusBorder() {
-        expectPassed(DisplayChangeFocusBorderVerification.verifyDisplayChangePreservesVisibleFocusBorder())
+    func displayChangeFocusBorder() throws {
+        try expectPassed(DisplayChangeFocusBorderVerification.verifyDisplayChangePreservesVisibleFocusBorder())
     }
 
     @Test("Live focus workflow")
-    func liveFocusWorkflow() {
-        expectPassed(LiveFocusWorkflowVerification.verifyCycleMouseAndBorderWorkflow())
+    func liveFocusWorkflow() throws {
+        try expectPassed(LiveFocusWorkflowVerification.verifyCycleMouseAndBorderWorkflow())
     }
 
     @Test("Live command workflows")
-    func liveCommandWorkflows() {
-        expectPassed(LiveCommandWorkflowVerification.verifyCommandWorkflows())
+    func liveCommandWorkflows() throws {
+        try expectPassed(LiveCommandWorkflowVerification.verifyCommandWorkflows())
     }
 
-    private func expectPassed(_ result: (passed: Bool, message: String)) {
+    private func expectPassed(_ result: (passed: Bool, message: String)) throws {
         guard result.passed else {
-            Issue.record(Comment(rawValue: result.message))
-            return
+            throw LiveVerifierFailure(result.message)
         }
+    }
+}
+
+private struct LiveVerifierFailure: Error, CustomStringConvertible {
+    let description: String
+
+    init(_ description: String) {
+        self.description = description
     }
 }
 #endif

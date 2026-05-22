@@ -1,5 +1,4 @@
 import AppKit
-import QuartzCore
 import NarwhalAppSupport
 import NarwhalCore
 
@@ -498,107 +497,6 @@ final class Overlay {
 private struct FocusBorderSuppression {
     let windowID: WindowID
     let frame: CGRect
-}
-
-@MainActor
-private final class HUDView: NSView {
-    static let font = NSFont.systemFont(ofSize: 13, weight: .medium)
-    static let horizontalPadding: CGFloat = 18
-    static let height: CGFloat = 38
-
-    init(message: String, tone: OverlayTone) {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.backgroundColor = tone.background.cgColor
-        layer?.borderColor = tone.border.cgColor
-        layer?.borderWidth = 1
-        layer?.cornerRadius = 8
-        layer?.masksToBounds = true
-
-        let label = NSTextField(labelWithString: message)
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = Self.font
-        label.textColor = .white
-        label.lineBreakMode = .byTruncatingTail
-        addSubview(label)
-
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.horizontalPadding),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.horizontalPadding),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor)
-        ])
-    }
-
-    required init?(coder: NSCoder) {
-        nil
-    }
-}
-
-@MainActor
-private final class DragPreviewView: NSView {
-    private let label = NSTextField(labelWithString: "")
-
-    init() {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 0
-        layer?.masksToBounds = true
-
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        label.textColor = .white
-        label.lineBreakMode = .byTruncatingTail
-        label.wantsLayer = true
-        label.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.70).cgColor
-        label.layer?.cornerRadius = 4
-        addSubview(label)
-
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            label.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8)
-        ])
-    }
-
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    func update(title: String, valid: Bool) {
-        label.stringValue = "  \(title)  "
-        let stroke = valid ? NSColor.systemBlue : NSColor.systemRed
-        layer?.backgroundColor = stroke.withAlphaComponent(valid ? 0.10 : 0.14).cgColor
-        layer?.borderColor = stroke.withAlphaComponent(0.95).cgColor
-        layer?.borderWidth = 2
-    }
-}
-
-private extension OverlayTone {
-    var background: NSColor {
-        switch self {
-        case .info:
-            return NSColor.black.withAlphaComponent(0.82)
-        case .success:
-            return NSColor.systemGreen.withAlphaComponent(0.88)
-        case .warning:
-            return NSColor.systemOrange.withAlphaComponent(0.90)
-        case .error:
-            return NSColor.systemRed.withAlphaComponent(0.92)
-        }
-    }
-
-    var border: NSColor {
-        switch self {
-        case .info:
-            return NSColor.white.withAlphaComponent(0.18)
-        case .success:
-            return NSColor.white.withAlphaComponent(0.28)
-        case .warning:
-            return NSColor.white.withAlphaComponent(0.30)
-        case .error:
-            return NSColor.white.withAlphaComponent(0.34)
-        }
-    }
 }
 
 @MainActor
@@ -2122,88 +2020,6 @@ enum FocusBorderVerification {
 }
 #endif
 
-#if NARWHAL_ENABLE_VERIFIERS
-@MainActor
-private struct FocusBorderDebugGeometrySnapshot {
-    let strokeRect: CGRect
-    let requestedCornerRadius: Double
-    let renderedCornerRadius: Double
-    let pathBoundingBox: CGRect
-}
-#endif
-
-@MainActor
-private final class BorderView: NSView {
-    private let shapeLayer = CAShapeLayer()
-    private var border: BorderConfig
-    private var cornerRadius: Double
-    private var strokeRect: CGRect = .zero
-    private var renderedCornerRadius: Double = 0
-
-    init(border: BorderConfig, cornerRadius: Double) {
-        self.border = border
-        self.cornerRadius = max(0, cornerRadius)
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
-        shapeLayer.fillColor = NSColor.clear.cgColor
-        shapeLayer.lineJoin = .round
-        shapeLayer.lineCap = .round
-        layer?.addSublayer(shapeLayer)
-        update(border: border)
-    }
-
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override func layout() {
-        super.layout()
-        updatePath()
-    }
-
-    func update(border: BorderConfig, cornerRadius: Double? = nil) {
-        self.border = border
-        if let cornerRadius {
-            self.cornerRadius = max(0, cornerRadius)
-        }
-        shapeLayer.strokeColor = NSColor(hexRGB: border.colorHex)?.cgColor ?? NSColor.systemBlue.cgColor
-        shapeLayer.lineWidth = border.width
-        shapeLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        updatePath()
-    }
-
-#if NARWHAL_ENABLE_VERIFIERS
-    func debugGeometrySnapshot() -> FocusBorderDebugGeometrySnapshot? {
-        layoutSubtreeIfNeeded()
-        guard let path = shapeLayer.path else {
-            return nil
-        }
-        return FocusBorderDebugGeometrySnapshot(
-            strokeRect: strokeRect,
-            requestedCornerRadius: cornerRadius,
-            renderedCornerRadius: renderedCornerRadius,
-            pathBoundingBox: path.boundingBox
-        )
-    }
-#endif
-
-    private func updatePath() {
-        shapeLayer.frame = bounds
-        let strokeInset = border.width / 2
-        let rect = bounds.insetBy(dx: strokeInset, dy: strokeInset)
-        let radius = min(cornerRadius, max(0, Double(min(rect.width, rect.height)) / 2))
-        strokeRect = rect
-        renderedCornerRadius = radius
-        shapeLayer.path = CGPath(
-            roundedRect: rect,
-            cornerWidth: radius,
-            cornerHeight: radius,
-            transform: nil
-        )
-    }
-}
-
 private func describe(_ key: KeySpec) -> String {
     let modifiers = [
         key.modifiers.contains(.control) ? "control" : nil,
@@ -2599,19 +2415,6 @@ private func formatDelta(_ delta: Double) -> String {
     return String(format: "%.2f", delta)
         .trimmingCharacters(in: CharacterSet(charactersIn: "0"))
         .trimmingCharacters(in: CharacterSet(charactersIn: "."))
-}
-
-private extension NSColor {
-    convenience init?(hexRGB: String) {
-        let raw = hexRGB.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-        guard raw.count == 6, let value = UInt32(raw, radix: 16) else { return nil }
-        self.init(
-            srgbRed: CGFloat((value >> 16) & 0xFF) / 255.0,
-            green: CGFloat((value >> 8) & 0xFF) / 255.0,
-            blue: CGFloat(value & 0xFF) / 255.0,
-            alpha: 1
-        )
-    }
 }
 
 private extension CGRect {
