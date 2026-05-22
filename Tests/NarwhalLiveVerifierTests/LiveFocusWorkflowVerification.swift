@@ -1,4 +1,5 @@
 #if NARWHAL_ENABLE_VERIFIERS
+@testable import NarwhalAppRuntime
 import AppKit
 import CoreGraphics
 import Darwin
@@ -579,21 +580,28 @@ enum LiveFocusWorkflowVerification {
     private static func requireWindowServerOrder(
         above: Int,
         below: Int,
-        context: String
+        context: String,
+        timeout: TimeInterval = 0.6
     ) throws {
-        let ordered = frontToBackWindowNumbers()
-        guard let aboveIndex = ordered.firstIndex(of: above),
-              let belowIndex = ordered.firstIndex(of: below)
-        else {
-            throw LiveFocusWorkflowFailure(
-                "\(context) windows are not visible in window-server order: above=\(above) below=\(below)"
-            )
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastFailure = "\(context) windows are not visible in window-server order: above=\(above) below=\(below)"
+        while Date() < deadline {
+            let ordered = frontToBackWindowNumbers()
+            guard let aboveIndex = ordered.firstIndex(of: above),
+                  let belowIndex = ordered.firstIndex(of: below)
+            else {
+                lastFailure = "\(context) windows are not visible in window-server order: above=\(above) below=\(below)"
+                RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+                continue
+            }
+            guard aboveIndex < belowIndex else {
+                lastFailure = "\(context) failed stack order: aboveIndex=\(aboveIndex) belowIndex=\(belowIndex)"
+                RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+                continue
+            }
+            return
         }
-        guard aboveIndex < belowIndex else {
-            throw LiveFocusWorkflowFailure(
-                "\(context) failed stack order: aboveIndex=\(aboveIndex) belowIndex=\(belowIndex)"
-            )
-        }
+        throw LiveFocusWorkflowFailure(lastFailure)
     }
 
     private static func requireLiveWindowNotFront(
@@ -979,7 +987,7 @@ private final class LiveFocusWindow {
     private(set) var metadata: WindowMetadata
 
     var windowNumber: Int {
-        Int(id.raw)
+        window.windowNumber
     }
 
     init(id: WindowID, window: NSWindow, metadata: WindowMetadata) {

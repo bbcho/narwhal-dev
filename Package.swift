@@ -35,9 +35,13 @@ let package = Package(
             name: "NarwhalAppSupport",
             dependencies: ["NarwhalCore"]
         ),
+        .target(
+            name: "NarwhalAppRuntime",
+            dependencies: ["NarwhalCore", "NarwhalIPC", "NarwhalAppSupport", "CLua"]
+        ),
         .executableTarget(
             name: "NarwhalApp",
-            dependencies: ["NarwhalCore", "NarwhalIPC", "NarwhalAppSupport", "CLua"]
+            dependencies: ["NarwhalAppRuntime"]
         ),
         .executableTarget(
             name: "NarwhalCtl",
@@ -61,6 +65,15 @@ let package = Package(
         .testTarget(
             name: "NarwhalAppSupportTests",
             dependencies: [
+                "NarwhalCore",
+                "NarwhalAppSupport",
+                .product(name: "Testing", package: "swift-testing")
+            ]
+        ),
+        .testTarget(
+            name: "NarwhalLiveVerifierTests",
+            dependencies: [
+                "NarwhalAppRuntime",
                 "NarwhalCore",
                 "NarwhalAppSupport",
                 .product(name: "Testing", package: "swift-testing")

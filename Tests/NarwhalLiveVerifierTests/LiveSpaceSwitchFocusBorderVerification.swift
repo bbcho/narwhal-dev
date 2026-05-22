@@ -1,4 +1,5 @@
 #if NARWHAL_ENABLE_VERIFIERS
+@testable import NarwhalAppRuntime
 import AppKit
 import CoreGraphics
 import Foundation

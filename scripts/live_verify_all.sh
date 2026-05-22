@@ -6,45 +6,25 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 
 cd "$repo_root"
 export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/narwhal-clang-module-cache}"
+export NARWHAL_RUN_LIVE_VERIFIERS=1
 
-run_required() {
-  local flag="$1"
-  echo "==> swift run -Xswiftc -DNARWHAL_ENABLE_VERIFIERS NarwhalApp $flag"
-  swift run --disable-sandbox -Xswiftc -DNARWHAL_ENABLE_VERIFIERS NarwhalApp "$flag"
-  sleep 0.2
-}
+log_file="$(mktemp "${TMPDIR:-/tmp}/narwhal-live-verify.XXXXXX")"
+trap 'rm -f "$log_file"' EXIT
 
-run_optional_multi_display() {
-  local output
-  echo "==> swift run -Xswiftc -DNARWHAL_ENABLE_VERIFIERS NarwhalApp --verify-live-multi-display"
-  set +e
-  output="$(swift run --disable-sandbox -Xswiftc -DNARWHAL_ENABLE_VERIFIERS NarwhalApp --verify-live-multi-display 2>&1)"
-  local status="$?"
-  set -e
-  printf '%s\n' "$output"
-  if [ "$status" -eq 0 ]; then
-    sleep 0.2
-    return 0
-  fi
-  if printf '%s\n' "$output" | grep -Eq 'requires at least two displays|requires two usable displays'; then
-    echo "live multi-display verifier skipped on this machine"
-    sleep 0.2
-    return 0
-  fi
-  return "$status"
-}
+swift test \
+  --disable-sandbox \
+  -Xswiftc -DNARWHAL_ENABLE_VERIFIERS \
+  --filter NarwhalLiveVerifierTests.LiveAppKitVerifierTests \
+  2>&1 | tee "$log_file"
 
-run_required --verify-command-overlay-layout
-run_required --verify-focus-border-radius
-run_required --verify-menubar-icon
-run_required --verify-observation-replay
-run_required --verify-workspace-scope
-run_optional_multi_display
-run_required --verify-focused-unavailable-polling
-run_required --verify-space-focus-recovery
-run_required --verify-live-space-switch-focus-border
-run_required --verify-display-change-focus-border
-run_required --verify-live-focus-workflow
-run_required --verify-live-command-workflows
+if grep -Eq 'No matching test cases were run|Test run with 0 tests' "$log_file"; then
+  echo "live_verify_all failed: no live verifier tests ran" >&2
+  exit 1
+fi
+
+if grep -Eq '✘|recorded an issue|Test run .* failed| failed after .* issue' "$log_file"; then
+  echo "live_verify_all failed: at least one live verifier failed" >&2
+  exit 1
+fi
 
 echo "live_verify_all passed"

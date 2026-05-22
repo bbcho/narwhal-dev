@@ -33,7 +33,13 @@ private enum ServiceStartupRequestError: Error, CustomStringConvertible {
     }
 }
 
-@main
+@MainActor
+public enum NarwhalApplication {
+    public static func main() {
+        AppDelegate.main()
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let instance = AppDelegate()
@@ -80,73 +86,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-#if NARWHAL_ENABLE_VERIFIERS
-        if ProcessInfo.processInfo.arguments.contains("--verify-command-overlay-layout") {
-            let result = CommandOverlayVerification.verifyDefaultTwoColumnLayout()
-            print(result.message)
-            Darwin.exit(result.passed ? 0 : 1)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--verify-focus-border-radius") {
-            let result = FocusBorderVerification.verifyPerWindowCornerRadii()
-            print(result.message)
-            Darwin.exit(result.passed ? 0 : 1)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--verify-menubar-icon") {
-            let result = MenubarIconVerification.verifyStatusItemUsesToolbarIcon()
-            print(result.message)
-            Darwin.exit(result.passed ? 0 : 1)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--verify-observation-replay") {
-            let result = ObservationReplayVerification.verifyPartialTopologyReplay()
-            print(result.message)
-            Darwin.exit(result.passed ? 0 : 1)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--verify-workspace-scope") {
-            let result = WorkspaceScopeVerification.verifyFocusedCommandsStayOnOneDisplay()
-            print(result.message)
-            Darwin.exit(result.passed ? 0 : 1)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--verify-live-multi-display") {
-            let result = LiveMultiDisplayVerification.verifyDisplayScopedPushAndCycle()
-            print(result.message)
-            Darwin.exit(result.passed ? 0 : 1)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--verify-focused-unavailable-polling") {
-            let result = FocusedUnavailablePollingVerification.verifyUnavailableFocusIsNotLoggedEveryPoll()
-            print(result.message)
-            Darwin.exit(result.passed ? 0 : 1)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--verify-space-focus-recovery") {
-            let result = SpaceFocusRecoveryVerification.verifyWorkspaceFocusFallbackMovesOnlyActiveSpace()
-            print(result.message)
-            Darwin.exit(result.passed ? 0 : 1)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--verify-live-space-switch-focus-border") {
-            let result = LiveSpaceSwitchFocusBorderVerification.verifyFocusBorderMovesAcrossRealSpaceSwitch()
-            print(result.message)
-            Darwin.exit(result.passed ? 0 : 1)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--verify-display-change-focus-border") {
-            let result = DisplayChangeFocusBorderVerification.verifyDisplayChangePreservesVisibleFocusBorder()
-            print(result.message)
-            Darwin.exit(result.passed ? 0 : 1)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--verify-live-focus-workflow") {
-            let result = LiveFocusWorkflowVerification.verifyCycleMouseAndBorderWorkflow()
-            print(result.message)
-            Darwin.exit(result.passed ? 0 : 1)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--verify-live-command-workflows") {
-            let result = LiveCommandWorkflowVerification.verifyCommandWorkflows()
-            print(result.message)
-            Darwin.exit(result.passed ? 0 : 1)
-        }
-#else
         if let verifierFlag = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--verify-") }) {
             print("NarwhalApp was built without verifier support; rerun \(verifierFlag) through scripts/live_verify_all.sh")
             Darwin.exit(2)
         }
-#endif
         app.delegate = instance
         app.run()
     }

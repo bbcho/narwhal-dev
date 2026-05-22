@@ -31,7 +31,7 @@ final class Overlay {
     private var dragPreviewWindow: NSWindow?
     private var dragPreviewView: DragPreviewView?
     private var focusBorderSuppression: FocusBorderSuppression?
-    private var focusBorderRestackTask: Task<Void, Never>?
+    private var focusBorderRestackTimers: [Timer] = []
     private var visibleWindowID: WindowID?
 
     init(border: BorderConfig, hud: HUDConfig) {
@@ -194,11 +194,11 @@ final class Overlay {
         }
         view.update(border: borderConfig, cornerRadius: target.cornerRadius)
         window.setFrame(appKitFrame, display: true)
+        borderWindow = window
+        visibleWindowID = target.windowID
         orderFocusBorderWindow(window, above: target.windowID)
         orderUnfocusedTiledBordersBelowFocusedWindow(target)
         scheduleFocusBorderRestacks(above: target.windowID)
-        borderWindow = window
-        visibleWindowID = target.windowID
     }
 
     private func showTiledBorder(_ target: FocusBorderTarget) {
@@ -228,8 +228,7 @@ final class Overlay {
     }
 
     private func hideFocusBorder() {
-        focusBorderRestackTask?.cancel()
-        focusBorderRestackTask = nil
+        cancelFocusBorderRestacks()
         borderWindow?.orderOut(nil)
         visibleWindowID = nil
     }
@@ -284,33 +283,36 @@ final class Overlay {
         if let tiledBorderWindow = tiledBorderWindows[targetWindowID] {
             orderTiledBorderWindow(tiledBorderWindow, above: targetWindowID)
             window.level = tiledBorderWindow.level
-            window.order(.above, relativeTo: tiledBorderWindow.windowNumber)
         } else {
             window.level = windowLevelMatchingTarget(targetWindowID)
-            window.order(.above, relativeTo: Int(targetWindowID.raw))
         }
+        window.orderFrontRegardless()
     }
 
     private func scheduleFocusBorderRestacks(above targetWindowID: WindowID) {
-        focusBorderRestackTask?.cancel()
-        focusBorderRestackTask = Task { [weak self] in
-            for delay in [50_000_000, 150_000_000, 350_000_000] {
-                do {
-                    try await Task.sleep(nanoseconds: UInt64(delay))
-                } catch {
-                    return
-                }
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard let self,
-                          self.visibleWindowID == targetWindowID,
-                          let borderWindow = self.borderWindow,
-                          borderWindow.isVisible
-                    else { return }
-                    self.orderFocusBorderWindow(borderWindow, above: targetWindowID)
+        cancelFocusBorderRestacks()
+        focusBorderRestackTimers = [0.05, 0.15, 0.30].map { delay in
+            let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.restackFocusBorderIfCurrent(above: targetWindowID)
                 }
             }
+            RunLoop.main.add(timer, forMode: .common)
+            return timer
         }
+    }
+
+    private func cancelFocusBorderRestacks() {
+        focusBorderRestackTimers.forEach { $0.invalidate() }
+        focusBorderRestackTimers.removeAll()
+    }
+
+    private func restackFocusBorderIfCurrent(above targetWindowID: WindowID) {
+        guard visibleWindowID == targetWindowID,
+              let borderWindow,
+              borderWindow.isVisible
+        else { return }
+        orderFocusBorderWindow(borderWindow, above: targetWindowID)
     }
 
     private func makeTiledBorderWindow(frame: CGRect) -> NSWindow {
