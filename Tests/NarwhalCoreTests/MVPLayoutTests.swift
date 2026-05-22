@@ -333,8 +333,8 @@ struct MVPLayoutTests {
         let ejected = ejectFromTree(window, pushIntoTree(window, .left, .void))
 
         guard case .split(let split) = ejected else {
-            Issue.record("Expected eject to preserve the split shape")
-            return
+            #expect(Bool(false), "Expected eject to preserve the split shape")
+            throw TestAbort()
         }
 
         #expect(split.axis == .horizontal)
@@ -966,10 +966,10 @@ struct MVPLayoutTests {
             apply(.windowResizedExternally(window, resizedFrame.size), to: world),
             "Expected external resize to succeed"
         )
-        guard case .success(let targets) = tiledBorderTargets(of: resized) else {
-            Issue.record("Expected tiled border target calculation to succeed")
-            return
-        }
+        let targets = try requireSuccess(
+            tiledBorderTargets(of: resized),
+            "Expected tiled border target calculation to succeed"
+        )
 
         #expect(targets.map(\.windowID) == [window])
         #expect(targets.first?.frame == resizedFrame)
@@ -1087,10 +1087,10 @@ struct MVPLayoutTests {
             try cell(weight: 1, node: .leaf(second))
         ]))
 
-        guard case .success(let resized) = resizeSplitInTree(first, .right, delta: 0.5, tree) else {
-            Issue.record("Expected resize to succeed")
-            return
-        }
+        let resized = try requireSuccess(
+            resizeSplitInTree(first, .right, delta: 0.5, tree),
+            "Expected resize to succeed"
+        )
 
         #expect(resized == Node.split(try split(axis: .horizontal, cells: [
             try cell(weight: 1.5, node: .leaf(first)),
@@ -1119,14 +1119,14 @@ struct MVPLayoutTests {
             try cell(weight: 1, node: .leaf(second))
         ]))
 
-        guard case .success(let resizedDown) = resizeSplitInTree(first, .down, delta: 0.25, tree) else {
-            Issue.record("Expected vertical resize to succeed")
-            return
-        }
-        guard case .success(let resizedRight) = resizeSplitInTree(first, .right, delta: 0.5, tree) else {
-            Issue.record("Expected ancestor horizontal resize to succeed")
-            return
-        }
+        let resizedDown = try requireSuccess(
+            resizeSplitInTree(first, .down, delta: 0.25, tree),
+            "Expected vertical resize to succeed"
+        )
+        let resizedRight = try requireSuccess(
+            resizeSplitInTree(first, .right, delta: 0.5, tree),
+            "Expected ancestor horizontal resize to succeed"
+        )
 
         #expect(resizedDown == Node.split(try split(axis: .horizontal, cells: [
             try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
@@ -2436,14 +2436,11 @@ struct MVPLayoutTests {
         )
 
         var generator = SeededGenerator(seed: 1)
-        guard case .success(let shuffled) = shuffledResetLayout(in: world, using: &generator) else {
-            Issue.record("Expected shuffled reset layout to succeed")
-            return
-        }
-        guard case .success(let cascaded) = cascadeResetLayout(in: world) else {
-            Issue.record("Expected cascade reset layout to succeed")
-            return
-        }
+        let shuffled = try requireSuccess(
+            shuffledResetLayout(in: world, using: &generator),
+            "Expected shuffled reset layout to succeed"
+        )
+        let cascaded = try requireSuccess(cascadeResetLayout(in: world), "Expected cascade reset layout to succeed")
 
         #expect(Set(shuffled.tiled.keys) == [activeTiled, activeFloating])
         #expect(Set(cascaded.tiled.keys) == [activeTiled, activeFloating])
@@ -2629,10 +2626,10 @@ struct MVPLayoutTests {
         #expect(focusedSpaceFour.spaces[spaceFour]?.focused == spaceFourFloating)
 
         var shuffleGenerator = SeededGenerator(seed: 2)
-        guard case .success(let spaceFourShuffle) = shuffledResetLayout(in: focusedSpaceFour, using: &shuffleGenerator) else {
-            Issue.record("Expected Space 4 shuffle plan to succeed")
-            return
-        }
+        let spaceFourShuffle = try requireSuccess(
+            shuffledResetLayout(in: focusedSpaceFour, using: &shuffleGenerator),
+            "Expected Space 4 shuffle plan to succeed"
+        )
         #expect(Set(spaceFourShuffle.tiled.keys) == Set(spaceFourWindows))
         #expect(spaceFourShuffle.tiled[spaceThreeLeft] == nil)
         #expect(spaceFourShuffle.tiled[spaceThreeRight] == nil)
@@ -2707,10 +2704,10 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let pending) = pendingTileRuleApplications(in: world) else {
-            Issue.record("Expected pending tile rule applications to resolve")
-            return
-        }
+        let pending = try requireSuccess(
+            pendingTileRuleApplications(in: world),
+            "Expected pending tile rule applications to resolve"
+        )
 
         #expect(pending.map(\.0) == [activePending])
     }
@@ -3043,8 +3040,8 @@ struct MVPLayoutTests {
         )
 
         guard case .failure(let error) = apply(.push(window, .left), to: world) else {
-            Issue.record("Expected push without active Space to fail")
-            return
+            #expect(Bool(false), "Expected push without active Space to fail")
+            throw TestAbort()
         }
 
         #expect(error == .activeSpaceUnavailable)
@@ -3489,13 +3486,7 @@ struct MVPLayoutTests {
     }
 
     private func requireWorld(_ result: Result<World, CommandError>, _ message: String) throws -> World {
-        switch result {
-        case .success(let world):
-            return world
-        case .failure(let error):
-            #expect(Bool(false), "\(message): \(error.message)")
-            throw error
-        }
+        try requireSuccess(result, message, describeError: \.message)
     }
 
     private func requireSpace(_ world: World, _ spaceID: SpaceID, _ message: String) throws -> SpaceState {
@@ -3507,11 +3498,19 @@ struct MVPLayoutTests {
     }
 
     private func requireLayout(_ result: Result<Layout, UnsatisfiableLayout>, _ message: String) throws -> Layout {
+        try requireSuccess(result, message)
+    }
+
+    private func requireSuccess<Success, Failure: Error>(
+        _ result: Result<Success, Failure>,
+        _ message: String,
+        describeError: (Failure) -> String = { String(describing: $0) }
+    ) throws -> Success {
         switch result {
-        case .success(let layout):
-            return layout
+        case .success(let value):
+            return value
         case .failure(let error):
-            #expect(Bool(false), "\(message): \(error)")
+            #expect(Bool(false), "\(message): \(describeError(error))")
             throw error
         }
     }
