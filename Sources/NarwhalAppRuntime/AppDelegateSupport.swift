@@ -7,7 +7,7 @@ extension WindowConstraints {
     }
 }
 
-struct CommandExecutionFailure {
+struct CommandExecutionFailure: Error {
     let code: String
     let message: String
 }

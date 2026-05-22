@@ -2336,30 +2336,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshReason: String,
         persistReason: String
     ) async -> CommandExecutionFailure? {
-        guard AccessibilityTrust.current(prompt: false).isTrusted else {
-            return CommandExecutionFailure(
-                code: "accessibility_not_trusted",
-                message: "Accessibility permission is not trusted"
-            )
+        switch await requireIPCPlanningEnvironment(operation: operation, refreshReason: refreshReason) {
+        case .success(let activeSpace):
+            reporter.info("\(operation) selected active Space \(activeSpace.raw)")
+        case .failure(let failure):
+            return failure
         }
 
-        let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(
-            reason: refreshReason,
-            displays: displays,
-            reconciliationMode: .observeOnly
-        )
-        guard let activeSpace = environment.activeSpace else {
-            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
-        }
-        guard case .complete = environment.quality else {
-            return CommandExecutionFailure(
-                code: "environment_incomplete",
-                message: "\(operation) requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
-            )
-        }
-
-        reporter.info("\(operation) selected active Space \(activeSpace.raw)")
         switch await worldActor.planBalanceActiveSpace() {
         case .success(let result):
             if await applyPlannedBalance(
@@ -2383,184 +2366,123 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func performExplicitPush(windowID: WindowID, direction: Direction) async -> CommandExecutionFailure? {
+    private func requireIPCPlanningEnvironment(
+        operation: String,
+        refreshReason: String
+    ) async -> Result<SpaceID, CommandExecutionFailure> {
         guard AccessibilityTrust.current(prompt: false).isTrusted else {
-            return CommandExecutionFailure(
+            return .failure(CommandExecutionFailure(
                 code: "accessibility_not_trusted",
                 message: "Accessibility permission is not trusted"
-            )
+            ))
         }
 
         let displays = displayClient.currentDisplays()
         let environment = await refreshEnvironment(
-            reason: "ipc push \(direction.rawValue)",
+            reason: refreshReason,
             displays: displays,
             reconciliationMode: .observeOnly
         )
-        guard environment.activeSpace != nil else {
-            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
+        guard let activeSpace = environment.activeSpace else {
+            return .failure(CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable"))
         }
         guard case .complete = environment.quality else {
-            return CommandExecutionFailure(
+            return .failure(CommandExecutionFailure(
                 code: "environment_incomplete",
-                message: "IPC push requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
-            )
+                message: "\(operation) requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
+            ))
+        }
+        return .success(activeSpace)
+    }
+
+    @MainActor
+    private func performExplicitLayoutPlan(
+        operation: String,
+        refreshReason: String,
+        applyFailureMessage: String,
+        plan: () async -> Result<CommandPlanResult, CommandError>,
+        apply: (CommandPlanResult) async -> Bool
+    ) async -> CommandExecutionFailure? {
+        if case .failure(let failure) = await requireIPCPlanningEnvironment(
+            operation: operation,
+            refreshReason: refreshReason
+        ) {
+            return failure
         }
 
-        switch await worldActor.planPush(windowID, direction: direction) {
+        switch await plan() {
         case .success(let result):
-            if await applyPlannedPush(result, direction: direction, retryOnClamp: true) {
+            if await apply(result) {
                 return nil
             }
             return CommandExecutionFailure(
                 code: "apply_failed",
-                message: "Push \(direction.rawValue) layout write failed; see NarwhalApp log"
+                message: applyFailureMessage
             )
         case .failure(let error):
             return CommandExecutionFailure(code: error.code, message: error.message)
         }
+    }
+
+    @MainActor
+    private func performExplicitPush(windowID: WindowID, direction: Direction) async -> CommandExecutionFailure? {
+        await performExplicitLayoutPlan(
+            operation: "IPC push",
+            refreshReason: "ipc push \(direction.rawValue)",
+            applyFailureMessage: "Push \(direction.rawValue) layout write failed; see NarwhalApp log",
+            plan: { await self.worldActor.planPush(windowID, direction: direction) },
+            apply: { result in
+                await self.applyPlannedPush(result, direction: direction, retryOnClamp: true)
+            }
+        )
     }
 
     @MainActor
     private func performExplicitCenter(windowID: WindowID) async -> CommandExecutionFailure? {
-        guard AccessibilityTrust.current(prompt: false).isTrusted else {
-            return CommandExecutionFailure(
-                code: "accessibility_not_trusted",
-                message: "Accessibility permission is not trusted"
-            )
-        }
-
-        let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(
-            reason: "ipc center",
-            displays: displays,
-            reconciliationMode: .observeOnly
-        )
-        guard environment.activeSpace != nil else {
-            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
-        }
-        guard case .complete = environment.quality else {
-            return CommandExecutionFailure(
-                code: "environment_incomplete",
-                message: "IPC center requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
-            )
-        }
-
-        switch await worldActor.planCenter(windowID) {
-        case .success(let result):
-            if await applyPlannedCenter(result, windowID: windowID, retryOnClamp: true) {
-                return nil
+        await performExplicitLayoutPlan(
+            operation: "IPC center",
+            refreshReason: "ipc center",
+            applyFailureMessage: "Center layout write failed; see NarwhalApp log",
+            plan: { await self.worldActor.planCenter(windowID) },
+            apply: { result in
+                await self.applyPlannedCenter(result, windowID: windowID, retryOnClamp: true)
             }
-            return CommandExecutionFailure(
-                code: "apply_failed",
-                message: "Center layout write failed; see NarwhalApp log"
-            )
-        case .failure(let error):
-            return CommandExecutionFailure(code: error.code, message: error.message)
-        }
+        )
     }
 
     @MainActor
     private func performExplicitEject(windowID: WindowID) async -> CommandExecutionFailure? {
-        guard AccessibilityTrust.current(prompt: false).isTrusted else {
-            return CommandExecutionFailure(
-                code: "accessibility_not_trusted",
-                message: "Accessibility permission is not trusted"
-            )
-        }
-
-        let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(
-            reason: "ipc eject",
-            displays: displays,
-            reconciliationMode: .observeOnly
-        )
-        guard environment.activeSpace != nil else {
-            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
-        }
-        guard case .complete = environment.quality else {
-            return CommandExecutionFailure(
-                code: "environment_incomplete",
-                message: "IPC eject requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
-            )
-        }
-
-        switch await worldActor.planEject(windowID) {
-        case .success(let result):
-            if await applyPlannedEject(result, windowID: windowID, retryOnClamp: true) {
-                return nil
+        await performExplicitLayoutPlan(
+            operation: "IPC eject",
+            refreshReason: "ipc eject",
+            applyFailureMessage: "Eject layout write failed; see NarwhalApp log",
+            plan: { await self.worldActor.planEject(windowID) },
+            apply: { result in
+                await self.applyPlannedEject(result, windowID: windowID, retryOnClamp: true)
             }
-            return CommandExecutionFailure(
-                code: "apply_failed",
-                message: "Eject layout write failed; see NarwhalApp log"
-            )
-        case .failure(let error):
-            return CommandExecutionFailure(code: error.code, message: error.message)
-        }
+        )
     }
 
     @MainActor
     private func performExplicitToggleFloat(windowID: WindowID) async -> CommandExecutionFailure? {
-        guard AccessibilityTrust.current(prompt: false).isTrusted else {
-            return CommandExecutionFailure(
-                code: "accessibility_not_trusted",
-                message: "Accessibility permission is not trusted"
-            )
-        }
-
-        let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(
-            reason: "ipc toggle float",
-            displays: displays,
-            reconciliationMode: .observeOnly
-        )
-        guard environment.activeSpace != nil else {
-            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
-        }
-        guard case .complete = environment.quality else {
-            return CommandExecutionFailure(
-                code: "environment_incomplete",
-                message: "IPC toggleFloat requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
-            )
-        }
-
-        switch await worldActor.planToggleFloat(windowID) {
-        case .success(let result):
-            if await applyPlannedToggleFloat(result, windowID: windowID, retryOnClamp: true) {
-                return nil
+        await performExplicitLayoutPlan(
+            operation: "IPC toggleFloat",
+            refreshReason: "ipc toggle float",
+            applyFailureMessage: "Toggle float layout write failed; see NarwhalApp log",
+            plan: { await self.worldActor.planToggleFloat(windowID) },
+            apply: { result in
+                await self.applyPlannedToggleFloat(result, windowID: windowID, retryOnClamp: true)
             }
-            return CommandExecutionFailure(
-                code: "apply_failed",
-                message: "Toggle float layout write failed; see NarwhalApp log"
-            )
-        case .failure(let error):
-            return CommandExecutionFailure(code: error.code, message: error.message)
-        }
+        )
     }
 
     @MainActor
     private func performExplicitFocus(windowID: WindowID) async -> CommandExecutionFailure? {
-        guard AccessibilityTrust.current(prompt: false).isTrusted else {
-            return CommandExecutionFailure(
-                code: "accessibility_not_trusted",
-                message: "Accessibility permission is not trusted"
-            )
-        }
-
-        let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(
-            reason: "ipc focus",
-            displays: displays,
-            reconciliationMode: .observeOnly
-        )
-        guard environment.activeSpace != nil else {
-            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
-        }
-        guard case .complete = environment.quality else {
-            return CommandExecutionFailure(
-                code: "environment_incomplete",
-                message: "IPC focus requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
-            )
+        if case .failure(let failure) = await requireIPCPlanningEnvironment(
+            operation: "IPC focus",
+            refreshReason: "ipc focus"
+        ) {
+            return failure
         }
 
         switch await worldActor.planFocus(windowID) {
@@ -2579,41 +2501,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func performExplicitSwap(windowID: WindowID, direction: Direction) async -> CommandExecutionFailure? {
-        guard AccessibilityTrust.current(prompt: false).isTrusted else {
-            return CommandExecutionFailure(
-                code: "accessibility_not_trusted",
-                message: "Accessibility permission is not trusted"
-            )
-        }
-
-        let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(
-            reason: "ipc swap \(direction.rawValue)",
-            displays: displays,
-            reconciliationMode: .observeOnly
-        )
-        guard environment.activeSpace != nil else {
-            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
-        }
-        guard case .complete = environment.quality else {
-            return CommandExecutionFailure(
-                code: "environment_incomplete",
-                message: "IPC swap requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
-            )
-        }
-
-        switch await worldActor.planSwap(windowID, direction: direction) {
-        case .success(let result):
-            if await applyPlannedSwap(result, windowID: windowID, direction: direction, retryOnClamp: true) {
-                return nil
+        await performExplicitLayoutPlan(
+            operation: "IPC swap",
+            refreshReason: "ipc swap \(direction.rawValue)",
+            applyFailureMessage: "Swap \(direction.rawValue) layout write failed; see NarwhalApp log",
+            plan: { await self.worldActor.planSwap(windowID, direction: direction) },
+            apply: { result in
+                await self.applyPlannedSwap(result, windowID: windowID, direction: direction, retryOnClamp: true)
             }
-            return CommandExecutionFailure(
-                code: "apply_failed",
-                message: "Swap \(direction.rawValue) layout write failed; see NarwhalApp log"
-            )
-        case .failure(let error):
-            return CommandExecutionFailure(code: error.code, message: error.message)
-        }
+        )
     }
 
     @MainActor
@@ -2622,47 +2518,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         direction: Direction,
         delta: Double
     ) async -> CommandExecutionFailure? {
-        guard AccessibilityTrust.current(prompt: false).isTrusted else {
-            return CommandExecutionFailure(
-                code: "accessibility_not_trusted",
-                message: "Accessibility permission is not trusted"
-            )
-        }
-
-        let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(
-            reason: "ipc resize \(direction.rawValue)",
-            displays: displays,
-            reconciliationMode: .observeOnly
-        )
-        guard environment.activeSpace != nil else {
-            return CommandExecutionFailure(code: "active_space_unavailable", message: "active Space unavailable")
-        }
-        guard case .complete = environment.quality else {
-            return CommandExecutionFailure(
-                code: "environment_incomplete",
-                message: "IPC resize requires a complete AX snapshot; got \(AppDelegateText.describe(environment.quality))"
-            )
-        }
-
-        switch await worldActor.planResize(windowID, direction: direction, delta: delta) {
-        case .success(let result):
-            if await applyPlannedResize(
-                result,
-                windowID: windowID,
-                direction: direction,
-                delta: delta,
-                retryOnClamp: true
-            ) {
-                return nil
+        await performExplicitLayoutPlan(
+            operation: "IPC resize",
+            refreshReason: "ipc resize \(direction.rawValue)",
+            applyFailureMessage: "Resize \(direction.rawValue) layout write failed; see NarwhalApp log",
+            plan: { await self.worldActor.planResize(windowID, direction: direction, delta: delta) },
+            apply: { result in
+                await self.applyPlannedResize(
+                    result,
+                    windowID: windowID,
+                    direction: direction,
+                    delta: delta,
+                    retryOnClamp: true
+                )
             }
-            return CommandExecutionFailure(
-                code: "apply_failed",
-                message: "Resize \(direction.rawValue) layout write failed; see NarwhalApp log"
-            )
-        case .failure(let error):
-            return CommandExecutionFailure(code: error.code, message: error.message)
-        }
+        )
     }
 
     @MainActor
