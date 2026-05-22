@@ -281,13 +281,19 @@ public func restoreWorld(
         )
     }
 
-    let stored = validateStoredWorld(stored).successValue ?? .empty
+    let validatedStored: StoredWorld
+    switch validateStoredWorld(stored) {
+    case .success(let validStored):
+        validatedStored = validStored
+    case .failure:
+        validatedStored = .empty
+    }
     let matcher = RestoreMatcher(liveWindows: Array(windows.values))
     let storedSpaces: [(SpaceID, StoredSpace)]
-    if let workspaces = stored.workspaces, !workspaces.isEmpty {
+    if let workspaces = validatedStored.workspaces, !workspaces.isEmpty {
         storedSpaces = workspaces.map { ($0.spaceID, $0.space) }
     } else {
-        storedSpaces = stored.activeSpace.map { [(activeSpace, $0)] } ?? []
+        storedSpaces = validatedStored.activeSpace.map { [(activeSpace, $0)] } ?? []
     }
     let projection = restoreSpaces(storedSpaces, matcher: matcher, displays: displays)
     let windowDisplay = displayOwnership(for: windows.values, displays: displays)
@@ -912,12 +918,5 @@ private extension CGPoint {
         let dx = x - other.x
         let dy = y - other.y
         return dx * dx + dy * dy
-    }
-}
-
-private extension Result {
-    var successValue: Success? {
-        guard case .success(let value) = self else { return nil }
-        return value
     }
 }
