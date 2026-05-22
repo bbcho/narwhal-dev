@@ -37,14 +37,22 @@ struct StartupArgumentsTests {
     }
 
     @Test("Missing valued startup flags fail explicitly")
-    func missingValuedFlags() {
-        #expect(StartupArguments(raw: ["NarwhalApp", "--restore-state"]).restoreStateURL.failure == .missingRestoreStatePath)
+    func missingValuedFlags() throws {
+        #expect(
+            try requireFailure(StartupArguments(raw: ["NarwhalApp", "--restore-state"]).restoreStateURL)
+                == .missingRestoreStatePath
+        )
 
-        #expect(StartupArguments(raw: ["NarwhalApp", "--config"]).startupConfigRequest.isMissingConfigPathArgument)
+        switch try requireFailure(StartupArguments(raw: ["NarwhalApp", "--config"]).startupConfigRequest) {
+        case .missingConfigPathArgument:
+            break
+        case let error:
+            #expect(Bool(false), "Expected missing config path argument, got \(error.description)")
+        }
 
         let steps = StartupArguments(raw: ["NarwhalApp", "--debug-fail-service-start"])
             .serviceStartSteps([ServiceStartStep(name: "hotkeys") { {} }])
-        #expect(steps.failure == .startupArgument(.missingDebugFailServiceStartName))
+        #expect(try requireFailure(steps) == .startupArgument(.missingDebugFailServiceStartName))
     }
 
     @Test("Startup command preserves existing flag precedence")
@@ -68,9 +76,10 @@ struct StartupArgumentsTests {
         ).serviceStartSteps(steps).get()
         #expect(injected.map(\.name) == ["menubar", "hotkeys"])
 
-        let unknown = StartupArguments(raw: ["NarwhalApp", "--debug-fail-service-start", "missing"])
-            .serviceStartSteps(steps)
-            .failure
+        let unknown = try requireFailure(
+            StartupArguments(raw: ["NarwhalApp", "--debug-fail-service-start", "missing"])
+                .serviceStartSteps(steps)
+        )
         #expect(unknown == .failureInjection(.unknownService(requested: "missing", available: ["menubar", "hotkeys"])))
     }
 
@@ -81,16 +90,18 @@ struct StartupArgumentsTests {
     }
 }
 
-private extension Result {
-    var failure: Failure? {
-        guard case .failure(let error) = self else { return nil }
+private func requireFailure<Success, Failure: Error>(
+    _ result: Result<Success, Failure>
+) throws -> Failure {
+    switch result {
+    case .failure(let error):
         return error
+    case .success:
+        #expect(Bool(false), "Expected failure")
+        throw StartupArgumentsTestError.unexpectedSuccess
     }
 }
 
-private extension Result where Failure == StartupConfigError {
-    var isMissingConfigPathArgument: Bool {
-        guard case .failure(.missingConfigPathArgument) = self else { return false }
-        return true
-    }
+private enum StartupArgumentsTestError: Error {
+    case unexpectedSuccess
 }

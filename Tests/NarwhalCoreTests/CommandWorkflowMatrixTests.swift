@@ -46,8 +46,8 @@ struct CommandWorkflowMatrixTests {
 
             if count > 1 {
                 let focused = ids.last!
-                #expect(pushDirections.contains { apply(.swapInTree(focused, $0), to: world).isSuccess })
-                #expect(pushDirections.contains { apply(.resizeSplit(focused, $0, delta: 0.10), to: world).isSuccess })
+                #expect(pushDirections.contains { commandSucceeds(.swapInTree(focused, $0), in: world) })
+                #expect(pushDirections.contains { commandSucceeds(.resizeSplit(focused, $0, delta: 0.10), in: world) })
             }
 
             world = try applyRequired(.balance(SpaceID(raw: 1)), to: world, note: "balance count \(count)")
@@ -255,12 +255,12 @@ struct CommandWorkflowMatrixTests {
         )
     }
 
-    private struct WorkflowFailure: Error {}
-}
-
-private extension Result {
-    var isSuccess: Bool {
-        if case .success = self { return true }
+    private func commandSucceeds(_ command: Command, in world: World) -> Bool {
+        if case .success = apply(command, to: world) {
+            return true
+        }
         return false
     }
+
+    private struct WorkflowFailure: Error {}
 }

@@ -106,7 +106,12 @@ struct RestoreManagerTests {
             pendingRules: []
         )
         #expect(try decodeStoredWorldRestoreData(try encodeStoredWorldRestoreData(unsupported)).get() == nil)
-        #expect(decodeStoredWorldRestoreData(Data("not-json".utf8)).failureDescription?.hasPrefix("restore JSON decode failed:") == true)
+        switch decodeStoredWorldRestoreData(Data("not-json".utf8)) {
+        case .failure(let error):
+            #expect(error.description.hasPrefix("restore JSON decode failed:"))
+        case .success(let value):
+            #expect(Bool(false), "Expected decode failure, got \(String(describing: value))")
+        }
     }
 
     @Test("Restore save events are pure request projections")
@@ -401,12 +406,5 @@ private enum FakeRestoreSaveError: Error, CustomStringConvertible {
 
     var description: String {
         "boom"
-    }
-}
-
-private extension Result where Failure == RestoreManagerError {
-    var failureDescription: String? {
-        guard case .failure(let error) = self else { return nil }
-        return error.description
     }
 }
