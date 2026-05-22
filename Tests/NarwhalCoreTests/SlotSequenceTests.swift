@@ -11,17 +11,14 @@ struct SlotSequenceTests {
             let actualSlots = slots(in: tree)
             let actualFrames = framesFor(tree)
 
-            if actualSlots != expectation.slots {
-                Issue.record(
-                    "\(displayName(expectation.keys)) slots expected \(render(expectation.slots)) got \(render(actualSlots))"
-                )
-            }
-
-            if actualFrames != expectation.frames {
-                Issue.record(
-                    "\(displayName(expectation.keys)) frames expected \(render(expectation.frames)) got \(render(actualFrames))"
-                )
-            }
+            #expect(
+                actualSlots == expectation.slots,
+                "\(displayName(expectation.keys)) slots expected \(render(expectation.slots)) got \(render(actualSlots))"
+            )
+            #expect(
+                actualFrames == expectation.frames,
+                "\(displayName(expectation.keys)) frames expected \(render(expectation.frames)) got \(render(actualFrames))"
+            )
         }
     }
 
@@ -217,9 +214,7 @@ struct SlotSequenceTests {
         let display = CGRect(x: 0, y: 0, width: 1200, height: 800)
         let actual = sketch(framesBySlot(for: treeFor(keys), frame: display))
         let expected = expectedRows.joined(separator: " / ")
-        if actual != expected {
-            Issue.record("\(keys) sketch expected \(expected) got \(actual)")
-        }
+        #expect(actual == expected, "\(keys) sketch expected \(expected) got \(actual)")
     }
 
     private func sketch(_ slotFrames: [SlotFrame]) -> String {
