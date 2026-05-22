@@ -81,12 +81,12 @@ struct WorldUpdateModelTests {
             floating: []
         )
 
-        let updated = try #require(worldByUpsertingActiveWindow(
+        let updated = try requireSuccess(worldByUpsertingActiveWindow(
             metadata,
             displayID: displayID,
             displays: displays,
             in: world
-        ).successValue)
+        ))
 
         let workspaceKey = WorkspaceKey(displayID: displayID, spaceID: spaceID)
         #expect(updated.windows[metadata.id] == metadata)
@@ -110,12 +110,12 @@ struct WorldUpdateModelTests {
             floating: [metadata.id, metadata.id]
         )
 
-        let updated = try #require(worldByUpsertingActiveWindow(
+        let updated = try requireSuccess(worldByUpsertingActiveWindow(
             metadata,
             displayID: displayID,
             displays: displays,
             in: world
-        ).successValue)
+        ))
 
         #expect(updated.spaces[spaceID]?.displays[displayID]?.floating == [metadata.id])
     }
@@ -224,9 +224,11 @@ struct WorldUpdateModelTests {
     }
 }
 
-private extension Result {
-    var successValue: Success? {
-        guard case .success(let value) = self else { return nil }
+private func requireSuccess<Success, Failure: Error>(_ result: Result<Success, Failure>) throws -> Success {
+    switch result {
+    case .success(let value):
         return value
+    case .failure(let error):
+        throw error
     }
 }
