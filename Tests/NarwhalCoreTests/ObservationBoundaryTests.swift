@@ -300,14 +300,6 @@ struct ObservationBoundaryTests {
     }
 
     private func requireWorld(_ result: Result<World, CommandError>) throws -> World {
-        switch result {
-        case .success(let world):
-            return world
-        case .failure(let error):
-            Issue.record("Expected world mutation to succeed: \(error.message)")
-            throw TestAbort()
-        }
+        try result.get()
     }
-
-    private struct TestAbort: Error {}
 }
