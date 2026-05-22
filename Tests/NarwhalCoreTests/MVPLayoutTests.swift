@@ -371,20 +371,10 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.eject(second), to: world) else {
-            Issue.record("Expected eject to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.eject(second), to: world), "Expected eject to succeed")
 
         let nextTree = try #require(next.spaces[space]?.displays[display]?.tree)
-        let flattened: Layout
-        switch flattenedLayout(of: next) {
-        case .success(let layout):
-            flattened = layout
-        case .failure(let error):
-            Issue.record("Expected eject layout to remain satisfiable, got \(error)")
-            return
-        }
+        let flattened = try requireLayout(flattenedLayout(of: next), "Expected eject layout to remain satisfiable")
 
         #expect(slots(in: nextTree) == [
             TreeSlot(path: [0], occupancy: .occupied(first)),
@@ -422,10 +412,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.eject(window), to: world) else {
-            Issue.record("Expected ejecting an already-floating window to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.eject(window), to: world), "Expected ejecting an already-floating window to succeed")
 
         #expect(next.spaces[space]?.displays[display]?.tree == .void)
         #expect(next.spaces[space]?.displays[display]?.floating == [window])
@@ -488,10 +475,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.toggleFloat(second), to: world) else {
-            Issue.record("Expected toggleFloat to float the tiled window")
-            return
-        }
+        let next = try requireWorld(apply(.toggleFloat(second), to: world), "Expected toggleFloat to float the tiled window")
 
         let nextTree = try #require(next.spaces[space]?.displays[display]?.tree)
 
@@ -529,20 +513,10 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.toggleFloat(window), to: world) else {
-            Issue.record("Expected toggleFloat to tile the floating window")
-            return
-        }
+        let next = try requireWorld(apply(.toggleFloat(window), to: world), "Expected toggleFloat to tile the floating window")
 
         let nextTree = try #require(next.spaces[space]?.displays[display]?.tree)
-        let flattened: Layout
-        switch flattenedLayout(of: next) {
-        case .success(let layout):
-            flattened = layout
-        case .failure(let error):
-            Issue.record("Expected toggleFloat layout to remain satisfiable, got \(error)")
-            return
-        }
+        let flattened = try requireLayout(flattenedLayout(of: next), "Expected toggleFloat layout to remain satisfiable")
 
         #expect(slots(in: nextTree) == [
             TreeSlot(path: [0], occupancy: .empty),
@@ -575,10 +549,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.toggleFloat(window), to: world) else {
-            Issue.record("Expected toggleFloat to create the active Space")
-            return
-        }
+        let next = try requireWorld(apply(.toggleFloat(window), to: world), "Expected toggleFloat to create the active Space")
 
         let nextTree = try #require(next.spaces[space]?.displays[display]?.tree)
 
@@ -646,10 +617,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.focus(second), to: world) else {
-            Issue.record("Expected focus to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.focus(second), to: world), "Expected focus to succeed")
 
         #expect(next.spaces[space]?.focused == second)
         #expect(next.spaces[space]?.displays == world.spaces[space]?.displays)
@@ -677,10 +645,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.focus(window), to: world) else {
-            Issue.record("Expected focus to create active Space state")
-            return
-        }
+        let next = try requireWorld(apply(.focus(window), to: world), "Expected focus to create active Space state")
 
         #expect(next.spaces[space] == SpaceState(id: space, displays: [:], focused: window))
     }
