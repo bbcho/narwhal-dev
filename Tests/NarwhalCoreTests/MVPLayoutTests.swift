@@ -711,10 +711,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.focusDirection(.right), to: world) else {
-            Issue.record("Expected focusDirection to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.focusDirection(.right), to: world), "Expected focusDirection to succeed")
 
         #expect(next.spaces[space]?.focused == second)
         #expect(next.spaces[space]?.displays == world.spaces[space]?.displays)
@@ -797,10 +794,10 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.focusDirection(.right), to: world) else {
-            Issue.record("Expected focusDirection to use visible floating window frames")
-            return
-        }
+        let next = try requireWorld(
+            apply(.focusDirection(.right), to: world),
+            "Expected focusDirection to use visible floating window frames"
+        )
 
         #expect(next.spaces[space]?.focused == right)
         #expect(next.spaces[space]?.displays == world.spaces[space]?.displays)
@@ -838,14 +835,8 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.focusCycle(.next), to: world) else {
-            Issue.record("Expected next focus cycle to succeed")
-            return
-        }
-        guard case .success(let previous) = apply(.focusCycle(.previous), to: world) else {
-            Issue.record("Expected previous focus cycle to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.focusCycle(.next), to: world), "Expected next focus cycle to succeed")
+        let previous = try requireWorld(apply(.focusCycle(.previous), to: world), "Expected previous focus cycle to succeed")
 
         #expect(next.spaces[space]?.focused == topRight)
         #expect(previous.spaces[space]?.focused == bottomLeft)
@@ -893,10 +884,7 @@ struct MVPLayoutTests {
         )
         let movedFrame = CGRect(x: 1400, y: 80, width: 320, height: 280)
 
-        guard case .success(let next) = apply(.windowMovedExternally(window, movedFrame), to: world) else {
-            Issue.record("Expected external move to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.windowMovedExternally(window, movedFrame), to: world), "Expected external move to succeed")
 
         #expect(next.windows[window]?.frame == movedFrame)
         #expect(next.windows[other] == world.windows[other])
@@ -933,10 +921,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.windowResizedExternally(window, resizedFrame.size), to: world) else {
-            Issue.record("Expected external resize to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.windowResizedExternally(window, resizedFrame.size), to: world), "Expected external resize to succeed")
 
         #expect(next.windows[window]?.frame == resizedFrame)
         #expect(next.windowDisplay[window] == display)
@@ -977,10 +962,10 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let resized) = apply(.windowResizedExternally(window, resizedFrame.size), to: world) else {
-            Issue.record("Expected external resize to succeed")
-            return
-        }
+        let resized = try requireWorld(
+            apply(.windowResizedExternally(window, resizedFrame.size), to: world),
+            "Expected external resize to succeed"
+        )
         guard case .success(let targets) = tiledBorderTargets(of: resized) else {
             Issue.record("Expected tiled border target calculation to succeed")
             return
@@ -1068,10 +1053,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.balance(selectedSpace), to: world) else {
-            Issue.record("Expected balance to succeed")
-            return
-        }
+        let next = try requireWorld(apply(.balance(selectedSpace), to: world), "Expected balance to succeed")
 
         #expect(next.spaces[selectedSpace]?.displays[display]?.tree == Node.split(try split(axis: .horizontal, cells: [
             try cell(weight: 1, node: .leaf(first)),
@@ -1224,18 +1206,11 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        guard case .success(let next) = apply(.resizeSplit(first, .right, delta: 0.5), to: world) else {
-            Issue.record("Expected resizeSplit to succeed")
-            return
-        }
-        let flattened: Layout
-        switch flattenedLayout(of: next) {
-        case .success(let layout):
-            flattened = layout
-        case .failure(let error):
-            Issue.record("Expected resized layout to remain satisfiable, got \(error)")
-            return
-        }
+        let next = try requireWorld(
+            apply(.resizeSplit(first, .right, delta: 0.5), to: world),
+            "Expected resizeSplit to succeed"
+        )
+        let flattened = try requireLayout(flattenedLayout(of: next), "Expected resized layout to remain satisfiable")
 
         #expect(next.spaces[space]?.displays[display]?.tree == Node.split(try split(axis: .horizontal, cells: [
             try cell(weight: 1.5, node: .leaf(first)),
