@@ -60,10 +60,7 @@ struct ConfigTests {
 
     @Test("Lua config data parses to the exact default Config value")
     func luaConfigDataParsesToDefaultConfig() throws {
-        guard case .success(let config) = parseConfig(defaultLuaConfigData()) else {
-            Issue.record("Expected default LuaConfigData to parse")
-            return
-        }
+        let config = try parseConfig(defaultLuaConfigData()).get()
 
         #expect(config == Config.default)
     }
@@ -96,10 +93,7 @@ struct ConfigTests {
             "outer": .table(["top": .number(4), "left": .number(6), "bottom": .number(8), "right": .number(10)])
         ])
 
-        guard case .success(let config) = parseConfig(LuaConfigData(root: root)) else {
-            Issue.record("Expected custom LuaConfigData to parse")
-            return
-        }
+        let config = try parseConfig(LuaConfigData(root: root)).get()
 
         #expect(config == Config(
             keymap: customKeymap,
@@ -349,10 +343,7 @@ struct ConfigTests {
             ])
         ])
 
-        guard case .success(let config) = parseConfig(LuaConfigData(root: root)) else {
-            Issue.record("Expected rules to parse")
-            return
-        }
+        let config = try parseConfig(LuaConfigData(root: root)).get()
 
         #expect(config == Config(
             keymap: Config.default.keymap,
