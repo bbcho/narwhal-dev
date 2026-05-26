@@ -17,6 +17,12 @@ public enum WindowStackVisibilityDecision: Equatable, Sendable {
     case targetMissing
 }
 
+public enum TiledBorderTargetVisibilityDecision: Equatable, Sendable {
+    case show
+    case hideTargetMissing
+    case hideFrameMismatch(actual: CGRect)
+}
+
 public func windowStackVisibility(
     target: WindowID,
     frontToBackWindows: [WindowStackEntry],
@@ -32,6 +38,31 @@ public func windowStackVisibility(
         }
     }
     return .visible
+}
+
+public func tiledBorderTargetVisibility(
+    target: FocusBorderTarget,
+    liveWindows: [WindowStackEntry],
+    frameTolerance: CGFloat = 8
+) -> TiledBorderTargetVisibilityDecision {
+    guard let live = liveWindows.first(where: { $0.id == target.windowID }) else {
+        return .hideTargetMissing
+    }
+    guard framesApproximatelyMatch(live.frame, target.frame, minimumTolerance: frameTolerance) else {
+        return .hideFrameMismatch(actual: live.frame)
+    }
+    return .show
+}
+
+private func framesApproximatelyMatch(_ lhs: CGRect, _ rhs: CGRect, minimumTolerance: CGFloat) -> Bool {
+    let tolerance = max(
+        minimumTolerance,
+        min(lhs.width, lhs.height, rhs.width, rhs.height) * 0.04
+    )
+    return abs(lhs.origin.x - rhs.origin.x) <= tolerance
+        && abs(lhs.origin.y - rhs.origin.y) <= tolerance
+        && abs(lhs.size.width - rhs.size.width) <= tolerance
+        && abs(lhs.size.height - rhs.size.height) <= tolerance
 }
 
 private extension CGRect {

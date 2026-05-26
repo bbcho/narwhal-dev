@@ -5,7 +5,7 @@ common failure handling.
 
 ## Prerequisites
 
-- macOS 14 or newer.
+- macOS 26 or newer.
 - Xcode Command Line Tools or a compatible Swift toolchain.
 - Homebrew Lua:
 

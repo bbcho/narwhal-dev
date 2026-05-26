@@ -25,10 +25,15 @@ enum DisplayChangeFocusBorderVerification {
 
         let focusID = WindowID(raw: CGWindowID(focusWindow.windowNumber))
         let tiledID = WindowID(raw: CGWindowID(tiledWindow.windowNumber))
+        guard let liveFocusFrame = windowServerFrame(for: focusWindow.windowNumber),
+              let liveTiledFrame = windowServerFrame(for: tiledWindow.windowNumber)
+        else {
+            return (false, "display-change focus verifier could not read initial live window frames")
+        }
         var model = OverlayModel.empty
-            .showingFocusBorder(FocusBorderTarget(windowID: focusID, frame: focusFrame, cornerRadius: 15))
+            .showingFocusBorder(FocusBorderTarget(windowID: focusID, frame: liveFocusFrame, cornerRadius: 15))
             .settingTiledBorders([
-                FocusBorderTarget(windowID: tiledID, frame: tiledFrame, cornerRadius: 15)
+                FocusBorderTarget(windowID: tiledID, frame: liveTiledFrame, cornerRadius: 15)
             ])
         overlay.render(model)
         RunLoop.current.run(until: Date().addingTimeInterval(0.08))
@@ -50,7 +55,7 @@ enum DisplayChangeFocusBorderVerification {
 
         let unavailable = reduceFocusedWindowObservation(
             state: FocusedWindowObservationState(
-                geometry: FocusedWindowGeometryState(windowID: focusID, frame: focusFrame)
+                geometry: FocusedWindowGeometryState(windowID: focusID, frame: liveFocusFrame)
             ),
             input: .unavailable,
             tolerance: 1
@@ -125,6 +130,25 @@ enum DisplayChangeFocusBorderVerification {
             }
             return nil
         }
+    }
+
+    private static func windowServerFrame(for windowNumber: Int) -> CGRect? {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionIncludingWindow],
+            CGWindowID(windowNumber)
+        ) as? [[String: Any]]
+        else { return nil }
+
+        for window in windows {
+            let rawNumber = window[kCGWindowNumber as String]
+            let number = (rawNumber as? CGWindowID).map(Int.init) ?? rawNumber as? Int
+            guard number == windowNumber,
+                  let boundsDict = window[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: boundsDict)
+            else { continue }
+            return frame
+        }
+        return nil
     }
 
     private static func makeWindow(frame: CGRect, color: NSColor) -> NSWindow {

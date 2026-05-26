@@ -72,6 +72,7 @@ ctl_executable="$macos/narwhalctl"
 launch_agent="$output_root/com.ben.narwhal.plist"
 legacy_launch_agent="$output_root/com.ben.winmgr.plist"
 lua_dylib="/opt/homebrew/opt/lua/lib/liblua.dylib"
+minimum_macos_version="26.0"
 
 if [ -e "$bundle" ] || [ -e "$launch_agent" ] || [ -e "$legacy_bundle" ] || [ -e "$legacy_launch_agent" ]; then
   if [ "$replace_existing" != "true" ]; then
@@ -84,6 +85,38 @@ fi
 if [ ! -f "$lua_dylib" ]; then
   echo "Lua dylib not found at $lua_dylib" >&2
   echo "Install Lua with: brew install lua" >&2
+  exit 1
+fi
+
+macos_version_greater() {
+  local actual="$1"
+  local maximum="$2"
+  awk -v actual="$actual" -v maximum="$maximum" '
+    BEGIN {
+      split(actual, a, ".")
+      split(maximum, m, ".")
+      for (i = 1; i <= 3; i++) {
+        av = (a[i] == "" ? 0 : a[i]) + 0
+        mv = (m[i] == "" ? 0 : m[i]) + 0
+        if (av > mv) exit 0
+        if (av < mv) exit 1
+      }
+      exit 1
+    }
+  '
+}
+
+lua_minos="$(vtool -show-build "$lua_dylib" 2>/dev/null | awk '
+  /platform MACOS/ { in_macos = 1; next }
+  in_macos && /minos/ { print $2; exit }
+')"
+if [ -z "$lua_minos" ]; then
+  echo "Could not determine Lua dylib minimum macOS version: $lua_dylib" >&2
+  exit 1
+fi
+if macos_version_greater "$lua_minos" "$minimum_macos_version"; then
+  echo "Lua dylib minimum macOS $lua_minos exceeds Narwhal target macOS $minimum_macos_version: $lua_dylib" >&2
+  echo "Build or provide a Lua dylib with minimum macOS <= $minimum_macos_version before packaging." >&2
   exit 1
 fi
 
@@ -129,7 +162,41 @@ plutil -insert ProgramArguments.0 -string "$app_executable" "$launch_agent"
 plutil -replace WorkingDirectory -string "$repo_root" "$launch_agent"
 
 plutil -lint "$contents/Info.plist" "$launch_agent"
-codesign --force --deep --sign - "$bundle"
+
+# Mode selected by NARWHAL_SIGNING_IDENTITY:
+#   unset / "-" / "ad-hoc"          ad-hoc. cdhash drifts per build → TCC grant resets per install.
+#   "<self-signed common name>"     local cert in login keychain. Stable TCC grant across rebuilds.
+#   "Developer ID Application: ..." release. Adds hardened runtime, entitlements, timestamp.
+signing_identity="${NARWHAL_SIGNING_IDENTITY:--}"
+codesign_args=(--force --deep --identifier "com.ben.narwhal")
+signing_mode="ad-hoc"
+
+case "$signing_identity" in
+  ""|"-"|"ad-hoc")
+    signing_identity="-"
+    ;;
+  "Developer ID Application: "*)
+    signing_mode="developer-id"
+    entitlements="$repo_root/Packaging/Narwhal.entitlements"
+    if [ ! -f "$entitlements" ]; then
+      echo "missing entitlements file: $entitlements" >&2
+      exit 1
+    fi
+    codesign_args+=(--options runtime --timestamp --entitlements "$entitlements")
+    ;;
+  *)
+    signing_mode="self-signed"
+    if ! security find-identity -v -p codesigning | grep -F "\"$signing_identity\"" >/dev/null; then
+      echo "code-signing identity not found in keychain: $signing_identity" >&2
+      echo "create via Keychain Access → Certificate Assistant → Create a Certificate (Code Signing)" >&2
+      exit 1
+    fi
+    ;;
+esac
+
+codesign_args+=(--sign "$signing_identity")
+echo "Signing: identity=$signing_identity mode=$signing_mode"
+codesign "${codesign_args[@]}" "$bundle"
 
 cat <<EOF
 Built $bundle

@@ -275,7 +275,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func setTiledBorders(_ targets: [FocusBorderTarget]) {
         overlayModel = overlayModel.settingTiledBorders(targets)
-        overlay.render(overlayModel)
+        let renderResult = overlay.render(overlayModel)
+        for windowID in renderResult.staleTiledBorderTargets {
+            reporter.info("Tiled border target \(windowID.description) did not match live WindowServer bounds; scheduling environment refresh")
+            scheduleCoalescedEnvironmentRefresh(.tiledBorderTargetMismatch(windowID))
+        }
     }
 
     @MainActor

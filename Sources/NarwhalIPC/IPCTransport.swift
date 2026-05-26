@@ -15,6 +15,7 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
     case chmodFailed(path: String, errno: Int32)
     case listenFailed(errno: Int32)
     case acceptFailed(errno: Int32)
+    case socketOptionFailed(option: String, errno: Int32)
     case connectFailed(path: String, errno: Int32)
     case readFailed(errno: Int32)
     case writeFailed(errno: Int32)
@@ -37,6 +38,8 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
             return "listen() failed: \(Self.errnoDescription(errno))"
         case .acceptFailed(let errno):
             return "accept() failed: \(Self.errnoDescription(errno))"
+        case .socketOptionFailed(let option, let errno):
+            return "setsockopt(\(option)) failed: \(Self.errnoDescription(errno))"
         case .connectFailed(let path, let errno):
             return "connect(\(path)) failed: \(Self.errnoDescription(errno))"
         case .readFailed(let errno):
@@ -82,6 +85,7 @@ public final class IPCClient {
             throw IPCTransportError.socketCreateFailed(errno: errno)
         }
         do {
+            try configureSocket(socketFD)
             try withSocketAddress(path: socketPath) { address, length in
                 guard Darwin.connect(socketFD, address, length) == 0 else {
                     throw IPCTransportError.connectFailed(path: socketPath, errno: errno)
@@ -151,6 +155,7 @@ public final class IPCServer: @unchecked Sendable {
         }
 
         do {
+            try configureSocket(socketFD)
             if probeExistingDaemon(path: socketPath) {
                 Darwin.close(socketFD)
                 throw IPCTransportError.alreadyRunning(path: socketPath)
@@ -211,6 +216,14 @@ public final class IPCServer: @unchecked Sendable {
                 return
             }
 
+            do {
+                try configureSocket(clientFD)
+            } catch {
+                log(String(describing: error))
+                closeSocket(clientFD)
+                continue
+            }
+
             guard state.openConnection(clientFD, limit: maxConnections) else {
                 closeSocket(clientFD)
                 continue
@@ -226,6 +239,7 @@ public final class IPCServer: @unchecked Sendable {
         let probeFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard probeFD >= 0 else { return false }
         defer { Darwin.close(probeFD) }
+        try? configureSocket(probeFD)
         var alive = false
         do {
             try withSocketAddress(path: path) { address, length in
@@ -336,6 +350,20 @@ private final class IPCServerState: @unchecked Sendable {
 private func closeSocket(_ fd: Int32) {
     Darwin.shutdown(fd, SHUT_RDWR)
     Darwin.close(fd)
+}
+
+private func configureSocket(_ fd: Int32) throws {
+    var noSIGPIPE: Int32 = 1
+    let result = Darwin.setsockopt(
+        fd,
+        SOL_SOCKET,
+        SO_NOSIGPIPE,
+        &noSIGPIPE,
+        socklen_t(MemoryLayout.size(ofValue: noSIGPIPE))
+    )
+    guard result == 0 else {
+        throw IPCTransportError.socketOptionFailed(option: "SO_NOSIGPIPE", errno: errno)
+    }
 }
 
 private func encodeReplyLine(_ reply: IPCReplyDTO) throws -> Data {

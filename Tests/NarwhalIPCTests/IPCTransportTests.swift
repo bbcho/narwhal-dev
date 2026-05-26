@@ -84,30 +84,85 @@ struct IPCTransportTests {
         #expect(closed)
     }
 
+    @Test("Server survives client closing before reply write")
+    func serverSurvivesClientClosingBeforeReplyWrite() async throws {
+        let path = tempSocketPath()
+        let server = IPCServer(socketPath: path) { _ in
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            return .ok(commandID: CommandID(raw: "still-running"))
+        }
+        try server.start()
+        defer { server.stop() }
+
+        let fd = try connectRawSocket(path: path, nonBlocking: false)
+        try writeAllRaw(Data(#"{"command":"resetLayout"}"#.utf8) + Data([0x0A]), to: fd)
+        Darwin.close(fd)
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let client = IPCClient(socketPath: path)
+        defer { client.close() }
+
+        #expect(try client.send(.resetLayout) == .ok(commandID: CommandID(raw: "still-running")))
+    }
+
     private func tempSocketPath() -> String {
         "/private/tmp/narwhal-ipc-\(UUID().uuidString).sock"
     }
 
-    private func connectRawSocket(path: String) throws -> Int32 {
+    private func connectRawSocket(path: String, nonBlocking: Bool = true) throws -> Int32 {
         let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
 
         do {
+            try configureNoSIGPIPE(fd)
             try withSocketAddress(path: path) { address, length in
                 guard Darwin.connect(fd, address, length) == 0 else {
                     throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
                 }
             }
-            let flags = Darwin.fcntl(fd, F_GETFL, 0)
-            guard flags >= 0, Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            if nonBlocking {
+                let flags = Darwin.fcntl(fd, F_GETFL, 0)
+                guard flags >= 0, Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
             }
             return fd
         } catch {
             Darwin.close(fd)
             throw error
+        }
+    }
+
+    private func configureNoSIGPIPE(_ fd: Int32) throws {
+        var noSIGPIPE: Int32 = 1
+        guard Darwin.setsockopt(
+            fd,
+            SOL_SOCKET,
+            SO_NOSIGPIPE,
+            &noSIGPIPE,
+            socklen_t(MemoryLayout.size(ofValue: noSIGPIPE))
+        ) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    }
+
+    private func writeAllRaw(_ data: Data, to fd: Int32) throws {
+        try data.withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            var written = 0
+            while written < buffer.count {
+                let count = Darwin.write(fd, baseAddress.advanced(by: written), buffer.count - written)
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                if count == 0 {
+                    throw POSIXError(.EPIPE)
+                }
+                written += count
+            }
         }
     }
 

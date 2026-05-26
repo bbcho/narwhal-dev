@@ -126,6 +126,14 @@ struct AXClient {
         return element
     }
 
+    private static func systemWideElement() -> AXUIElement {
+        bounded(AXUIElementCreateSystemWide())
+    }
+
+    private static func applicationElement(processID: pid_t) -> AXUIElement {
+        bounded(AXUIElementCreateApplication(processID))
+    }
+
     func windowSnapshot() -> AXWindowSnapshot {
         guard
             let windows = CGWindowListCopyWindowInfo(
@@ -312,7 +320,7 @@ struct AXClient {
             return .failure(error)
         }
 
-        let application = AXUIElementCreateApplication(window.pid)
+        let application = Self.applicationElement(processID: window.pid)
         var lastRaiseError: AXError?
         var lastFocusError: AXClientError?
         var lastVisibilityDecision: WindowStackVisibilityDecision?
@@ -418,7 +426,7 @@ struct AXClient {
     }
 
     private func focusedWindowElement() -> Result<AXUIElement, AXClientError> {
-        let systemElement = AXUIElementCreateSystemWide()
+        let systemElement = Self.systemWideElement()
         if let window = focusedUIElementWindow(from: systemElement) {
             return .success(window)
         }
@@ -506,7 +514,7 @@ struct AXClient {
 
     private func frontmostApplicationElement() -> AXUIElement? {
         guard let frontmost = NSWorkspace.shared.frontmostApplication else { return nil }
-        return AXUIElementCreateApplication(frontmost.processIdentifier)
+        return Self.applicationElement(processID: frontmost.processIdentifier)
     }
 
     private func ancestorWindow(from element: AXUIElement) -> AXUIElement? {
@@ -657,7 +665,7 @@ struct AXClient {
         frame expectedFrame: CGRect,
         windowID: WindowID
     ) -> Result<AXUIElement, AXClientError> {
-        let app = AXUIElementCreateApplication(processID)
+        let app = Self.applicationElement(processID: processID)
         var value: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value)
         guard error == .success else {
@@ -667,7 +675,8 @@ struct AXClient {
             return .failure(.windowsAttributeInvalid(processID, error))
         }
 
-        for window in windows {
+        for rawWindow in windows {
+            let window = Self.bounded(rawWindow)
             let title = stringAttribute(window, kAXTitleAttribute)
             let role = stringAttribute(window, kAXRoleAttribute)
             guard expectedTitle.isEmpty || title.isEmpty || title == expectedTitle else { continue }

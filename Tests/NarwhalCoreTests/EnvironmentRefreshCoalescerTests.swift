@@ -97,13 +97,14 @@ struct EnvironmentRefreshCoalescerTests {
                 .windowClosed(WindowID(raw: 2)),
                 .displayChanged,
                 .displaySettled,
-                .spaceSettled
+                .spaceSettled,
+                .tiledBorderTargetMismatch(WindowID(raw: 3))
             ]
         )
 
         #expect(CoalescedEnvironmentRefresh(generation: 1, reasons: [.displayChanged]).description == "display changed")
         #expect(CoalescedEnvironmentRefresh(generation: 1, reasons: [.displaySettled]).description == "display settled")
-        #expect(request.description == "5 coalesced events: window opened w1, window closed w2, display changed, display settled, space settled")
+        #expect(request.description == "6 coalesced events: window opened w1, window closed w2, display changed, display settled, space settled, tiled border target mismatch w3")
         #expect(CoalescedEnvironmentRefresh(
             generation: 2,
             reasons: [.spaceTransitionEnded]
@@ -179,6 +180,16 @@ struct EnvironmentRefreshCoalescerTests {
             preserveSpaceLayouts: false,
             reconciliationMode: .activeWorkspaceCleanup,
             persistRestore: false,
+            applyPendingTileRules: true,
+            scheduleDeferredCleanup: false
+        )
+        expectPolicy(environmentRefreshPolicy(
+            for: [.tiledBorderTargetMismatch(WindowID(raw: 47))],
+            duringSpaceTransition: false
+        ),
+            preserveSpaceLayouts: false,
+            reconciliationMode: .activeWorkspaceCleanup,
+            persistRestore: true,
             applyPendingTileRules: true,
             scheduleDeferredCleanup: false
         )

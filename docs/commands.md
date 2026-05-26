@@ -187,6 +187,66 @@ narwhalctl center --window 12345
 
 `center` currently requires an explicit window ID in the CLI.
 
+### `eject`
+
+```sh
+narwhalctl eject --window 12345
+```
+
+Moves the explicit tiled window out of the tile layout.
+
+### `toggle-float`
+
+```sh
+narwhalctl toggle-float --window 12345
+```
+
+Aliases:
+
+```sh
+narwhalctl toggleFloat --window 12345
+narwhalctl float --window 12345
+```
+
+Toggles the explicit window between tiled and floating state.
+
+### `focus`
+
+```sh
+narwhalctl focus --window 12345
+```
+
+Focuses the explicit window.
+
+### `focus-direction`
+
+```sh
+narwhalctl focus-direction left
+```
+
+Alias:
+
+```sh
+narwhalctl focusDirection right
+```
+
+Focuses the nearest directional neighbor.
+
+### `focus-cycle`
+
+```sh
+narwhalctl focus-cycle next
+narwhalctl focus-cycle previous
+```
+
+Alias:
+
+```sh
+narwhalctl focusCycle next
+```
+
+Cycles through non-tiled windows in the active Space.
+
 ## IPC JSON
 
 The socket protocol is newline-delimited JSON. Each request is one JSON object

@@ -28,6 +28,11 @@ struct LiveAppKitVerifierTests {
         try expectPassed(FocusBorderVerification.verifyPerWindowCornerRadii())
     }
 
+    @Test("Tiled border stale target suppression")
+    func tiledBorderStaleTargetSuppression() throws {
+        try expectPassed(FocusBorderVerification.verifyTiledBorderStaleTargetSuppression())
+    }
+
     @Test("Menubar icon")
     func menubarIcon() throws {
         try expectPassed(MenubarIconVerification.verifyStatusItemUsesToolbarIcon())

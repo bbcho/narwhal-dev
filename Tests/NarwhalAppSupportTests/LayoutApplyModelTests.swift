@@ -49,7 +49,10 @@ struct LayoutApplyModelTests {
         )
 
         #expect(progress.decision == .stopApplying)
-        #expect(progress.result.applied == [first: alreadyApplied])
+        #expect(progress.result.applied == [
+            first: alreadyApplied,
+            clamped: actual
+        ])
         #expect(progress.result.clamps == [
             LayoutApplyClamp(
                 windowID: clamped,

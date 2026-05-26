@@ -5,6 +5,7 @@ public enum EnvironmentRefreshReason: Equatable, CustomStringConvertible, Sendab
     case displaySettled
     case spaceSettled
     case spaceTransitionEnded
+    case tiledBorderTargetMismatch(WindowID)
 
     public var description: String {
         switch self {
@@ -20,6 +21,8 @@ public enum EnvironmentRefreshReason: Equatable, CustomStringConvertible, Sendab
             return "space settled"
         case .spaceTransitionEnded:
             return "space transition ended"
+        case .tiledBorderTargetMismatch(let id):
+            return "tiled border target mismatch \(id.description)"
         }
     }
 }

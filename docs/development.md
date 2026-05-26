@@ -6,7 +6,7 @@ This guide is for working on the codebase locally.
 
 Requirements:
 
-- macOS 14 or newer.
+- macOS 26 or newer.
 - Xcode Command Line Tools or compatible Xcode.
 - Swift package manager.
 - Homebrew Lua 5.4:

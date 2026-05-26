@@ -56,6 +56,36 @@ struct WindowStackVisibilityModelTests {
         ) == .targetMissing)
     }
 
+    @Test("Tiled border target visibility requires live matching bounds")
+    func tiledBorderTargetVisibilityRequiresLiveMatchingBounds() {
+        let target = WindowID(raw: 50)
+        let frame = CGRect(x: 10, y: 20, width: 300, height: 200)
+        let borderTarget = FocusBorderTarget(windowID: target, frame: frame, cornerRadius: 12)
+
+        #expect(tiledBorderTargetVisibility(
+            target: borderTarget,
+            liveWindows: [WindowStackEntry(id: target, frame: CGRect(x: 11, y: 21, width: 299, height: 201))],
+            frameTolerance: 2
+        ) == .show)
+
+        #expect(tiledBorderTargetVisibility(
+            target: borderTarget,
+            liveWindows: [WindowStackEntry(id: target, frame: CGRect(x: 13, y: 23, width: 296, height: 204))],
+            frameTolerance: 2
+        ) == .show)
+
+        #expect(tiledBorderTargetVisibility(
+            target: borderTarget,
+            liveWindows: [WindowStackEntry(id: target, frame: CGRect(x: 80, y: 20, width: 300, height: 200))],
+            frameTolerance: 2
+        ) == .hideFrameMismatch(actual: CGRect(x: 80, y: 20, width: 300, height: 200)))
+
+        #expect(tiledBorderTargetVisibility(
+            target: borderTarget,
+            liveWindows: [entry(51, x: 10, y: 20, width: 300, height: 200)]
+        ) == .hideTargetMissing)
+    }
+
     private func entry(
         _ raw: CGWindowID,
         x: CGFloat,

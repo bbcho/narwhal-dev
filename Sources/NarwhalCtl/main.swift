@@ -83,6 +83,11 @@ private enum NarwhalCtlError: Error, CustomStringConvertible {
           narwhalctl swap <left|right|up|down> [--window WINDOW_ID] [--socket PATH]
           narwhalctl resize <left|right|up|down> --delta WEIGHT_DELTA [--window WINDOW_ID] [--socket PATH]
           narwhalctl center --window WINDOW_ID [--socket PATH]
+          narwhalctl eject --window WINDOW_ID [--socket PATH]
+          narwhalctl toggle-float --window WINDOW_ID [--socket PATH]
+          narwhalctl focus --window WINDOW_ID [--socket PATH]
+          narwhalctl focus-direction <left|right|up|down> [--socket PATH]
+          narwhalctl focus-cycle <previous|next> [--socket PATH]
         """
     }
 }
@@ -177,6 +182,33 @@ private func parseInvocation(_ arguments: [String]) throws -> Invocation {
         guard let explicitWindowID else { throw NarwhalCtlError.missingWindowID }
         guard resizeDelta == nil else { throw NarwhalCtlError.unexpectedArgument("--delta") }
         return Invocation(socketPath: socketPath, command: .center(windowID: explicitWindowID))
+    case "eject":
+        guard positional.count == 1 else { throw NarwhalCtlError.unexpectedArgument(positional[1]) }
+        guard let explicitWindowID else { throw NarwhalCtlError.missingWindowID }
+        guard resizeDelta == nil else { throw NarwhalCtlError.unexpectedArgument("--delta") }
+        return Invocation(socketPath: socketPath, command: .eject(windowID: explicitWindowID))
+    case "toggle-float", "toggleFloat", "float":
+        guard positional.count == 1 else { throw NarwhalCtlError.unexpectedArgument(positional[1]) }
+        guard let explicitWindowID else { throw NarwhalCtlError.missingWindowID }
+        guard resizeDelta == nil else { throw NarwhalCtlError.unexpectedArgument("--delta") }
+        return Invocation(socketPath: socketPath, command: .toggleFloat(windowID: explicitWindowID))
+    case "focus":
+        guard positional.count == 1 else { throw NarwhalCtlError.unexpectedArgument(positional[1]) }
+        guard let explicitWindowID else { throw NarwhalCtlError.missingWindowID }
+        guard resizeDelta == nil else { throw NarwhalCtlError.unexpectedArgument("--delta") }
+        return Invocation(socketPath: socketPath, command: .focus(windowID: explicitWindowID))
+    case "focus-direction", "focusDirection":
+        guard positional.indices.contains(1) else { throw NarwhalCtlError.missingDirection }
+        guard positional.count == 2 else { throw NarwhalCtlError.unexpectedArgument(positional[2]) }
+        guard explicitWindowID == nil else { throw NarwhalCtlError.unexpectedArgument("--window") }
+        guard resizeDelta == nil else { throw NarwhalCtlError.unexpectedArgument("--delta") }
+        return Invocation(socketPath: socketPath, command: .focusDirection(try parseDirection(positional[1])))
+    case "focus-cycle", "focusCycle":
+        guard positional.indices.contains(1) else { throw NarwhalCtlError.missingDirection }
+        guard positional.count == 2 else { throw NarwhalCtlError.unexpectedArgument(positional[2]) }
+        guard explicitWindowID == nil else { throw NarwhalCtlError.unexpectedArgument("--window") }
+        guard resizeDelta == nil else { throw NarwhalCtlError.unexpectedArgument("--delta") }
+        return Invocation(socketPath: socketPath, command: .focusCycle(try parseFocusCycleDirection(positional[1])))
     default:
         throw NarwhalCtlError.unknownCommand(command)
     }
@@ -195,6 +227,13 @@ private func parseWindowID(_ raw: String) throws -> WindowID {
         throw NarwhalCtlError.invalidWindowID(raw)
     }
     return WindowID(raw: value)
+}
+
+private func parseFocusCycleDirection(_ raw: String) throws -> FocusCycleDirection {
+    guard let direction = FocusCycleDirection(rawValue: raw) else {
+        throw NarwhalCtlError.invalidDirection(raw)
+    }
+    return direction
 }
 
 private func parseResizeDelta(_ raw: String) throws -> Double {

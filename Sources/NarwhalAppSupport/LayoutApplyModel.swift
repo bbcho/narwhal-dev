@@ -191,7 +191,7 @@ public func recordLayoutFrameWrite(
     case .clamped(let actual, let observed):
         return LayoutApplyProgress(
             result: LayoutApplyResult(
-                applied: result.applied,
+                applied: result.applied.merging([windowID: actual]) { _, replacement in replacement },
                 clamps: result.clamps + [
                     LayoutApplyClamp(
                         windowID: windowID,
