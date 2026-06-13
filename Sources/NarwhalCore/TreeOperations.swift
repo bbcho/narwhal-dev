@@ -519,6 +519,10 @@ private struct CenterLane {
 }
 
 private func centeredLane(in cells: [Cell]) -> CenterLane {
+    if cells.count == 2,
+       let emptyIndex = cells.indices.first(where: { isUnoccupiedSubtree(cells[$0].node) }) {
+        return CenterLane(cells: cells, index: emptyIndex)
+    }
     if cells.count == 2 {
         return CenterLane(cells: cells.insertingCell(makeCell(weight: 1, node: .void), at: 1), index: 1)
     }

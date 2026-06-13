@@ -865,7 +865,7 @@ enum LiveFocusWorkflowVerification {
             window: window,
             metadata: WindowMetadata(
                 id: id,
-                bundleID: BundleID(raw: "dev.narwhal.live-focus-workflow-verifier"),
+                bundleID: BundleID(raw: "dev.narwhal.live-focus-workflow-verifier.\(id.raw)"),
                 title: title,
                 role: "AXWindow",
                 pid: getpid(),

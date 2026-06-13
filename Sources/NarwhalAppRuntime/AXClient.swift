@@ -116,6 +116,7 @@ enum AXFrameWriteOutcome: Sendable {
 struct AXClient {
     private let inventoryFilter: WindowInventoryFilter
     private static let messagingTimeout: Float = 1.0
+    private static let frameWriteSettleInterval: TimeInterval = 0.08
 
     init(processID: pid_t = getpid()) {
         inventoryFilter = WindowInventoryFilter(currentProcessID: processID)
@@ -545,16 +546,37 @@ struct AXClient {
         var lastFrame = CGRect.null
 
         for _ in 0..<3 {
+            let currentFrame: CGRect?
+            switch focusedWindowFrame(window) {
+            case .success(let current):
+                currentFrame = current
+            case .failure:
+                currentFrame = nil
+            }
+
+            let positionFirst = currentFrame.map {
+                frame.minX < $0.minX || frame.minY < $0.minY
+            } ?? false
+
+            if positionFirst {
+                switch setPosition(frame.origin, on: window) {
+                case .success:
+                    RunLoop.current.run(until: Date().addingTimeInterval(Self.frameWriteSettleInterval))
+                case .failure(let error):
+                    return .failed(error)
+                }
+            }
+
             switch setSize(frame.size, on: window) {
             case .success:
-                break
+                RunLoop.current.run(until: Date().addingTimeInterval(Self.frameWriteSettleInterval))
             case .failure(let error):
                 return .failed(error)
             }
 
             switch setPosition(frame.origin, on: window) {
             case .success:
-                break
+                RunLoop.current.run(until: Date().addingTimeInterval(Self.frameWriteSettleInterval))
             case .failure(let error):
                 return .failed(error)
             }
@@ -583,10 +605,10 @@ struct AXClient {
     }
 
     private func frameWriteDidNotConverge(target: CGRect, actual: CGRect) -> AXFrameWriteOutcome {
-        if let observed = inferObservedConstraints(target: target, actual: actual, tolerance: 2) {
+        if let observed = inferObservedConstraints(target: target, actual: actual, tolerance: 4) {
             return .clamped(actual: actual, observed: observed)
         }
-        if frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 2) {
+        if frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 4) {
             return .converged(actual: actual)
         }
         return .failed(.frameDidNotConverge(target: target, actual: actual, attempts: 3))
@@ -628,16 +650,32 @@ struct AXClient {
     }
 
     private func windowElement(matching metadata: WindowMetadata) -> Result<AXUIElement, AXClientError> {
-        guard let currentInfo = cgWindowInfo(matching: metadata.id, processID: metadata.pid) else {
-            return .failure(.windowElementNotFound(metadata.id))
+        var expectedTitle = metadata.title
+        var expectedFrame = metadata.frame
+
+        for attempt in 0..<5 {
+            if let currentInfo = cgWindowInfo(matching: metadata.id, processID: metadata.pid) {
+                expectedTitle = currentInfo.title
+                expectedFrame = currentInfo.frame
+            }
+
+            switch windowElement(
+                processID: metadata.pid,
+                title: expectedTitle,
+                role: metadata.role,
+                frame: expectedFrame,
+                windowID: metadata.id
+            ) {
+            case .success(let element):
+                return .success(element)
+            case .failure where attempt < 4:
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            case .failure(let error):
+                return .failure(error)
+            }
         }
-        return windowElement(
-            processID: metadata.pid,
-            title: currentInfo.title,
-            role: metadata.role,
-            frame: currentInfo.frame,
-            windowID: metadata.id
-        )
+
+        return .failure(.windowElementNotFound(metadata.id))
     }
 
     private func isResizable(
@@ -678,6 +716,7 @@ struct AXClient {
             return .failure(.windowsAttributeInvalid(processID, error))
         }
 
+        var candidates: [(element: AXUIElement, frame: CGRect)] = []
         for rawWindow in windows {
             let window = Self.bounded(rawWindow)
             let title = stringAttribute(window, kAXTitleAttribute)
@@ -688,11 +727,25 @@ struct AXClient {
             switch focusedWindowFrame(window) {
             case .success(let frame) where framesApproximatelyMatch(frame, expectedFrame):
                 return .success(window)
-            case .success:
-                continue
+            case .success(let frame):
+                candidates.append((element: window, frame: frame))
             case .failure:
                 continue
             }
+        }
+
+        if candidates.count == 1, let candidate = candidates.first {
+            return .success(candidate.element)
+        }
+
+        let closest = candidates
+            .map { candidate in
+                (element: candidate.element, frame: candidate.frame, distance: frameDistance(candidate.frame, expectedFrame))
+            }
+            .min { $0.distance < $1.distance }
+        if let closest,
+           closest.distance <= 160 || framesOverlapSubstantially(closest.frame, expectedFrame) {
+            return .success(closest.element)
         }
 
         return .failure(.windowElementNotFound(windowID))
@@ -830,9 +883,29 @@ struct AXClient {
     }
 
     private func framesApproximatelyMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
-        abs(lhs.origin.x - rhs.origin.x) <= 2
-            && abs(lhs.origin.y - rhs.origin.y) <= 2
-            && abs(lhs.size.width - rhs.size.width) <= 2
-            && abs(lhs.size.height - rhs.size.height) <= 2
+        abs(lhs.origin.x - rhs.origin.x) <= 4
+            && abs(lhs.origin.y - rhs.origin.y) <= 4
+            && abs(lhs.size.width - rhs.size.width) <= 4
+            && abs(lhs.size.height - rhs.size.height) <= 4
+    }
+
+    private func frameDistance(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
+        abs(lhs.minX - rhs.minX)
+            + abs(lhs.minY - rhs.minY)
+            + abs(lhs.width - rhs.width)
+            + abs(lhs.height - rhs.height)
+    }
+
+    private func framesOverlapSubstantially(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        guard lhs.width > 0,
+              lhs.height > 0,
+              rhs.width > 0,
+              rhs.height > 0
+        else { return false }
+        let intersection = lhs.intersection(rhs)
+        guard !intersection.isNull, !intersection.isInfinite else { return false }
+        let overlapArea = max(0, intersection.width) * max(0, intersection.height)
+        let smallerArea = min(lhs.width * lhs.height, rhs.width * rhs.height)
+        return smallerArea > 0 && overlapArea / smallerArea >= 0.65
     }
 }

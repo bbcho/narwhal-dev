@@ -849,6 +849,67 @@ struct MVPLayoutTests {
         #expect(next.config == world.config)
     }
 
+    @Test("Focus cycle uses one representative window per app bundle")
+    func focusCycleUsesOneRepresentativeWindowPerAppBundle() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let firefoxA = WindowID(raw: 1)
+        let firefoxB = WindowID(raw: 2)
+        let chromeA = WindowID(raw: 3)
+        let chromeB = WindowID(raw: 4)
+        let terminal = WindowID(raw: 5)
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1400)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [
+                        display: DisplaySpaceState(
+                            displayID: display,
+                            tree: .void,
+                            floating: [firefoxA, firefoxB, chromeA, chromeB, terminal]
+                        )
+                    ],
+                    focused: firefoxB
+                )
+            ],
+            windows: [
+                firefoxA: metadata(for: firefoxA, bundleID: "org.mozilla.firefox", frame: CGRect(x: 0, y: 0, width: 100, height: 100)),
+                firefoxB: metadata(for: firefoxB, bundleID: "org.mozilla.firefox", frame: CGRect(x: 20, y: 20, width: 100, height: 100)),
+                chromeA: metadata(for: chromeA, bundleID: "com.google.Chrome", frame: CGRect(x: 300, y: 0, width: 100, height: 100)),
+                chromeB: metadata(for: chromeB, bundleID: "com.google.Chrome", frame: CGRect(x: 320, y: 20, width: 100, height: 100)),
+                terminal: metadata(for: terminal, bundleID: "com.apple.Terminal", frame: CGRect(x: 600, y: 0, width: 100, height: 100))
+            ],
+            windowDisplay: [
+                firefoxA: display,
+                firefoxB: display,
+                chromeA: display,
+                chromeB: display,
+                terminal: display
+            ],
+            windowSpace: [
+                firefoxA: space,
+                firefoxB: space,
+                chromeA: space,
+                chromeB: space,
+                terminal: space
+            ],
+            observedVisibleWindows: [
+                WorkspaceKey(displayID: display, spaceID: space): [firefoxA, firefoxB, chromeA, chromeB, terminal]
+            ],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        let candidates = focusCycleWindows(in: world, focusedWindowID: firefoxB).map(\.id)
+        let cycle = focusCycleCandidates(windows: focusCycleWindows(in: world, focusedWindowID: firefoxB), from: firefoxB, direction: .next)
+
+        #expect(candidates == [firefoxB, chromeA, terminal])
+        #expect(cycle == [chromeA, terminal, firefoxB])
+    }
+
     @Test("External move updates frame and display ownership without changing layout state")
     func externalMoveUpdatesFrameAndDisplayOwnershipOnly() throws {
         let leftDisplay = DisplayID(raw: 1)
@@ -2396,7 +2457,11 @@ struct MVPLayoutTests {
             pendingRules: [:],
             config: config
         )
-        let liveMetadata = metadata(for: newWindow, frame: CGRect(x: 600, y: 0, width: 600, height: 800))
+        let liveMetadata = metadata(
+            for: newWindow,
+            bundleID: "com.example",
+            frame: CGRect(x: 600, y: 0, width: 600, height: 800)
+        )
         let preservingSnapshot = EnvironmentSnapshot(
             activeSpace: secondSpace,
             displays: [displayID: display],
@@ -3677,12 +3742,13 @@ struct MVPLayoutTests {
 
     private func metadata(
         for window: WindowID,
+        bundleID: String? = nil,
         frame: CGRect = CGRect(x: 0, y: 0, width: 100, height: 100),
         isResizable: Bool = true
     ) -> WindowMetadata {
         WindowMetadata(
             id: window,
-            bundleID: BundleID(raw: "com.example"),
+            bundleID: BundleID(raw: bundleID ?? "com.example.\(window.raw)"),
             title: "Window \(window.raw)",
             role: "AXWindow",
             pid: 42,

@@ -517,7 +517,7 @@ struct ApplyCommandTests {
     private func metadata(_ id: WindowID, x: Double, y: Double) -> WindowMetadata {
         WindowMetadata(
             id: id,
-            bundleID: BundleID(raw: "com.example"),
+            bundleID: BundleID(raw: "com.example.\(id.raw)"),
             title: "Window \(id.raw)",
             role: "AXWindow",
             pid: ProcessID(id.raw),

@@ -91,7 +91,7 @@ public func focusCycleWindows(
     let observedVisible = observedVisibleWindowIDs(key, in: world)
     let hasObservedVisibleWindows = !observedVisible.isEmpty
 
-    return world.windows.values.filter { metadata in
+    let eligible = world.windows.values.filter { metadata in
         guard !metadata.isMinimized,
               !tiled.contains(metadata.id),
               world.windowDisplay[metadata.id] == key.displayID
@@ -108,6 +108,52 @@ public func focusCycleWindows(
         }
         return rememberedFloating.contains(metadata.id)
     }
+    return appCycleRepresentatives(
+        eligible.sorted(by: focusCycleWindowSort),
+        focusedWindowID: focusedWindowID
+    )
+}
+
+private func appCycleRepresentatives(
+    _ windows: [WindowMetadata],
+    focusedWindowID: WindowID?
+) -> [WindowMetadata] {
+    let focusedWindow = focusedWindowID.flatMap { focused in
+        windows.first { $0.id == focused }
+    }
+    let focusedBundleID = focusedWindow?.bundleID.raw
+    var seen = Set<String>()
+    var representatives: [WindowMetadata] = []
+
+    for window in windows {
+        let key = appCycleKey(for: window)
+        guard !seen.contains(key) else { continue }
+        seen.insert(key)
+        if let focusedWindow,
+           focusedBundleID == window.bundleID.raw,
+           !window.bundleID.raw.isEmpty {
+            representatives.append(focusedWindow)
+        } else {
+            representatives.append(window)
+        }
+    }
+
+    return representatives
+}
+
+private func appCycleKey(for window: WindowMetadata) -> String {
+    if !window.bundleID.raw.isEmpty {
+        return "bundle:\(window.bundleID.raw)"
+    }
+    return "window:\(window.id.raw)"
+}
+
+private func focusCycleWindowSort(_ lhs: WindowMetadata, _ rhs: WindowMetadata) -> Bool {
+    if lhs.frame.minY != rhs.frame.minY { return lhs.frame.minY < rhs.frame.minY }
+    if lhs.frame.minX != rhs.frame.minX { return lhs.frame.minX < rhs.frame.minX }
+    if lhs.bundleID.raw != rhs.bundleID.raw { return lhs.bundleID.raw < rhs.bundleID.raw }
+    if lhs.title != rhs.title { return lhs.title < rhs.title }
+    return lhs.id.raw < rhs.id.raw
 }
 
 public func activeFocusedWindow(in world: World) -> WindowMetadata? {

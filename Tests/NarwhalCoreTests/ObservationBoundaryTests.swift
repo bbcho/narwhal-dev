@@ -289,7 +289,7 @@ struct ObservationBoundaryTests {
     private func metadata(_ id: WindowID, x: CGFloat) -> WindowMetadata {
         WindowMetadata(
             id: id,
-            bundleID: BundleID(raw: "com.example"),
+            bundleID: BundleID(raw: "com.example.\(id.raw)"),
             title: "Window \(id.raw)",
             role: "AXWindow",
             pid: ProcessID(id.raw),

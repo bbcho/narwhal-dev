@@ -109,11 +109,11 @@ struct SlotSequenceTests {
                 .a: rect(0, 0, 600, 800), .b: rect(600, 0, 600, 800)
             ]),
             SequenceExpectation(keys: "HJ", slots: [
-                .slot([0], .occupied(.a)), .slot([1, 0], .empty), .slot([1, 1], .occupied(.b)), .slot([2], .empty)
-            ], frames: [.a: rect(0, 0, 400, 800), .b: rect(400, 400, 400, 400)]),
+                .slot([0], .occupied(.a)), .slot([1, 0], .empty), .slot([1, 1], .occupied(.b))
+            ], frames: [.a: rect(0, 0, 600, 800), .b: rect(600, 400, 600, 400)]),
             SequenceExpectation(keys: "HK", slots: [
-                .slot([0], .occupied(.a)), .slot([1, 0], .occupied(.b)), .slot([1, 1], .empty), .slot([2], .empty)
-            ], frames: [.a: rect(0, 0, 400, 800), .b: rect(400, 0, 400, 400)]),
+                .slot([0], .occupied(.a)), .slot([1, 0], .occupied(.b)), .slot([1, 1], .empty)
+            ], frames: [.a: rect(0, 0, 600, 800), .b: rect(600, 0, 600, 400)]),
             SequenceExpectation(keys: "LH", slots: [.slot([0], .occupied(.b)), .slot([1], .occupied(.a))], frames: [
                 .a: rect(600, 0, 600, 800), .b: rect(0, 0, 600, 800)
             ]),
@@ -121,17 +121,17 @@ struct SlotSequenceTests {
                 .slot([0], .empty), .slot([1, 0], .occupied(.a)), .slot([1, 1], .occupied(.b))
             ], frames: [.a: rect(600, 0, 600, 400), .b: rect(600, 400, 600, 400)]),
             SequenceExpectation(keys: "LJ", slots: [
-                .slot([0], .empty), .slot([1, 0], .empty), .slot([1, 1], .occupied(.b)), .slot([2], .occupied(.a))
-            ], frames: [.a: rect(800, 0, 400, 800), .b: rect(400, 400, 400, 400)]),
+                .slot([0, 0], .empty), .slot([0, 1], .occupied(.b)), .slot([1], .occupied(.a))
+            ], frames: [.a: rect(600, 0, 600, 800), .b: rect(0, 400, 600, 400)]),
             SequenceExpectation(keys: "LK", slots: [
-                .slot([0], .empty), .slot([1, 0], .occupied(.b)), .slot([1, 1], .empty), .slot([2], .occupied(.a))
-            ], frames: [.a: rect(800, 0, 400, 800), .b: rect(400, 0, 400, 400)]),
+                .slot([0, 0], .occupied(.b)), .slot([0, 1], .empty), .slot([1], .occupied(.a))
+            ], frames: [.a: rect(600, 0, 600, 800), .b: rect(0, 0, 600, 400)]),
             SequenceExpectation(keys: "JH", slots: [
-                .slot([0], .empty), .slot([1, 0], .occupied(.b)), .slot([1, 1], .empty), .slot([2], .occupied(.a))
-            ], frames: [.a: rect(0, lastThirdY, 1200, lastThirdHeight), .b: rect(0, firstThirdHeight, 600, firstThirdHeight)]),
+                .slot([0, 0], .occupied(.b)), .slot([0, 1], .empty), .slot([1], .occupied(.a))
+            ], frames: [.a: rect(0, 400, 1200, 400), .b: rect(0, 0, 600, 400)]),
             SequenceExpectation(keys: "JL", slots: [
-                .slot([0], .empty), .slot([1, 0], .empty), .slot([1, 1], .occupied(.b)), .slot([2], .occupied(.a))
-            ], frames: [.a: rect(0, lastThirdY, 1200, lastThirdHeight), .b: rect(600, firstThirdHeight, 600, firstThirdHeight)]),
+                .slot([0, 0], .empty), .slot([0, 1], .occupied(.b)), .slot([1], .occupied(.a))
+            ], frames: [.a: rect(0, 400, 1200, 400), .b: rect(600, 0, 600, 400)]),
             SequenceExpectation(keys: "JJ", slots: [
                 .slot([0], .empty), .slot([1, 0], .occupied(.a)), .slot([1, 1], .occupied(.b))
             ], frames: [.a: rect(0, 400, 600, 400), .b: rect(600, 400, 600, 400)]),
@@ -139,11 +139,11 @@ struct SlotSequenceTests {
                 .a: rect(0, 400, 1200, 400), .b: rect(0, 0, 1200, 400)
             ]),
             SequenceExpectation(keys: "KH", slots: [
-                .slot([0], .occupied(.a)), .slot([1, 0], .occupied(.b)), .slot([1, 1], .empty), .slot([2], .empty)
-            ], frames: [.a: rect(0, 0, 1200, firstThirdHeight), .b: rect(0, firstThirdHeight, 600, firstThirdHeight)]),
+                .slot([0], .occupied(.a)), .slot([1, 0], .occupied(.b)), .slot([1, 1], .empty)
+            ], frames: [.a: rect(0, 0, 1200, 400), .b: rect(0, 400, 600, 400)]),
             SequenceExpectation(keys: "KL", slots: [
-                .slot([0], .occupied(.a)), .slot([1, 0], .empty), .slot([1, 1], .occupied(.b)), .slot([2], .empty)
-            ], frames: [.a: rect(0, 0, 1200, firstThirdHeight), .b: rect(600, firstThirdHeight, 600, firstThirdHeight)]),
+                .slot([0], .occupied(.a)), .slot([1, 0], .empty), .slot([1, 1], .occupied(.b))
+            ], frames: [.a: rect(0, 0, 1200, 400), .b: rect(600, 400, 600, 400)]),
             SequenceExpectation(keys: "KJ", slots: [.slot([0], .occupied(.a)), .slot([1], .occupied(.b))], frames: [
                 .a: rect(0, 0, 1200, 400), .b: rect(0, 400, 1200, 400)
             ]),

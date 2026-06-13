@@ -1125,7 +1125,7 @@ enum LiveCommandWorkflowVerification {
                 window: window,
                 metadata: WindowMetadata(
                     id: id,
-                    bundleID: BundleID(raw: "dev.narwhal.live-command-workflow-verifier"),
+                    bundleID: BundleID(raw: "dev.narwhal.live-command-workflow-verifier.\(index + 1)"),
                     title: window.title,
                     role: "AXWindow",
                     pid: getpid(),
@@ -1164,7 +1164,7 @@ enum LiveCommandWorkflowVerification {
                 window: window,
                 metadata: WindowMetadata(
                     id: id,
-                    bundleID: BundleID(raw: "dev.narwhal.live-command-workflow-verifier"),
+                    bundleID: BundleID(raw: "dev.narwhal.live-command-workflow-verifier.focus.\(index + 1)"),
                     title: window.title,
                     role: "AXWindow",
                     pid: getpid(),
