@@ -133,13 +133,28 @@ public struct LayoutApplyProgress: Equatable, Sendable {
 }
 
 public func layoutFrameWriteIntents(for plan: CommandPlanResult) -> [LayoutFrameWriteIntent] {
-    frameWriteOrder(for: plan.desiredLayout.layout, focused: plan.focusedWindowID).compactMap { windowID in
+    layoutFrameWriteOrder(for: plan).compactMap { windowID in
         guard let frame = plan.desiredLayout.layout.tiled[windowID] else { return nil }
         guard let metadata = plan.windows[windowID] else {
             return .missingMetadata(windowID: windowID, targetFrame: frame)
         }
         return .write(windowID: windowID, metadata: metadata, targetFrame: frame)
     }
+}
+
+private func layoutFrameWriteOrder(for plan: CommandPlanResult) -> [WindowID] {
+    let ordered = plan.desiredLayout.layout.tiled.keys.sorted { $0.raw < $1.raw }
+    guard let focusedWindowID = plan.focusedWindowID,
+          ordered.contains(focusedWindowID)
+    else {
+        return ordered
+    }
+
+    let remaining = ordered.filter { $0 != focusedWindowID }
+    if plan.desiredLayout.delta.shows.contains(focusedWindowID) {
+        return [focusedWindowID] + remaining
+    }
+    return remaining + [focusedWindowID]
 }
 
 private func plannedLayoutFocusUpdate(

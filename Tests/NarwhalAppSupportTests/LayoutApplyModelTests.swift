@@ -159,6 +159,7 @@ struct LayoutApplyModelTests {
                 other: otherFrame,
                 missing: missingFrame
             ],
+            shows: [],
             windows: [
                 focused: focusedMetadata,
                 other: otherMetadata
@@ -171,6 +172,41 @@ struct LayoutApplyModelTests {
             .write(windowID: other, metadata: otherMetadata, targetFrame: otherFrame),
             .missingMetadata(windowID: missing, targetFrame: missingFrame),
             .write(windowID: focused, metadata: focusedMetadata, targetFrame: focusedFrame)
+        ])
+    }
+
+    @Test("Newly tiled focused frame write is applied first")
+    func newlyTiledFocusedFrameWriteIsAppliedFirst() {
+        let right = WindowID(raw: 100)
+        let topLeft = WindowID(raw: 101)
+        let focusedBottomLeft = WindowID(raw: 102)
+        let rightFrame = CGRect(x: 756, y: 33, width: 756, height: 871)
+        let topLeftFrame = CGRect(x: 0, y: 33, width: 756, height: 435.5)
+        let focusedFrame = CGRect(x: 0, y: 468.5, width: 756, height: 435.5)
+        let rightMetadata = windowMetadata(id: right, frame: rightFrame)
+        let topLeftMetadata = windowMetadata(id: topLeft, frame: topLeftFrame)
+        let focusedMetadata = windowMetadata(id: focusedBottomLeft, frame: focusedFrame)
+        let plan = commandPlanFixture(
+            focused: focusedBottomLeft,
+            tiled: [
+                right: rightFrame,
+                topLeft: topLeftFrame,
+                focusedBottomLeft: focusedFrame
+            ],
+            shows: [focusedBottomLeft],
+            windows: [
+                right: rightMetadata,
+                topLeft: topLeftMetadata,
+                focusedBottomLeft: focusedMetadata
+            ]
+        )
+
+        let intents = layoutFrameWriteIntents(for: plan)
+
+        #expect(intents == [
+            .write(windowID: focusedBottomLeft, metadata: focusedMetadata, targetFrame: focusedFrame),
+            .write(windowID: right, metadata: rightMetadata, targetFrame: rightFrame),
+            .write(windowID: topLeft, metadata: topLeftMetadata, targetFrame: topLeftFrame)
         ])
     }
 
@@ -239,6 +275,7 @@ struct LayoutApplyModelTests {
     private func commandPlanFixture(
         focused: WindowID?,
         tiled: [WindowID: CGRect],
+        shows: Set<WindowID> = [],
         windows: [WindowID: WindowMetadata] = [:]
     ) -> CommandPlanResult {
         CommandPlanResult(
@@ -246,7 +283,7 @@ struct LayoutApplyModelTests {
             desiredLayout: DesiredLayout(
                 generation: LayoutGeneration(raw: 1),
                 layout: Layout(tiled: tiled, floatingZOrder: [], hidden: []),
-                delta: LayoutDelta(moves: tiled, raises: [], hides: [], shows: Set(tiled.keys))
+                delta: LayoutDelta(moves: tiled, raises: [], hides: [], shows: shows)
             ),
             windows: windows,
             plannedWorld: .empty,
