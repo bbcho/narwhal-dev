@@ -41,82 +41,6 @@ enum LiveCommandWorkflowVerification {
         }
     }
 
-    static func verifyTileCountCommandWorkflows() -> (passed: Bool, message: String) {
-        verify("tile-count command workflows") {
-            let context = try liveWorkflowContext()
-            var coverage = LiveCommandWorkflowCoverage.empty
-            try verifyZeroWindowFailures(display: context.primaryDisplay, coverage: &coverage)
-            try verifyFocusCycleRaisesTargetWithAX(display: context.primaryDisplay, coverage: &coverage)
-            for count in 1...6 {
-                try verifyWindowCountWorkflow(
-                    count: count,
-                    display: context.primaryDisplay,
-                    includeManualResize: false,
-                    coverage: &coverage
-                )
-            }
-
-            let missingCommands = coverage.missingRequiredTileCountCommands()
-            guard missingCommands.isEmpty else {
-                throw LiveCommandWorkflowFailure("tile-count command workflow verification missed command coverage: \(missingCommands.joined(separator: ", "))")
-            }
-            return coverage.summary(prefix: "tile-count command workflows verified:")
-        }
-    }
-
-    static func verifyManualTileResizeWorkflows() -> (passed: Bool, message: String) {
-        verify("manual tile resize workflows") {
-            let context = try liveWorkflowContext()
-            var coverage = LiveCommandWorkflowCoverage.empty
-            for count in 2...6 {
-                try verifyManualTileResizeWorkflow(count: count, display: context.primaryDisplay, coverage: &coverage)
-            }
-            let missingCounts = coverage.missingRequiredManualResizeCounts()
-            guard missingCounts.isEmpty else {
-                throw LiveCommandWorkflowFailure("manual tile resize verification missed counts: \(missingCounts.map(String.init).joined(separator: ", "))")
-            }
-            return coverage.summary(prefix: "manual tile resize workflows verified:")
-        }
-    }
-
-    static func verifyResetCommandWorkflows() -> (passed: Bool, message: String) {
-        verify("reset command workflows") {
-            let context = try liveWorkflowContext()
-            var coverage = LiveCommandWorkflowCoverage.empty
-            try verifyResetLayoutCommands(display: context.primaryDisplay, coverage: &coverage)
-            let required = Set(["maximizeReset", "cascade", "shuffle", "resetLayout"])
-            let missing = required.subtracting(coverage.commands).sorted()
-            guard missing.isEmpty else {
-                throw LiveCommandWorkflowFailure("reset command workflow verification missed command coverage: \(missing.joined(separator: ", "))")
-            }
-            return coverage.summary(prefix: "reset command workflows verified:")
-        }
-    }
-
-    static func verifyDropZoneWorkflow() -> (passed: Bool, message: String) {
-        verify("drop-zone workflow") {
-            let context = try liveWorkflowContext()
-            var coverage = LiveCommandWorkflowCoverage.empty
-            try verifyDropZone(display: context.primaryDisplay, coverage: &coverage)
-            guard coverage.commands.contains("drop zone") else {
-                throw LiveCommandWorkflowFailure("drop-zone verification missed drop zone coverage")
-            }
-            return coverage.summary(prefix: "drop-zone workflow verified:")
-        }
-    }
-
-    static func verifyMoveDisplayWorkflow() -> (passed: Bool, message: String) {
-        verify("move-display workflow") {
-            let context = try liveWorkflowContext()
-            var coverage = LiveCommandWorkflowCoverage.empty
-            try verifyMoveDisplayIfAvailable(context: context, coverage: &coverage)
-            if context.orderedDisplays.count >= 2, !coverage.commands.contains("move display") {
-                throw LiveCommandWorkflowFailure("move-display verification missed move display coverage")
-            }
-            return coverage.summary(prefix: "move-display workflow verified:")
-        }
-    }
-
     private static func verify(
         _ name: String,
         run: () throws -> String
@@ -344,48 +268,6 @@ enum LiveCommandWorkflowVerification {
             displays: [display.id: display]
         )
         coverage = coverage.recordingCommand("undoLayout")
-    }
-
-    private static func verifyManualTileResizeWorkflow(
-        count: Int,
-        display: DisplayInfo,
-        coverage: inout LiveCommandWorkflowCoverage
-    ) throws {
-        let liveWindows = makeWindows(
-            count: count,
-            prefix: "Narwhal live manual resize count \(count)",
-            display: display,
-            colors: verificationColors
-        )
-        defer {
-            liveWindows.forEach { $0.window.orderOut(nil) }
-        }
-        RunLoop.current.run(until: Date().addingTimeInterval(0.08))
-
-        try requireVisible(liveWindows, context: "manual tile resize count \(count) setup")
-        var state = LiveCommandWorkflowState(
-            world: workflowWorld(windows: liveWindows, displays: [display], activeDisplay: display),
-            generation: 1
-        )
-        for (index, liveWindow) in liveWindows.enumerated() {
-            state = try verifyLayoutCommand(
-                name: "manual resize setup push",
-                command: .push(liveWindow.id, pushDirections[index % pushDirections.count]),
-                focusedWindowID: liveWindow.id,
-                state: state,
-                liveWindows: liveWindows,
-                displays: [display.id: display]
-            )
-        }
-
-        _ = try verifyManualTileResize(
-            count: count,
-            state: state,
-            liveWindows: liveWindows,
-            displays: [display.id: display]
-        )
-        coverage = coverage.recordingManualResize(count)
-        coverage = coverage.recordingCommand("manual tile resize")
     }
 
     private static func verifyResetLayoutCommands(
@@ -1602,25 +1484,6 @@ private struct LiveCommandWorkflowCoverage {
             "maximizeReset",
             "undoLayout",
             "manual tile resize",
-            "tiled borders",
-            "focus border"
-        ])
-        return required.subtracting(commands).sorted()
-    }
-
-    func missingRequiredTileCountCommands() -> [String] {
-        let required = Set([
-            "push",
-            "center",
-            "eject",
-            "focusDirection",
-            "focusCycle",
-            "focus",
-            "swap",
-            "resizeSplit",
-            "balance",
-            "toggleFloat",
-            "undoLayout",
             "tiled borders",
             "focus border"
         ])

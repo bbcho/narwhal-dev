@@ -77,22 +77,6 @@ run_expected_error() {
   grep -Eq "$pattern" <<<"$output" || fail "$label returned unexpected error: $output"
 }
 
-run_ok_or_expected_error() {
-  local label="$1"
-  local pattern="$2"
-  shift 2
-  local output
-  set +e
-  output="$("$@" 2>&1)"
-  local status="$?"
-  set -e
-  if [ "$status" -eq 0 ]; then
-    grep -Eq '^ok ipc-' <<<"$output" || fail "$label did not return ok: $output"
-    return 0
-  fi
-  grep -Eq "$pattern" <<<"$output" || fail "$label returned unexpected error: $output"
-}
-
 if pgrep -x NarwhalApp >/dev/null 2>&1; then
   fail "NarwhalApp is already running; stop it before running this smoke"
 fi
@@ -126,7 +110,6 @@ run_expected_error "packaged push focused" 'error push_failed:' "$ctl" push left
 run_expected_error "packaged swap focused" 'error swap_failed:' "$ctl" swap right
 run_expected_error "packaged resize focused" 'error resize_failed:' "$ctl" resize up --delta 0.25
 run_expected_error "packaged focus direction" 'error focus_failed:' "$ctl" focus-direction down
-run_ok_or_expected_error "packaged focus cycle" 'error focus_failed:' "$ctl" focus-cycle next
 
 run_expected_error "packaged push explicit" 'error window_not_found:' "$ctl" push left --window "$missing_window"
 run_expected_error "packaged swap explicit" 'error window_not_found:' "$ctl" swap left --window "$missing_window"

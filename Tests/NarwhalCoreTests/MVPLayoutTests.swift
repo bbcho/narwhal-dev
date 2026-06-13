@@ -1353,14 +1353,20 @@ struct MVPLayoutTests {
     @Test("Generated resize combinations keep frames non-overlapping and inside the display")
     func generatedResizeCombinationsPreserveFrameInvariants() throws {
         let frame = CGRect(x: 0, y: 0, width: 1600, height: 900)
-        var checked = 0
+        var generatedCounts: Set<Int> = []
+        var sequenceCountByWindowCount: [Int: Int] = [:]
+        var resizeCountByWindowCount: [Int: Int] = [:]
+        var sequencesWithoutResize: [String] = []
         for count in 2...6 {
             for sequence in generatedDirectionSequences(length: count) {
+                generatedCounts.insert(count)
+                sequenceCountByWindowCount[count, default: 0] += 1
                 var tree = Node.void
                 for (index, direction) in sequence.enumerated() {
                     tree = pushIntoTree(WindowID(raw: UInt32(index + 1)), direction, tree)
                 }
                 let windows = occupiedWindows(in: tree)
+                var resizedThisSequence = 0
                 for window in windows {
                     for direction in [Direction.left, .right, .up, .down] {
                         guard case .success(let resized) = resizeSplitInTree(window, direction, delta: 0.10, tree) else {
@@ -1368,12 +1374,22 @@ struct MVPLayoutTests {
                         }
                         let rects = Array(frames(for: resized, frame: frame).values)
                         try requireValidPartition(rects, in: frame, context: "count=\(count) sequence=\(sequence.map(\.rawValue).joined()) window=\(window.raw) direction=\(direction.rawValue)")
-                        checked += 1
+                        resizedThisSequence += 1
                     }
                 }
+                if resizedThisSequence == 0 {
+                    sequencesWithoutResize.append("count=\(count) sequence=\(sequence.map(\.rawValue).joined())")
+                }
+                resizeCountByWindowCount[count, default: 0] += resizedThisSequence
             }
         }
-        #expect(checked >= 100)
+        #expect(generatedCounts == Set(2...6))
+        #expect(sequenceCountByWindowCount == [2: 16, 3: 64, 4: 256, 5: 1024, 6: 4096])
+        #expect(sequencesWithoutResize.isEmpty, "Every generated resize sequence should expose at least one valid resize; missing=\(sequencesWithoutResize.prefix(5).joined(separator: ";"))")
+        #expect(Set(resizeCountByWindowCount.keys) == Set(2...6))
+        for count in 2...6 {
+            #expect((resizeCountByWindowCount[count] ?? 0) >= (sequenceCountByWindowCount[count] ?? 0))
+        }
     }
 
     @Test("Resize split rejects missing neighbor, invalid delta, and collapsing weights")
