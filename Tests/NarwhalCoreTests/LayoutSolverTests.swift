@@ -135,6 +135,38 @@ struct LayoutSolverTests {
         ) == nil)
     }
 
+    @Test("Browser chrome adjusted frames settle without becoming hard failures")
+    func browserChromeAdjustedFramesSettle() {
+        let firefoxTarget = CGRect(x: 166, y: 33, width: 1346, height: 873)
+        let firefoxActual = CGRect(x: 166, y: 41, width: 1346, height: 864)
+        let systemSettingsTarget = CGRect(x: 756, y: 33, width: 756, height: 873)
+        let systemSettingsActual = CGRect(x: 756, y: 33, width: 723, height: 872)
+
+        #expect(frameWriteApproximatelySettled(target: firefoxTarget, actual: firefoxActual, tolerance: 2))
+        #expect(frameSizeApproximatelySettled(target: firefoxTarget.size, actual: firefoxActual.size, tolerance: 2))
+        #expect(frameWriteApproximatelySettled(target: systemSettingsTarget, actual: systemSettingsActual, tolerance: 2))
+        #expect(frameSizeApproximatelySettled(target: systemSettingsTarget.size, actual: systemSettingsActual.size, tolerance: 2))
+    }
+
+    @Test("Minimum-size expansion is still inferred as a clamp")
+    func minimumSizeExpansionStillInfersClamp() {
+        let target = CGRect(x: 0, y: 0, width: 500, height: 400)
+        let actual = CGRect(x: 0, y: 0, width: 720, height: 400)
+
+        #expect(inferObservedConstraints(target: target, actual: actual, tolerance: 2) == WindowConstraints(minWidth: 720))
+        #expect(!frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 2))
+        #expect(!frameSizeApproximatelySettled(target: target.size, actual: actual.size, tolerance: 2))
+    }
+
+    @Test("Unchanged distant frames do not count as settled writes")
+    func unchangedDistantFramesDoNotSettle() {
+        #expect(!frameWriteApproximatelySettled(
+            target: CGRect(x: 0, y: 0, width: 700, height: 500),
+            actual: CGRect(x: 900, y: 600, width: 700, height: 500),
+            tolerance: 2
+        ))
+    }
+
     @Test("Constraint observations merge monotonically")
     func observedConstraintsMergeByMaximum() throws {
         let display = DisplayID(raw: 1)

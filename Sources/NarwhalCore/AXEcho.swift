@@ -117,6 +117,7 @@ private func consumeFrameEcho(
 ) -> AXEchoConsumeResult {
     consumeFrameEcho(windowID: windowID, component: component, tolerance: tolerance, in: state) { echo in
         originsApproximatelyMatch(echo.targetFrame.origin, frame.origin, tolerance: tolerance)
+            || frameWriteApproximatelySettled(target: echo.targetFrame, actual: frame, tolerance: Double(tolerance))
     }
 }
 
@@ -129,6 +130,7 @@ private func consumeFrameEcho(
 ) -> AXEchoConsumeResult {
     consumeFrameEcho(windowID: windowID, component: component, tolerance: tolerance, in: state) { echo in
         sizesApproximatelyMatch(echo.targetFrame.size, size, tolerance: tolerance)
+            || frameSizeApproximatelySettled(target: echo.targetFrame.size, actual: size, tolerance: Double(tolerance))
     }
 }
 

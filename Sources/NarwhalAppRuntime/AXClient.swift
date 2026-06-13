@@ -586,6 +586,9 @@ struct AXClient {
         if let observed = inferObservedConstraints(target: target, actual: actual, tolerance: 2) {
             return .clamped(actual: actual, observed: observed)
         }
+        if frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 2) {
+            return .converged(actual: actual)
+        }
         return .failed(.frameDidNotConverge(target: target, actual: actual, attempts: 3))
     }
 

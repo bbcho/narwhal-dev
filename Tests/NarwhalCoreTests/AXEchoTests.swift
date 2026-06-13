@@ -44,6 +44,21 @@ struct AXEchoTests {
         #expect(result.state == state)
     }
 
+    @Test("Browser chrome adjusted frame echo is suppressed")
+    func browserChromeAdjustedFrameEchoIsSuppressed() {
+        let window = WindowID(raw: 1)
+        let target = CGRect(x: 166, y: 33, width: 1346, height: 873)
+        let actual = CGRect(x: 166, y: 41, width: 1346, height: 864)
+        let initial = expectFrameEcho(windowID: window, targetFrame: target, now: 100, ttl: 5, in: .empty)
+
+        let moved = consumeExpectedEcho(.windowMoved(window, actual), now: 101, tolerance: 2, in: initial)
+        let resized = consumeExpectedEcho(.windowResized(window, actual.size), now: 102, tolerance: 2, in: moved.state)
+
+        #expect(moved.isEcho)
+        #expect(resized.isEcho)
+        #expect(resized.state == .empty)
+    }
+
     @Test("Focus echo is consumed once")
     func focusEchoIsConsumedOnce() {
         let window = WindowID(raw: 7)

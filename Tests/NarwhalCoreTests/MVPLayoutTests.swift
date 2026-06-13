@@ -1154,6 +1154,228 @@ struct MVPLayoutTests {
         #expect(rightFrames[second] == CGRect(x: 900, y: 0, width: 300, height: 800))
     }
 
+    @Test("Resize split handles A spanning left with B over C and mirrored right span")
+    func resizeSplitHandlesTwoRowSpansAndMirrors() throws {
+        let a = WindowID(raw: 1)
+        let b = WindowID(raw: 2)
+        let c = WindowID(raw: 3)
+        let leftSpan = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .leaf(a)),
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1, node: .leaf(b)),
+                try cell(weight: 1, node: .leaf(c))
+            ])))
+        ]))
+        let rightSpan = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1, node: .leaf(b)),
+                try cell(weight: 1, node: .leaf(c))
+            ]))),
+            try cell(weight: 1, node: .leaf(a))
+        ]))
+
+        let leftFrames = frames(for: leftSpan)
+        #expect(leftFrames[a] == CGRect(x: 0, y: 0, width: 600, height: 800))
+        #expect(leftFrames[b] == CGRect(x: 600, y: 0, width: 600, height: 400))
+        #expect(leftFrames[c] == CGRect(x: 600, y: 400, width: 600, height: 400))
+
+        let grownLeftSpan = try requireSuccess(
+            resizeSplitInTree(a, .right, delta: 0.25, leftSpan),
+            "Expected left spanning tile to grow toward right stack"
+        )
+        let grownLeftFrames = frames(for: grownLeftSpan)
+        #expect(grownLeftFrames[a] == CGRect(x: 0, y: 0, width: 750, height: 800))
+        #expect(grownLeftFrames[b] == CGRect(x: 750, y: 0, width: 450, height: 400))
+        #expect(grownLeftFrames[c] == CGRect(x: 750, y: 400, width: 450, height: 400))
+
+        let grownTopRight = try requireSuccess(
+            resizeSplitInTree(b, .down, delta: 0.25, leftSpan),
+            "Expected top-right tile to grow toward bottom-right tile"
+        )
+        let grownTopFrames = frames(for: grownTopRight)
+        #expect(grownTopFrames[a] == CGRect(x: 0, y: 0, width: 600, height: 800))
+        #expect(grownTopFrames[b] == CGRect(x: 600, y: 0, width: 600, height: 500))
+        #expect(grownTopFrames[c] == CGRect(x: 600, y: 500, width: 600, height: 300))
+
+        let rightFrames = frames(for: rightSpan)
+        #expect(rightFrames[b] == CGRect(x: 0, y: 0, width: 600, height: 400))
+        #expect(rightFrames[c] == CGRect(x: 0, y: 400, width: 600, height: 400))
+        #expect(rightFrames[a] == CGRect(x: 600, y: 0, width: 600, height: 800))
+
+        let grownRightSpan = try requireSuccess(
+            resizeSplitInTree(a, .left, delta: 0.25, rightSpan),
+            "Expected right spanning tile to grow toward left stack"
+        )
+        let grownRightFrames = frames(for: grownRightSpan)
+        #expect(grownRightFrames[b] == CGRect(x: 0, y: 0, width: 450, height: 400))
+        #expect(grownRightFrames[c] == CGRect(x: 0, y: 400, width: 450, height: 400))
+        #expect(grownRightFrames[a] == CGRect(x: 450, y: 0, width: 750, height: 800))
+    }
+
+    @Test("Resize split handles A column with B spanning over C and D and mirrored column")
+    func resizeSplitHandlesColumnAndRowSpansWithMirrors() throws {
+        let a = WindowID(raw: 1)
+        let b = WindowID(raw: 2)
+        let c = WindowID(raw: 3)
+        let d = WindowID(raw: 4)
+        let rightComposite = Node.split(try split(axis: .vertical, cells: [
+            try cell(weight: 1, node: .leaf(b)),
+            try cell(weight: 1, node: .split(try split(axis: .horizontal, cells: [
+                try cell(weight: 1, node: .leaf(c)),
+                try cell(weight: 1, node: .leaf(d))
+            ])))
+        ]))
+        let leftSpan = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .leaf(a)),
+            try cell(weight: 2, node: rightComposite)
+        ]))
+        let rightSpan = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 2, node: rightComposite),
+            try cell(weight: 1, node: .leaf(a))
+        ]))
+
+        let leftFrames = frames(for: leftSpan)
+        #expect(leftFrames[a] == CGRect(x: 0, y: 0, width: 400, height: 800))
+        #expect(leftFrames[b] == CGRect(x: 400, y: 0, width: 800, height: 400))
+        #expect(leftFrames[c] == CGRect(x: 400, y: 400, width: 400, height: 400))
+        #expect(leftFrames[d] == CGRect(x: 800, y: 400, width: 400, height: 400))
+
+        let grownLeftSpan = try requireSuccess(
+            resizeSplitInTree(a, .right, delta: 0.5, leftSpan),
+            "Expected left spanning tile to grow toward right composite"
+        )
+        let grownLeftFrames = frames(for: grownLeftSpan)
+        #expect(grownLeftFrames[a] == CGRect(x: 0, y: 0, width: 600, height: 800))
+        #expect(grownLeftFrames[b] == CGRect(x: 600, y: 0, width: 600, height: 400))
+        #expect(grownLeftFrames[c] == CGRect(x: 600, y: 400, width: 300, height: 400))
+        #expect(grownLeftFrames[d] == CGRect(x: 900, y: 400, width: 300, height: 400))
+
+        let grownTop = try requireSuccess(
+            resizeSplitInTree(b, .down, delta: 0.25, leftSpan),
+            "Expected top spanning tile to grow toward lower row"
+        )
+        let grownTopFrames = frames(for: grownTop)
+        #expect(grownTopFrames[a] == CGRect(x: 0, y: 0, width: 400, height: 800))
+        #expect(grownTopFrames[b] == CGRect(x: 400, y: 0, width: 800, height: 500))
+        #expect(grownTopFrames[c] == CGRect(x: 400, y: 500, width: 400, height: 300))
+        #expect(grownTopFrames[d] == CGRect(x: 800, y: 500, width: 400, height: 300))
+
+        let rightFrames = frames(for: rightSpan)
+        #expect(rightFrames[b] == CGRect(x: 0, y: 0, width: 800, height: 400))
+        #expect(rightFrames[c] == CGRect(x: 0, y: 400, width: 400, height: 400))
+        #expect(rightFrames[d] == CGRect(x: 400, y: 400, width: 400, height: 400))
+        #expect(rightFrames[a] == CGRect(x: 800, y: 0, width: 400, height: 800))
+
+        let grownRightSpan = try requireSuccess(
+            resizeSplitInTree(a, .left, delta: 0.5, rightSpan),
+            "Expected right spanning tile to grow toward left composite"
+        )
+        let grownRightFrames = frames(for: grownRightSpan)
+        #expect(grownRightFrames[b] == CGRect(x: 0, y: 0, width: 600, height: 400))
+        #expect(grownRightFrames[c] == CGRect(x: 0, y: 400, width: 300, height: 400))
+        #expect(grownRightFrames[d] == CGRect(x: 300, y: 400, width: 300, height: 400))
+        #expect(grownRightFrames[a] == CGRect(x: 600, y: 0, width: 600, height: 800))
+    }
+
+    @Test("Resize split handles wide irregular A and B spans over E D C and mirrored spans")
+    func resizeSplitHandlesWideIrregularSpansAndMirrors() throws {
+        let a = WindowID(raw: 1)
+        let b = WindowID(raw: 2)
+        let c = WindowID(raw: 3)
+        let d = WindowID(raw: 4)
+        let e = WindowID(raw: 5)
+        let rightComposite = Node.split(try split(axis: .vertical, cells: [
+            try cell(weight: 1, node: .leaf(b)),
+            try cell(weight: 1, node: .split(try split(axis: .horizontal, cells: [
+                try cell(weight: 1, node: .leaf(e)),
+                try cell(weight: 1, node: .leaf(d)),
+                try cell(weight: 2, node: .leaf(c))
+            ])))
+        ]))
+        let leftSpan = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 4, node: .leaf(a)),
+            try cell(weight: 4, node: rightComposite)
+        ]))
+        let rightSpan = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 4, node: rightComposite),
+            try cell(weight: 4, node: .leaf(a))
+        ]))
+        let frame = CGRect(x: 0, y: 0, width: 1600, height: 800)
+
+        let leftFrames = frames(for: leftSpan, frame: frame)
+        #expect(leftFrames[a] == CGRect(x: 0, y: 0, width: 800, height: 800))
+        #expect(leftFrames[b] == CGRect(x: 800, y: 0, width: 800, height: 400))
+        #expect(leftFrames[e] == CGRect(x: 800, y: 400, width: 200, height: 400))
+        #expect(leftFrames[d] == CGRect(x: 1000, y: 400, width: 200, height: 400))
+        #expect(leftFrames[c] == CGRect(x: 1200, y: 400, width: 400, height: 400))
+
+        let grownLeftSpan = try requireSuccess(
+            resizeSplitInTree(a, .right, delta: 1, leftSpan),
+            "Expected wide left spanning tile to grow toward right composite"
+        )
+        let grownLeftFrames = frames(for: grownLeftSpan, frame: frame)
+        #expect(grownLeftFrames[a] == CGRect(x: 0, y: 0, width: 1000, height: 800))
+        #expect(grownLeftFrames[b] == CGRect(x: 1000, y: 0, width: 600, height: 400))
+        #expect(grownLeftFrames[e] == CGRect(x: 1000, y: 400, width: 150, height: 400))
+        #expect(grownLeftFrames[d] == CGRect(x: 1150, y: 400, width: 150, height: 400))
+        #expect(grownLeftFrames[c] == CGRect(x: 1300, y: 400, width: 300, height: 400))
+
+        let grownB = try requireSuccess(
+            resizeSplitInTree(b, .down, delta: 0.25, leftSpan),
+            "Expected wide top row to grow toward lower irregular row"
+        )
+        let grownBFrames = frames(for: grownB, frame: frame)
+        #expect(grownBFrames[a] == CGRect(x: 0, y: 0, width: 800, height: 800))
+        #expect(grownBFrames[b] == CGRect(x: 800, y: 0, width: 800, height: 500))
+        #expect(grownBFrames[e] == CGRect(x: 800, y: 500, width: 200, height: 300))
+        #expect(grownBFrames[d] == CGRect(x: 1000, y: 500, width: 200, height: 300))
+        #expect(grownBFrames[c] == CGRect(x: 1200, y: 500, width: 400, height: 300))
+
+        let rightFrames = frames(for: rightSpan, frame: frame)
+        #expect(rightFrames[b] == CGRect(x: 0, y: 0, width: 800, height: 400))
+        #expect(rightFrames[e] == CGRect(x: 0, y: 400, width: 200, height: 400))
+        #expect(rightFrames[d] == CGRect(x: 200, y: 400, width: 200, height: 400))
+        #expect(rightFrames[c] == CGRect(x: 400, y: 400, width: 400, height: 400))
+        #expect(rightFrames[a] == CGRect(x: 800, y: 0, width: 800, height: 800))
+
+        let grownRightSpan = try requireSuccess(
+            resizeSplitInTree(a, .left, delta: 1, rightSpan),
+            "Expected wide right spanning tile to grow toward left composite"
+        )
+        let grownRightFrames = frames(for: grownRightSpan, frame: frame)
+        #expect(grownRightFrames[b] == CGRect(x: 0, y: 0, width: 600, height: 400))
+        #expect(grownRightFrames[e] == CGRect(x: 0, y: 400, width: 150, height: 400))
+        #expect(grownRightFrames[d] == CGRect(x: 150, y: 400, width: 150, height: 400))
+        #expect(grownRightFrames[c] == CGRect(x: 300, y: 400, width: 300, height: 400))
+        #expect(grownRightFrames[a] == CGRect(x: 600, y: 0, width: 1000, height: 800))
+    }
+
+    @Test("Generated resize combinations keep frames non-overlapping and inside the display")
+    func generatedResizeCombinationsPreserveFrameInvariants() throws {
+        let frame = CGRect(x: 0, y: 0, width: 1600, height: 900)
+        var checked = 0
+        for count in 2...6 {
+            for sequence in generatedDirectionSequences(length: count) {
+                var tree = Node.void
+                for (index, direction) in sequence.enumerated() {
+                    tree = pushIntoTree(WindowID(raw: UInt32(index + 1)), direction, tree)
+                }
+                let windows = occupiedWindows(in: tree)
+                for window in windows {
+                    for direction in [Direction.left, .right, .up, .down] {
+                        guard case .success(let resized) = resizeSplitInTree(window, direction, delta: 0.10, tree) else {
+                            continue
+                        }
+                        let rects = Array(frames(for: resized, frame: frame).values)
+                        try requireValidPartition(rects, in: frame, context: "count=\(count) sequence=\(sequence.map(\.rawValue).joined()) window=\(window.raw) direction=\(direction.rawValue)")
+                        checked += 1
+                    }
+                }
+            }
+        }
+        #expect(checked >= 100)
+    }
+
     @Test("Resize split rejects missing neighbor, invalid delta, and collapsing weights")
     func resizeSplitRejectsInvalidPureInputs() throws {
         let first = WindowID(raw: 1)
@@ -3399,6 +3621,44 @@ struct MVPLayoutTests {
         ).tiled
     }
 
+    private func generatedDirectionSequences(length: Int) -> [[Direction]] {
+        guard length > 0 else { return [[]] }
+        let directions: [Direction] = [.left, .right, .up, .down]
+        return (0..<length).reduce([[]]) { sequences, _ in
+            sequences.flatMap { sequence in
+                directions.map { sequence + [$0] }
+            }
+        }
+    }
+
+    private func requireValidPartition(_ rects: [CGRect], in frame: CGRect, context: String) throws {
+        let tolerance: CGFloat = 0.5
+        guard !rects.isEmpty else {
+            throw TestFailure("Expected non-empty partition for \(context)")
+        }
+        for rect in rects {
+            guard rect.width > 0,
+                  rect.height > 0,
+                  rect.minX >= frame.minX - tolerance,
+                  rect.minY >= frame.minY - tolerance,
+                  rect.maxX <= frame.maxX + tolerance,
+                  rect.maxY <= frame.maxY + tolerance
+            else {
+                throw TestFailure("Invalid rect \(rect.debugDescription) in frame \(frame.debugDescription) for \(context)")
+            }
+        }
+        for lhsIndex in rects.indices {
+            for rhsIndex in rects.indices where rhsIndex > lhsIndex {
+                let overlap = rects[lhsIndex].intersection(rects[rhsIndex])
+                guard overlap.isNull || overlap.width <= tolerance || overlap.height <= tolerance else {
+                    throw TestFailure(
+                        "Overlapping rects \(rects[lhsIndex].debugDescription) and \(rects[rhsIndex].debugDescription) for \(context)"
+                    )
+                }
+            }
+        }
+    }
+
     private func metadata(
         for window: WindowID,
         frame: CGRect = CGRect(x: 0, y: 0, width: 100, height: 100),
@@ -3529,4 +3789,11 @@ struct MVPLayoutTests {
     }
 
     private struct TestAbort: Error {}
+    private struct TestFailure: Error {
+        let message: String
+
+        init(_ message: String) {
+            self.message = message
+        }
+    }
 }
