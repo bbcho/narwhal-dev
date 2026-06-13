@@ -7,6 +7,7 @@ app_dir="$HOME/Applications"
 launch_agents_dir="$HOME/Library/LaunchAgents"
 replace_existing="false"
 use_launchctl="true"
+reset_accessibility="true"
 
 usage() {
   cat <<'USAGE'
@@ -22,6 +23,8 @@ Options:
   --launch-agents-dir DIR         LaunchAgent directory. Default: ~/Library/LaunchAgents.
   --replace                       Replace an existing installed app/plist.
   --no-launchctl                  Do not run launchctl bootout/bootstrap.
+  --no-reset-accessibility        Do not reset Narwhal's Accessibility approval.
+                                  Default: reset when launchctl is used.
   --help                          Show this help.
 USAGE
 }
@@ -54,6 +57,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-launchctl)
       use_launchctl="false"
+      shift
+      ;;
+    --no-reset-accessibility)
+      reset_accessibility="false"
       shift
       ;;
     --help|-h)
@@ -94,6 +101,7 @@ source_app="$package_dir/Narwhal.app"
 installed_app="$app_dir/Narwhal.app"
 launch_agent="$launch_agents_dir/com.ben.narwhal.plist"
 app_executable="$installed_app/Contents/MacOS/NarwhalApp"
+bundle_identifier="com.ben.narwhal"
 socket_path="/tmp/narwhal-$(id -u).sock"
 legacy_installed_app="$app_dir/WinMgr.app"
 legacy_launch_agent="$launch_agents_dir/com.ben.winmgr.plist"
@@ -171,6 +179,10 @@ plutil -replace WorkingDirectory -string "$HOME" "$launch_agent"
 plutil -lint "$launch_agent"
 
 if [ "$use_launchctl" = "true" ]; then
+  if [ "$reset_accessibility" != "false" ]; then
+    echo "Resetting Accessibility approval for $bundle_identifier"
+    tccutil reset Accessibility "$bundle_identifier"
+  fi
   launchctl bootout "gui/$(id -u)" "$launch_agent" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$launch_agent"
 fi
@@ -179,4 +191,5 @@ cat <<EOF
 Installed $installed_app
 Installed $launch_agent
 LaunchAgent active: $use_launchctl
+Accessibility reset: $([ "$use_launchctl" = "true" ] && [ "$reset_accessibility" != "false" ] && echo true || echo false)
 EOF

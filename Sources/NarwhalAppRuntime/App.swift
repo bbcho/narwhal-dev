@@ -8,7 +8,45 @@ import NarwhalIPC
 @MainActor
 public enum NarwhalApplication {
     public static func main() {
+        let startupArguments = StartupArguments.current
+        if startupArguments.command == .checkConfig {
+            Darwin.exit(runHeadlessCheckConfig(startupArguments) ? 0 : 1)
+        }
         AppDelegate.main()
+    }
+
+    private static func runHeadlessCheckConfig(_ startupArguments: StartupArguments) -> Bool {
+        let reporter = StartupReporter()
+        reporter.info("NarwhalApp started")
+        reporter.info("Log file: \(StartupReporter.defaultLogPath)")
+
+        let result: Result<StartupConfigLoad, StartupConfigError>
+        switch startupArguments.startupConfigRequest {
+        case .success(let request):
+            result = StartupConfigLoader(
+                configURL: request.url,
+                missingFilePolicy: request.missingFilePolicy
+            ).load()
+        case .failure(let error):
+            result = .failure(error)
+        }
+
+        switch result {
+        case .success(let loaded):
+            switch loaded.source {
+            case .builtInDefault(let missingUserConfig):
+                reporter.info("Startup config not found at \(missingUserConfig.path); using built-in defaults")
+            case .userFile(let url):
+                reporter.info("Loaded startup config from \(url.path)")
+            }
+            reporter.info("Startup config active: \(loaded.config.keymap.count) hotkeys, \(loaded.config.zones.count) zones")
+            reporter.info("NarwhalApp stopped")
+            return true
+        case .failure(let error):
+            reporter.error("Startup config failed: \(error.description)")
+            reporter.info("NarwhalApp stopped")
+            return false
+        }
     }
 }
 

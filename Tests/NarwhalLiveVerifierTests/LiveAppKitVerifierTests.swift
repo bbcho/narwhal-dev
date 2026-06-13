@@ -23,6 +23,11 @@ struct LiveAppKitVerifierTests {
         try expectPassed(CommandOverlayVerification.verifyDefaultTwoColumnLayout())
     }
 
+    @Test("Visual artifacts and pixel rules")
+    func visualArtifactsAndPixelRules() throws {
+        try expectPassed(VisualArtifactVerification.verifySavedArtifacts())
+    }
+
     @Test("Focus border radius and stacking")
     func focusBorderRadiusAndStacking() throws {
         try expectPassed(FocusBorderVerification.verifyPerWindowCornerRadii())

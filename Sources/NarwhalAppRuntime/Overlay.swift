@@ -1512,6 +1512,28 @@ enum CommandOverlayVerification {
         }) else {
             return (false, "default command overlay is missing Open Finder")
         }
+        let rows = sections.flatMap(\.rows)
+        let missingDefaultBindings = Config.default.keymap.compactMap { binding -> String? in
+            let expected = CommandOverlayRow(
+                key: describe(binding.key),
+                command: commandOverlayCommand(for: binding.action),
+                detail: commandOverlayDescription(for: binding.action)
+            )
+            guard rows.contains(where: {
+                $0.key == expected.key
+                    && $0.command == expected.command
+                    && $0.detail == expected.detail
+            }) else {
+                return "\(expected.key) \(expected.command)"
+            }
+            return nil
+        }
+        guard missingDefaultBindings.isEmpty else {
+            return (
+                false,
+                "default command overlay is missing bindings: \(missingDefaultBindings.joined(separator: ", "))"
+            )
+        }
         guard metrics.columns[1].first?.title == CommandOverlayCategory.system.title else {
             return (false, "default command overlay does not place System commands at the top of the right column")
         }
@@ -1672,6 +1694,186 @@ enum CommandOverlayVerification {
         view.frame = CGRect(origin: .zero, size: viewSize)
         view.prepareForFirstDisplay()
         return view.debugLayoutSnapshot()
+    }
+}
+
+@MainActor
+enum VisualArtifactVerification {
+    static func verifySavedArtifacts() -> (passed: Bool, message: String) {
+        do {
+            let directory = try artifactDirectory()
+            let sections = commandOverlaySections(
+                for: Config.default.keymap,
+                dragModifier: Config.default.dragModifier,
+                zones: Config.default.zones
+            )
+
+            let regular = try renderCommandOverlayArtifact(
+                sections: sections,
+                availableSize: CGSize(width: 2200, height: 760),
+                url: directory.appendingPathComponent("command-overlay-regular.png")
+            )
+            guard regular.isNonBlank, regular.hasReadableRange else {
+                return (false, "regular command overlay artifact failed pixel rules: \(regular.description)")
+            }
+
+            let compact = try renderCommandOverlayArtifact(
+                sections: sections,
+                availableSize: CGSize(width: 760, height: 760),
+                url: directory.appendingPathComponent("command-overlay-compact.png")
+            )
+            guard compact.isNonBlank, compact.hasReadableRange else {
+                return (false, "compact command overlay artifact failed pixel rules: \(compact.description)")
+            }
+
+            let borderView = BorderView(border: BorderConfig(width: 4, colorHex: "#4DA3FF"), cornerRadius: 18)
+            let border = try renderArtifact(
+                view: borderView,
+                size: CGSize(width: 320, height: 200),
+                url: directory.appendingPathComponent("focus-border.png")
+            )
+            guard border.hasBlueSignal, border.centerIsClear else {
+                return (false, "focus border artifact failed pixel rules: \(border.description)")
+            }
+
+            let hudArtifacts = try [
+                ("hud-info.png", HUDView(message: "Command completed", tone: .info)),
+                ("hud-success.png", HUDView(message: "Layout saved", tone: .success)),
+                ("hud-warning.png", HUDView(message: "Window minimum reached", tone: .warning)),
+                ("hud-error.png", HUDView(message: "Frame write failed", tone: .error))
+            ].map { name, view in
+                try renderArtifact(
+                    view: view,
+                    size: CGSize(width: 360, height: HUDView.height),
+                    url: directory.appendingPathComponent(name)
+                )
+            }
+            guard hudArtifacts.allSatisfy({ $0.isNonBlank && $0.hasReadableRange }) else {
+                return (false, "HUD artifacts failed pixel rules: \(hudArtifacts.map(\.description).joined(separator: "; "))")
+            }
+
+            return (
+                true,
+                "visual artifacts verified in \(directory.path): \(regular.description); \(compact.description); \(border.description)"
+            )
+        } catch {
+            return (false, "visual artifact verification failed: \(String(describing: error))")
+        }
+    }
+
+    private static func renderCommandOverlayArtifact(
+        sections: [CommandOverlaySection],
+        availableSize: CGSize,
+        url: URL
+    ) throws -> VisualArtifactStats {
+        let metrics = CommandOverlayMetrics.fitting(sections: sections, availableSize: availableSize)
+        let size = CommandOverlayLayout.windowSize(
+            forContentSize: metrics.contentSize,
+            availableSize: availableSize
+        )
+        let view = CommandOverlayView(
+            columns: metrics.columns,
+            keyColumnWidth: metrics.keyColumnWidth,
+            commandColumnWidth: metrics.commandColumnWidth,
+            rowsHeight: metrics.rowsHeight
+        )
+        view.prepareForFirstDisplay()
+        return try renderArtifact(view: view, size: size, url: url)
+    }
+
+    private static func artifactDirectory() throws -> URL {
+        let path = ProcessInfo.processInfo.environment["NARWHAL_VISUAL_ARTIFACT_DIR"]
+            ?? "/private/tmp/narwhal-live-artifacts"
+        let url = URL(fileURLWithPath: path, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private static func renderArtifact(view: NSView, size: CGSize, url: URL) throws -> VisualArtifactStats {
+        view.frame = CGRect(origin: .zero, size: size)
+        view.layoutSubtreeIfNeeded()
+        if let overlay = view as? CommandOverlayView {
+            overlay.prepareForFirstDisplay()
+        }
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            throw VisualArtifactError.renderFailed("could not create bitmap rep for \(url.lastPathComponent)")
+        }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]) else {
+            throw VisualArtifactError.renderFailed("could not encode PNG for \(url.lastPathComponent)")
+        }
+        try png.write(to: url, options: .atomic)
+        return VisualArtifactStats(rep: rep, url: url)
+    }
+}
+
+private enum VisualArtifactError: Error {
+    case renderFailed(String)
+}
+
+private struct VisualArtifactStats {
+    let url: URL
+    let width: Int
+    let height: Int
+    let visiblePixels: Int
+    let bluePixels: Int
+    let luminanceRange: Double
+    let centerAlpha: Double
+
+    init(rep: NSBitmapImageRep, url: URL) {
+        self.url = url
+        width = rep.pixelsWide
+        height = rep.pixelsHigh
+
+        var visible = 0
+        var blue = 0
+        var minLuminance = 1.0
+        var maxLuminance = 0.0
+        for y in 0..<max(0, rep.pixelsHigh) {
+            for x in 0..<max(0, rep.pixelsWide) {
+                guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                let alpha = Double(color.alphaComponent)
+                let red = Double(color.redComponent)
+                let green = Double(color.greenComponent)
+                let blueComponent = Double(color.blueComponent)
+                if alpha > 0.04 || red + green + blueComponent > 0.08 {
+                    visible += 1
+                    let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blueComponent
+                    minLuminance = min(minLuminance, luminance)
+                    maxLuminance = max(maxLuminance, luminance)
+                }
+                if alpha > 0.2, blueComponent > 0.55, blueComponent > red * 1.25, blueComponent > green * 1.05 {
+                    blue += 1
+                }
+            }
+        }
+
+        visiblePixels = visible
+        bluePixels = blue
+        luminanceRange = maxLuminance - minLuminance
+        let centerX = max(0, rep.pixelsWide / 2)
+        let centerY = max(0, rep.pixelsHigh / 2)
+        centerAlpha = Double(rep.colorAt(x: centerX, y: centerY)?.usingColorSpace(.deviceRGB)?.alphaComponent ?? 0)
+    }
+
+    var isNonBlank: Bool {
+        visiblePixels > max(20, width * height / 80)
+    }
+
+    var hasReadableRange: Bool {
+        luminanceRange >= 0.30
+    }
+
+    var hasBlueSignal: Bool {
+        bluePixels > max(12, (width + height) / 3)
+    }
+
+    var centerIsClear: Bool {
+        centerAlpha < 0.10
+    }
+
+    var description: String {
+        "\(url.lastPathComponent) \(width)x\(height) visible=\(visiblePixels) blue=\(bluePixels) lumRange=\(String(format: "%.3f", luminanceRange)) centerAlpha=\(String(format: "%.3f", centerAlpha))"
     }
 }
 
