@@ -64,6 +64,47 @@ actor WorldActor {
         }
     }
 
+    func planExternalGeometry(_ event: AXEvent) -> Result<CommandPlanResult?, CommandError> {
+        switch event {
+        case .windowMoved, .windowResized:
+            break
+        case .windowOpened, .windowClosed, .windowFocused:
+            return .success(nil)
+        }
+
+        let oldWorld = world
+        switch apply(event.toCommand(), to: oldWorld) {
+        case .success(let newWorld):
+            guard newWorld.spaces != oldWorld.spaces else {
+                world = newWorld
+                pruneRuntimeState()
+                return .success(nil)
+            }
+            return makePlan(
+                from: oldWorld,
+                to: newWorld,
+                focusedWindowID: nil,
+                undoWorld: oldWorld
+            )
+            .map(Optional.some)
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    func replanExternalGeometryAfterClamp(_ previous: CommandPlanResult) -> Result<CommandPlanResult, CommandError> {
+        let constrainedWorld = worldByRecordingObservedConstraints(
+            world.windowConstraints,
+            in: previous.plannedWorld
+        )
+        return makePlan(
+            from: world,
+            to: constrainedWorld,
+            focusedWindowID: nil,
+            undoWorld: previous.undoWorld
+        )
+    }
+
     func reloadConfig(_ config: Config) {
         guard case .success(let next) = apply(.reloadConfig(config), to: world) else { return }
         world = next

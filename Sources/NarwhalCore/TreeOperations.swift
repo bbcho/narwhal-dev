@@ -122,6 +122,58 @@ public func resizeSplitInTree(
     )
 }
 
+public func resizeSplitInTreeToMatchWindowFrame(
+    _ window: WindowID,
+    _ direction: Direction,
+    desiredFrame: CGRect,
+    rootFrame: CGRect,
+    innerGap: Double,
+    _ node: Node
+) -> Result<Node, TreeResizeError> {
+    guard desiredFrame.isFinitePositive,
+          rootFrame.isFinitePositive,
+          innerGap.isFinite
+    else {
+        return .failure(.nonFiniteDelta)
+    }
+    guard let path = pathToWindow(window, in: node, parentPath: []) else {
+        return .failure(.windowNotFound(window))
+    }
+    guard let target = resizeTarget(in: path, direction: direction) else {
+        return .failure(.noNeighbor(direction))
+    }
+    guard let parentFrame = frame(at: target.parentPath, in: node, rootFrame: rootFrame),
+          parentFrame.isFinitePositive
+    else {
+        return .failure(.nonPositiveWeight)
+    }
+
+    let axis = direction.layoutAxisForPush
+    let parentExtent = axis == .horizontal ? parentFrame.width : parentFrame.height
+    let desiredExtent = axis == .horizontal ? desiredFrame.width : desiredFrame.height
+    let desiredCellExtent = desiredExtent + max(0, CGFloat(innerGap))
+    guard parentExtent > 0, desiredCellExtent > 0 else {
+        return .failure(.nonPositiveWeight)
+    }
+
+    guard let split = split(at: target.parentPath, in: node) else {
+        return .failure(.nonPositiveWeight)
+    }
+    let totalWeight = split.cells.map(\.weight).reduce(0, +)
+    let desiredWeight = Double(desiredCellExtent / parentExtent) * totalWeight
+    let delta = desiredWeight - split.cells[target.childIndex].weight
+    guard delta.isFinite else { return .failure(.nonFiniteDelta) }
+    guard abs(delta) > 0.000_001 else { return .success(node) }
+
+    return resizeSplit(
+        at: target.parentPath,
+        childIndex: target.childIndex,
+        neighborIndex: target.neighborIndex,
+        delta: delta,
+        in: node
+    )
+}
+
 public func insertIntoSubtree(
     _ window: WindowID,
     path: NodePath,
@@ -269,6 +321,70 @@ private func resizedSplitNode(
         .replacingCell(at: childIndex, with: makeCell(weight: childWeight, node: child.node))
         .replacingCell(at: neighborIndex, with: makeCell(weight: neighborWeight, node: neighbor.node))
     return .success(.split(makeSplit(axis: split.axis, cells: cells)))
+}
+
+private func frame(at path: NodePath, in node: Node, rootFrame: CGRect) -> CGRect? {
+    guard let nextIndex = path.first else { return rootFrame }
+    guard case .split(let split) = node,
+          split.cells.indices.contains(nextIndex)
+    else {
+        return nil
+    }
+    let childFrames = splitFrames(rootFrame, axis: split.axis, weights: split.cells.map(\.weight))
+    return frame(
+        at: Array(path.dropFirst()),
+        in: split.cells[nextIndex].node,
+        rootFrame: childFrames[nextIndex]
+    )
+}
+
+private func split(at path: NodePath, in node: Node) -> Split? {
+    guard let nextIndex = path.first else {
+        guard case .split(let split) = node else { return nil }
+        return split
+    }
+    guard case .split(let currentSplit) = node,
+          currentSplit.cells.indices.contains(nextIndex)
+    else {
+        return nil
+    }
+    return split(at: Array(path.dropFirst()), in: currentSplit.cells[nextIndex].node)
+}
+
+private func splitFrames(_ frame: CGRect, axis: Axis, weights: [Double]) -> [CGRect] {
+    let total = weights.reduce(0, +)
+    guard total > 0 else { return [] }
+    let extent = axis == .horizontal ? frame.width : frame.height
+    let lengths = splitLengths(extent: extent, weights: weights, totalWeight: total)
+    return zip(splitOffsets(for: lengths), lengths).map { offset, length in
+        switch axis {
+        case .horizontal:
+            return CGRect(x: frame.minX + offset, y: frame.minY, width: length, height: frame.height)
+        case .vertical:
+            return CGRect(x: frame.minX, y: frame.minY + offset, width: frame.width, height: length)
+        }
+    }
+}
+
+private func splitLengths(extent: CGFloat, weights: [Double], totalWeight: Double) -> [CGFloat] {
+    guard !weights.isEmpty else { return [] }
+    let leading = weights.dropLast().map { extent * CGFloat($0 / totalWeight) }
+    return leading + [extent - leading.reduce(0, +)]
+}
+
+private func splitOffsets(for lengths: [CGFloat]) -> [CGFloat] {
+    lengths.indices.map { lengths.prefix($0).reduce(0, +) }
+}
+
+private extension CGRect {
+    var isFinitePositive: Bool {
+        minX.isFinite
+            && minY.isFinite
+            && width.isFinite
+            && height.isFinite
+            && width > 0
+            && height > 0
+    }
 }
 
 private func insertAtCenter(_ window: WindowID, _ node: Node) -> Node {

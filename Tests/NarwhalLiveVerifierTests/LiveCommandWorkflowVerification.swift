@@ -415,54 +415,115 @@ enum LiveCommandWorkflowVerification {
         displays: [DisplayID: DisplayInfo]
     ) throws -> LiveCommandWorkflowState {
         let tiledIDs = tiledWindowIDs(in: state.world)
-        guard let targetID = liveWindows.map(\.id).last(where: { tiledIDs.contains($0) }),
-              let target = liveWindow(targetID, in: liveWindows),
-              let originalFrame = state.world.windows[targetID]?.frame,
-              let display = displayContaining(originalFrame, displays: displays)
-        else {
-            throw LiveCommandWorkflowFailure("manual tile resize count \(count) found no tiled target")
+        let candidate = liveWindows
+            .filter { tiledIDs.contains($0.id) }
+            .compactMap { live -> ManualResizeCandidate? in
+                guard let originalFrame = state.world.windows[live.id]?.frame,
+                      let display = displayContaining(originalFrame, displays: displays)
+                else {
+                    return nil
+                }
+                let resizedFrame = manuallyResizedFrame(originalFrame, in: display.visibleFrame)
+                guard !resizedFrame.matches(originalFrame, tolerance: 2) else {
+                    return nil
+                }
+                let nextWorld: World
+                switch apply(.windowResizedExternally(live.id, resizedFrame.size), to: state.world) {
+                case .success(let value):
+                    nextWorld = value
+                case .failure:
+                    return nil
+                }
+                guard nextWorld.spaces != state.world.spaces else { return nil }
+                let plan = try? manualResizePlan(
+                    targetID: live.id,
+                    oldWorld: state.world,
+                    nextWorld: nextWorld,
+                    generation: state.generation
+                )
+                guard let plan,
+                      plan.desiredLayout.delta.moves.keys.contains(where: { $0 != live.id })
+                else {
+                    return nil
+                }
+                return ManualResizeCandidate(
+                    target: live,
+                    display: display,
+                    resizedFrame: resizedFrame,
+                    nextWorld: nextWorld,
+                    plan: plan
+                )
+            }
+            .first
+        guard let candidate else {
+            throw LiveCommandWorkflowFailure("manual tile resize count \(count) found no tiled target with a resizable neighbor")
         }
 
-        let resizedFrame = manuallyResizedFrame(originalFrame, in: display.visibleFrame)
-        guard !resizedFrame.matches(originalFrame, tolerance: 2) else {
-            throw LiveCommandWorkflowFailure("manual tile resize count \(count) produced no visible frame change")
-        }
-
-        target.window.setFrame(appKitFrame(forAXFrame: resizedFrame, display: display), display: true)
+        let targetID = candidate.target.id
+        candidate.target.window.setFrame(
+            appKitFrame(forAXFrame: candidate.resizedFrame, display: candidate.display),
+            display: true
+        )
         RunLoop.current.run(until: Date().addingTimeInterval(0.08))
         try requireMovedWindowsMatchPlan(
             [targetID],
-            moves: [targetID: resizedFrame],
+            moves: [targetID: candidate.resizedFrame],
             windows: liveWindows,
             displays: displays,
-            context: "manual tile resize count \(count)"
+            context: "manual tile resize count \(count) direct target"
         )
 
-        let nextWorld: World
-        switch apply(.windowResizedExternally(targetID, resizedFrame.size), to: state.world) {
-        case .success(let value):
-            nextWorld = value
-        case .failure(let error):
-            throw LiveCommandWorkflowFailure("manual tile resize count \(count) rejected by core: \(error.message)")
-        }
-
-        guard nextWorld.windows[targetID]?.frame.matches(resizedFrame, tolerance: 0.5) == true else {
+        guard candidate.nextWorld.windows[targetID]?.frame.matches(candidate.resizedFrame, tolerance: 0.5) == true else {
             throw LiveCommandWorkflowFailure(
-                "manual tile resize count \(count) did not record resized frame: expected=\(resizedFrame.debugDescription) actual=\(String(describing: nextWorld.windows[targetID]?.frame))"
+                "manual tile resize count \(count) did not record resized frame: expected=\(candidate.resizedFrame.debugDescription) actual=\(String(describing: candidate.nextWorld.windows[targetID]?.frame))"
             )
         }
-        guard tiledWindowIDs(in: nextWorld).contains(targetID) else {
+        guard tiledWindowIDs(in: candidate.nextWorld).contains(targetID) else {
             throw LiveCommandWorkflowFailure("manual tile resize count \(count) removed resized target from tiling state")
         }
 
+        let nextState = try applyAndCommit(
+            candidate.plan,
+            name: "manual tile resize count \(count)",
+            state: state,
+            liveWindows: liveWindows,
+            displays: displays
+        )
+
         try verifyOverlayTracksAndClearsTiledBorders(
-            world: nextWorld,
+            world: nextState.world,
             liveWindows: liveWindows,
             displays: displays,
             context: "manual tile resize count \(count)"
         )
 
-        return LiveCommandWorkflowState(world: nextWorld, generation: state.generation)
+        return nextState
+    }
+
+    private static func manualResizePlan(
+        targetID: WindowID,
+        oldWorld: World,
+        nextWorld: World,
+        generation: UInt64
+    ) throws -> CommandPlanResult {
+        let scope = commandPlanScope(
+            focusedWindowID: targetID,
+            oldWorld: oldWorld,
+            newWorld: nextWorld
+        )
+        switch commandPlan(
+            from: oldWorld,
+            to: nextWorld,
+            focusedWindowID: nil,
+            undoWorld: oldWorld,
+            generation: LayoutGeneration(raw: generation),
+            scope: scope
+        ) {
+        case .success(let value):
+            return value
+        case .failure(let error):
+            throw LiveCommandWorkflowFailure("manual tile resize plan rejected: \(error.message)")
+        }
     }
 
     private static func verifyLayoutCommand(
@@ -1414,6 +1475,15 @@ private struct LiveCommandWorkflowWindow {
 private struct LiveCommandWorkflowState {
     let world: World
     let generation: UInt64
+}
+
+@MainActor
+private struct ManualResizeCandidate {
+    let target: LiveCommandWorkflowWindow
+    let display: DisplayInfo
+    let resizedFrame: CGRect
+    let nextWorld: World
+    let plan: CommandPlanResult
 }
 
 private struct LiveCommandWorkflowContext {

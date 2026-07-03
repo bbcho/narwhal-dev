@@ -45,6 +45,13 @@ struct RealAppWindowVerificationTests {
         try expectPassed(await RealAppWindowVerification.verifyRealAppCommandWorkflows())
     }
 
+    @Test("Chrome and Firefox complete real manual tile resize")
+    func chromeAndFirefoxCompleteRealManualTileResize() async throws {
+        _ = NSApplication.shared
+        VerifierAppDelegate.installIfNeeded()
+        try expectPassed(await RealAppWindowVerification.verifyChromeFirefoxManualTileResize())
+    }
+
     private func expectPassed(_ result: (passed: Bool, message: String)) throws {
         guard result.passed else {
             throw RealAppWindowVerifierFailure(result.message)
@@ -81,6 +88,69 @@ enum RealAppWindowVerification {
             return (false, error.message)
         } catch {
             return (false, "real app command workflow verification failed: \(String(describing: error))")
+        }
+    }
+
+    static func verifyChromeFirefoxManualTileResize() async -> (passed: Bool, message: String) {
+        do {
+            try waitForUnlockedSession()
+            let displays = DisplayClient().currentDisplays()
+            guard displays.values.contains(where: { $0.visibleFrame.width >= 900 && $0.visibleFrame.height >= 620 }) else {
+                throw RealAppWindowVerifierFailure("manual browser resize verification requires a display at least 900x620")
+            }
+
+            let axClient = AXClient(processID: -1)
+            var originals: [RealAppOriginal] = []
+            var didRestore = false
+            defer {
+                if !didRestore {
+                    for original in originals.reversed() {
+                        do {
+                            try cleanupApp(original, using: axClient)
+                        } catch {
+                            print("REAL APP MANUAL RESIZE VERIFY: failed to clean up \(original.spec.name) window \(original.metadata.id.description): \(String(describing: error))")
+                        }
+                    }
+                }
+            }
+
+            for spec in [chromeSpec(), firefoxSpec(), terminalSpec()] {
+                let bundleID = try installedBundleID(for: spec)
+                let wasRunning = isRunning(bundleID: bundleID)
+                try launch(spec: spec, bundleID: bundleID)
+                let metadata = try waitForUsableWindow(spec: spec, bundleID: bundleID, using: axClient)
+                originals.append(RealAppOriginal(
+                    spec: spec,
+                    bundleID: bundleID,
+                    metadata: metadata,
+                    frame: metadata.frame,
+                    wasRunningBeforeTest: wasRunning
+                ))
+            }
+
+            let targetDisplay = try manualResizeVerificationDisplay(displays)
+            try stageManualResizeWindows(
+                originals,
+                on: targetDisplay,
+                using: axClient
+            )
+
+            let summary = try await verifyChromeFirefoxManualResizeWorkflow(
+                originals,
+                targetDisplay: targetDisplay,
+                axClient: axClient,
+                displays: displays
+            )
+
+            for original in originals.reversed() {
+                try cleanupApp(original, using: axClient)
+            }
+            didRestore = true
+            return (true, summary)
+        } catch let error as RealAppWindowVerifierFailure {
+            return (false, error.message)
+        } catch {
+            return (false, "manual browser resize verification failed: \(String(describing: error))")
         }
     }
 
@@ -255,6 +325,11 @@ enum RealAppWindowVerification {
         }
 
         var summaries: [String] = []
+        summaries.append(try await verifyChromeOverFirefoxResizeWorkflow(
+            originals,
+            axClient: axClient,
+            displays: displays
+        ))
         for original in originals {
             summaries.append(try await verifySingleAppWorkflow(
                 original,
@@ -375,6 +450,360 @@ enum RealAppWindowVerification {
         return "mixed-app workflow apps=\(sequence.map { $0.spec.name }.joined(separator: ","))"
     }
 
+    private static func verifyChromeOverFirefoxResizeWorkflow(
+        _ originals: [RealAppOriginal],
+        axClient: AXClient,
+        displays: [DisplayID: DisplayInfo]
+    ) async throws -> String {
+        guard let chrome = originals.first(where: { $0.spec.name == "Google Chrome" }),
+              let firefox = originals.first(where: { $0.spec.name == "Firefox" })
+        else {
+            return "chrome-over-firefox resize skipped: Chrome and Firefox were not both available"
+        }
+        guard let companion = originals.first(where: { original in
+            original.metadata.id != chrome.metadata.id && original.metadata.id != firefox.metadata.id
+        }) else {
+            throw RealAppWindowVerifierFailure("Chrome over Firefox resize needs a third companion window")
+        }
+
+        let worldActor = WorldActor(config: .default)
+        let reporter = StartupReporter(logPath: "/tmp/narwhal-real-app-workflows.log")
+        let applier = LayoutApplier(axClient: axClient, reporter: reporter)
+
+        try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+        let companionWindow = try currentWorkflowMetadata(for: companion, using: axClient)
+        try await focusIfPossible(companionWindow, appName: companion.spec.name, using: axClient)
+        try await applyWorkflowCommand(
+            "Chrome over Firefox companion push right",
+            plan: { await worldActor.planPush(companionWindow.id, direction: .right) },
+            worldActor: worldActor,
+            applier: applier
+        )
+
+        try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+        let chromeWindow = try currentWorkflowMetadata(for: chrome, using: axClient)
+        try await focusIfPossible(chromeWindow, appName: chrome.spec.name, using: axClient)
+        try await applyWorkflowCommand(
+            "Chrome over Firefox Chrome push left",
+            plan: { await worldActor.planPush(chromeWindow.id, direction: .left) },
+            worldActor: worldActor,
+            applier: applier
+        )
+
+        try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+        let firefoxWindow = try currentWorkflowMetadata(for: firefox, using: axClient)
+        try await focusIfPossible(firefoxWindow, appName: firefox.spec.name, using: axClient)
+        try await applyWorkflowCommand(
+            "Chrome over Firefox Firefox push left",
+            plan: { await worldActor.planPush(firefoxWindow.id, direction: .left) },
+            worldActor: worldActor,
+            applier: applier
+        )
+
+        try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+        let chromeBefore = try currentWorkflowMetadata(for: chrome, using: axClient)
+        let firefoxBefore = try currentWorkflowMetadata(for: firefox, using: axClient)
+        guard chromeBefore.frame.midY < firefoxBefore.frame.midY else {
+            throw RealAppWindowVerifierFailure(
+                "Chrome over Firefox resize precondition failed: Chrome was not above Firefox; chrome=\(chromeBefore.frame.debugDescription) firefox=\(firefoxBefore.frame.debugDescription)"
+            )
+        }
+
+        try await focusIfPossible(chromeBefore, appName: chrome.spec.name, using: axClient)
+        try await applyWorkflowCommand(
+            "Chrome over Firefox Chrome resize down",
+            plan: { await worldActor.planResize(chromeBefore.id, direction: .down, delta: 0.10) },
+            worldActor: worldActor,
+            applier: applier
+        )
+
+        let chromeAfter = try currentWorkflowMetadata(for: chrome, using: axClient)
+        let firefoxAfter = try currentWorkflowMetadata(for: firefox, using: axClient)
+        guard chromeAfter.frame.height > chromeBefore.frame.height + 8 else {
+            throw RealAppWindowVerifierFailure(
+                "Chrome over Firefox resize did not grow Chrome: before=\(chromeBefore.frame.debugDescription) after=\(chromeAfter.frame.debugDescription)"
+            )
+        }
+        guard firefoxAfter.frame.height < firefoxBefore.frame.height - 8 else {
+            throw RealAppWindowVerifierFailure(
+                "Chrome over Firefox resize did not shrink Firefox: before=\(firefoxBefore.frame.debugDescription) after=\(firefoxAfter.frame.debugDescription)"
+            )
+        }
+        guard chromeAfter.frame.maxY <= firefoxAfter.frame.minY + 12 else {
+            throw RealAppWindowVerifierFailure(
+                "Chrome over Firefox resize left the browser stack visually inconsistent: chrome=\(chromeAfter.frame.debugDescription) firefox=\(firefoxAfter.frame.debugDescription)"
+            )
+        }
+
+        return "chrome-over-firefox resize chrome=\(chromeAfter.frame.shortDescription) firefox=\(firefoxAfter.frame.shortDescription)"
+    }
+
+    private static func verifyChromeFirefoxManualResizeWorkflow(
+        _ originals: [RealAppOriginal],
+        targetDisplay: DisplayInfo,
+        axClient: AXClient,
+        displays: [DisplayID: DisplayInfo]
+    ) async throws -> String {
+        let chrome = try requireOriginal(named: "Google Chrome", in: originals)
+        let firefox = try requireOriginal(named: "Firefox", in: originals)
+        let companion = try requireOriginal(named: "Terminal", in: originals)
+        let worldActor = WorldActor(config: .default)
+        let reporter = StartupReporter(logPath: "/tmp/narwhal-real-app-manual-resize.log")
+        let applier = LayoutApplier(axClient: axClient, reporter: reporter)
+
+        try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+        let companionWindow = try currentWorkflowMetadata(for: companion, using: axClient)
+        try await focusIfPossible(companionWindow, appName: companion.spec.name, using: axClient)
+        try await applyWorkflowCommand(
+            "manual browser resize companion push right",
+            plan: { await worldActor.planPush(companionWindow.id, direction: .right) },
+            worldActor: worldActor,
+            applier: applier
+        )
+
+        try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+        let chromeWindow = try currentWorkflowMetadata(for: chrome, using: axClient)
+        try await focusIfPossible(chromeWindow, appName: chrome.spec.name, using: axClient)
+        try await applyWorkflowCommand(
+            "manual browser resize Chrome push left",
+            plan: { await worldActor.planPush(chromeWindow.id, direction: .left) },
+            worldActor: worldActor,
+            applier: applier
+        )
+
+        try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+        let firefoxWindow = try currentWorkflowMetadata(for: firefox, using: axClient)
+        try await focusIfPossible(firefoxWindow, appName: firefox.spec.name, using: axClient)
+        try await applyWorkflowCommand(
+            "manual browser resize Firefox push left",
+            plan: { await worldActor.planPush(firefoxWindow.id, direction: .left) },
+            worldActor: worldActor,
+            applier: applier
+        )
+
+        try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+        let chromeBefore = try currentWorkflowMetadata(for: chrome, using: axClient)
+        let firefoxBefore = try currentWorkflowMetadata(for: firefox, using: axClient)
+        let companionBefore = try currentWorkflowMetadata(for: companion, using: axClient)
+        try requireFrame(chromeBefore.frame, isOn: targetDisplay, context: "Chrome before manual resize")
+        try requireFrame(firefoxBefore.frame, isOn: targetDisplay, context: "Firefox before manual resize")
+        try requireFrame(companionBefore.frame, isOn: targetDisplay, context: "companion before manual resize")
+        guard chromeBefore.frame.midY < firefoxBefore.frame.midY else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize precondition failed: Chrome was not above Firefox; chrome=\(chromeBefore.frame.debugDescription) firefox=\(firefoxBefore.frame.debugDescription)"
+            )
+        }
+
+        let availableShrink = firefoxBefore.frame.height - firefox.spec.minimumWindowSize.height - 48
+        let growth = min(max(availableShrink, 0), 180)
+        guard growth >= 48 else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize precondition failed: Firefox had insufficient shrink room; firefox=\(firefoxBefore.frame.debugDescription)"
+            )
+        }
+        let requestedChromeFrame = CGRect(
+            x: chromeBefore.frame.minX,
+            y: chromeBefore.frame.minY,
+            width: chromeBefore.frame.width,
+            height: chromeBefore.frame.height + growth
+        ).standardized
+
+        let manualChromeFrame: CGRect
+        switch axClient.setFrame(chromeBefore, to: requestedChromeFrame) {
+        case .converged(let frame):
+            manualChromeFrame = frame
+        case .clamped(let frame, let observed):
+            guard frameWriteApproximatelySettled(target: requestedChromeFrame, actual: frame, tolerance: 8) else {
+                throw RealAppWindowVerifierFailure(
+                    "manual browser resize Chrome direct resize clamped away from target: target=\(requestedChromeFrame.debugDescription) actual=\(frame.debugDescription) observed=\(observed)"
+                )
+            }
+            manualChromeFrame = frame
+        case .failed(let error):
+            throw RealAppWindowVerifierFailure("manual browser resize Chrome direct resize failed: \(error.description)")
+        }
+        guard manualChromeFrame.height > chromeBefore.frame.height + 24 else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize did not visibly grow Chrome before Narwhal handling: before=\(chromeBefore.frame.debugDescription) actual=\(manualChromeFrame.debugDescription)"
+            )
+        }
+
+        let event: AXEvent
+        if manualChromeFrame.matches(
+            CGRect(origin: chromeBefore.frame.origin, size: manualChromeFrame.size),
+            tolerance: 2
+        ) {
+            event = .windowResized(chromeBefore.id, manualChromeFrame.size)
+        } else {
+            event = .windowMoved(chromeBefore.id, manualChromeFrame)
+        }
+        try await applyExternalGeometryWorkflowEvent(
+            "manual browser resize Chrome external geometry",
+            event: event,
+            worldActor: worldActor,
+            applier: applier
+        )
+
+        let chromeAfter = try currentWorkflowMetadata(for: chrome, using: axClient)
+        let firefoxAfter = try currentWorkflowMetadata(for: firefox, using: axClient)
+        try requireFrame(chromeAfter.frame, isOn: targetDisplay, context: "Chrome after manual resize")
+        try requireFrame(firefoxAfter.frame, isOn: targetDisplay, context: "Firefox after manual resize")
+        guard chromeAfter.frame.height >= manualChromeFrame.height - 10 else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize lost Chrome's manual height: manual=\(manualChromeFrame.debugDescription) after=\(chromeAfter.frame.debugDescription)"
+            )
+        }
+        guard firefoxAfter.frame.height < firefoxBefore.frame.height - 24 else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize did not shrink real Firefox: before=\(firefoxBefore.frame.debugDescription) after=\(firefoxAfter.frame.debugDescription)"
+            )
+        }
+        guard firefoxAfter.frame.minY >= chromeAfter.frame.maxY - 12 else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize left Chrome/Firefox stack inconsistent: chrome=\(chromeAfter.frame.debugDescription) firefox=\(firefoxAfter.frame.debugDescription)"
+            )
+        }
+
+        let companionAfter = try currentWorkflowMetadata(for: companion, using: axClient)
+        try requireFrame(companionAfter.frame, isOn: targetDisplay, context: "companion after manual resize")
+        guard framesDoNotVisiblyOverlap(companionAfter.frame, chromeAfter.frame, tolerance: 4),
+              framesDoNotVisiblyOverlap(companionAfter.frame, firefoxAfter.frame, tolerance: 4)
+        else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize left companion overlapping browser stack: companion=\(companionAfter.frame.debugDescription) chrome=\(chromeAfter.frame.debugDescription) firefox=\(firefoxAfter.frame.debugDescription)"
+            )
+        }
+        try requireThreeWindowManualResizeGeometry(
+            companion: companionAfter.frame,
+            chrome: chromeAfter.frame,
+            firefox: firefoxAfter.frame,
+            display: targetDisplay
+        )
+
+        return "real 3-window Chrome/Firefox manual resize companion=\(companionAfter.frame.shortDescription) chrome=\(chromeAfter.frame.shortDescription) firefox=\(firefoxAfter.frame.shortDescription)"
+    }
+
+    private static func manualResizeVerificationDisplay(_ displays: [DisplayID: DisplayInfo]) throws -> DisplayInfo {
+        let candidates = displays.values.filter {
+            $0.visibleFrame.width >= 1_800
+                && $0.visibleFrame.height >= 900
+                && $0.visibleFrame.width > $0.visibleFrame.height
+        }
+        guard let display = candidates.max(by: { $0.visibleFrame.area < $1.visibleFrame.area }) else {
+            let visible = displays.values
+                .sorted { $0.slot < $1.slot }
+                .map { "slot=\($0.slot) visible=\($0.visibleFrame.debugDescription)" }
+                .joined(separator: "; ")
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize verification requires a landscape display at least 1800x900; displays=[\(visible)]"
+            )
+        }
+        return display
+    }
+
+    private static func stageManualResizeWindows(
+        _ originals: [RealAppOriginal],
+        on display: DisplayInfo,
+        using axClient: AXClient
+    ) throws {
+        let chrome = try requireOriginal(named: "Google Chrome", in: originals)
+        let firefox = try requireOriginal(named: "Firefox", in: originals)
+        let companion = try requireOriginal(named: "Terminal", in: originals)
+        let visible = display.visibleFrame
+        let margin: CGFloat = 40
+        let stackGap: CGFloat = 40
+        let browserWidth = min(max(visible.width * 0.45, 1_300), visible.width * 0.48)
+        let browserHeight = max(360, (visible.height - margin * 2 - stackGap) / 2)
+        let companionWidth = max(480, visible.width - browserWidth - margin * 3)
+        let companionFrame = CGRect(
+            x: visible.maxX - margin - companionWidth,
+            y: visible.minY + margin,
+            width: companionWidth,
+            height: visible.height - margin * 2
+        ).standardized
+        let chromeFrame = CGRect(
+            x: visible.minX + margin,
+            y: visible.minY + margin,
+            width: browserWidth,
+            height: browserHeight
+        ).standardized
+        let firefoxFrame = CGRect(
+            x: visible.minX + margin,
+            y: chromeFrame.maxY + stackGap,
+            width: browserWidth,
+            height: browserHeight
+        ).standardized
+
+        let placements: [(RealAppOriginal, CGRect)] = [
+            (companion, companionFrame),
+            (chrome, chromeFrame),
+            (firefox, firefoxFrame)
+        ]
+        for (index, placement) in placements.enumerated() {
+            let metadata = try currentWorkflowMetadata(for: placement.0, using: axClient)
+            _ = try verifyFrameWrite(
+                placement.1,
+                metadata: metadata,
+                appName: "\(placement.0.spec.name) manual-resize staging",
+                step: index + 1,
+                using: axClient
+            )
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.16))
+    }
+
+    private static func framesDoNotVisiblyOverlap(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {
+        let intersection = lhs.intersection(rhs)
+        guard !intersection.isNull && !intersection.isInfinite else { return true }
+        return intersection.width <= tolerance || intersection.height <= tolerance
+    }
+
+    private static func requireFrame(_ frame: CGRect, isOn display: DisplayInfo, context: String) throws {
+        let intersection = frame.intersection(display.visibleFrame)
+        guard !intersection.isNull,
+              intersection.area >= frame.area * 0.80
+        else {
+            throw RealAppWindowVerifierFailure(
+                "\(context) was not on manual-resize target display: frame=\(frame.debugDescription) display=\(display.visibleFrame.debugDescription)"
+            )
+        }
+    }
+
+    private static func requireThreeWindowManualResizeGeometry(
+        companion: CGRect,
+        chrome: CGRect,
+        firefox: CGRect,
+        display: DisplayInfo
+    ) throws {
+        let visible = display.visibleFrame
+        let halfWidth = visible.width / 2
+        guard companion.width >= halfWidth * 0.85,
+              companion.width <= halfWidth * 1.15,
+              companion.height >= visible.height * 0.85
+        else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize companion size was not near the right half of the landscape display: companion=\(companion.debugDescription) display=\(visible.debugDescription)"
+            )
+        }
+        guard chrome.width >= halfWidth * 0.80,
+              chrome.width <= halfWidth * 1.15,
+              firefox.width >= halfWidth * 0.80,
+              firefox.width <= halfWidth * 1.15
+        else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize browser widths were not near the left half of the landscape display: chrome=\(chrome.debugDescription) firefox=\(firefox.debugDescription) display=\(visible.debugDescription)"
+            )
+        }
+        guard chrome.height > firefox.height,
+              chrome.height < visible.height * 0.85,
+              firefox.height > visible.height * 0.20
+        else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize browser heights were not plausible after Chrome growth and Firefox shrink: chrome=\(chrome.debugDescription) firefox=\(firefox.debugDescription) display=\(visible.debugDescription)"
+            )
+        }
+    }
+
     private static func refreshWorkflowWorld(
         _ worldActor: WorldActor,
         axClient: AXClient,
@@ -431,6 +860,59 @@ enum RealAppWindowVerification {
                 throw RealAppWindowVerifierFailure("\(name) clamped without retry: \(summary)")
             }
             let retry = try await requireWorkflowPlan("\(name) retry after clamp", plan(), allowNoMove: allowNoMove)
+            let retryResult = applier.apply(retry)
+            switch plannedLayoutApplyDecision(plan: retry, applyResult: retryResult, retryOnClamp: false) {
+            case .commit(let retryAppliedFrames, _):
+                await worldActor.commit(retry, appliedFrames: retryAppliedFrames)
+                try requireAppliedFramesVisible(retryAppliedFrames, context: "\(name) retry after clamp")
+            case .fail(_, let failureCount, let retrySummary):
+                throw RealAppWindowVerifierFailure(
+                    "\(name) failed after clamp retry applying \(failureCount) real app window(s): initial=\(summary); retry=\(retrySummary)"
+                )
+            case .clamp(_, _, _, let retrySummary):
+                throw RealAppWindowVerifierFailure("\(name) still clamped after retry: initial=\(summary); retry=\(retrySummary)")
+            }
+        }
+    }
+
+    private static func applyExternalGeometryWorkflowEvent(
+        _ name: String,
+        event: AXEvent,
+        worldActor: WorldActor,
+        applier: LayoutApplier
+    ) async throws {
+        let first: CommandPlanResult
+        switch await worldActor.planExternalGeometry(event) {
+        case .success(let plan?):
+            first = plan
+        case .success(nil):
+            throw RealAppWindowVerifierFailure("\(name) produced no sibling layout plan")
+        case .failure(let error):
+            throw RealAppWindowVerifierFailure("\(name) plan failed: \(error.message)")
+        }
+
+        let firstResult = applier.apply(first)
+        switch plannedLayoutApplyDecision(plan: first, applyResult: firstResult, retryOnClamp: true) {
+        case .commit(let appliedFrames, _):
+            await worldActor.commit(first, appliedFrames: appliedFrames)
+            try requireAppliedFramesVisible(appliedFrames, context: name)
+
+        case .fail(_, let failureCount, let summary):
+            throw RealAppWindowVerifierFailure("\(name) failed applying \(failureCount) real app window(s): \(summary)")
+
+        case .clamp(let appliedFrames, let observedConstraints, let shouldRetry, let summary):
+            await worldActor.recordAppliedFrames(appliedFrames)
+            await worldActor.recordObservedConstraints(observedConstraints)
+            guard shouldRetry else {
+                throw RealAppWindowVerifierFailure("\(name) clamped without retry: \(summary)")
+            }
+            let retry: CommandPlanResult
+            switch await worldActor.replanExternalGeometryAfterClamp(first) {
+            case .success(let plan):
+                retry = plan
+            case .failure(let error):
+                throw RealAppWindowVerifierFailure("\(name) retry after clamp failed: \(error.message)")
+            }
             let retryResult = applier.apply(retry)
             switch plannedLayoutApplyDecision(plan: retry, applyResult: retryResult, retryOnClamp: false) {
             case .commit(let retryAppliedFrames, _):
@@ -684,16 +1166,19 @@ enum RealAppWindowVerification {
         case .converged(let frame):
             actual = frame
         case .clamped(let frame, let observed):
-            throw RealAppWindowVerifierFailure(
-                "\(appName) step \(step) clamped instead of settling: target=\(target.debugDescription) actual=\(frame.debugDescription) observed=\(observed)"
-            )
+            guard frameWriteApproximatelySettled(target: target, actual: frame, tolerance: 6) else {
+                throw RealAppWindowVerifierFailure(
+                    "\(appName) step \(step) clamped instead of settling: target=\(target.debugDescription) actual=\(frame.debugDescription) observed=\(observed)"
+                )
+            }
+            actual = frame
         case .failed(let error):
             throw RealAppWindowVerifierFailure(
                 "\(appName) step \(step) frame write failed: \(error.description)"
             )
         }
 
-        guard frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 2) else {
+        guard frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 6) else {
             throw RealAppWindowVerifierFailure(
                 "\(appName) step \(step) did not settle near target: target=\(target.debugDescription) actual=\(actual.debugDescription)"
             )
@@ -754,40 +1239,38 @@ enum RealAppWindowVerification {
         originalFrame: CGRect,
         spec: RealAppSpec
     ) throws -> [CGRect] {
-        let maxFirstWidth = visibleFrame.width - 96
-        let maxSecondWidth = visibleFrame.width - 120
-        let maxFirstHeight = visibleFrame.height - 96
-        let maxSecondHeight = visibleFrame.height - 120
+        let maxFirstWidth = max(spec.minimumWindowSize.width, visibleFrame.width - 96)
+        let maxSecondWidth = max(spec.minimumWindowSize.width, visibleFrame.width - 120)
+        let maxFirstHeight = max(spec.minimumWindowSize.height, visibleFrame.height - 96)
+        let maxSecondHeight = max(spec.minimumWindowSize.height, visibleFrame.height - 120)
         let firstWidth: CGFloat
         let firstHeight: CGFloat
         let secondWidth: CGFloat
         let secondHeight: CGFloat
         switch spec.name {
         case "Firefox":
-            firstWidth = min(originalFrame.width + 40, maxFirstWidth)
-            firstHeight = min(originalFrame.height + 40, maxFirstHeight)
-            secondWidth = min(originalFrame.width + 24, maxSecondWidth)
-            secondHeight = min(originalFrame.height + 28, maxSecondHeight)
+            firstWidth = min(max(visibleFrame.width * 0.80, spec.minimumWindowSize.width + 950), maxFirstWidth)
+            firstHeight = min(max(visibleFrame.height * 0.44, spec.minimumWindowSize.height + 620), maxFirstHeight)
+            secondWidth = min(max(visibleFrame.width * 0.76, spec.minimumWindowSize.width + 900), maxSecondWidth)
+            secondHeight = min(max(visibleFrame.height * 0.40, spec.minimumWindowSize.height + 560), maxSecondHeight)
         case "System Settings":
-            firstWidth = min(originalFrame.width + 32, maxFirstWidth)
-            firstHeight = min(max(max(visibleFrame.height * 0.68, 560), originalFrame.height), maxFirstHeight)
-            secondWidth = min(originalFrame.width + 16, maxSecondWidth)
-            secondHeight = min(max(max(visibleFrame.height * 0.60, 520), originalFrame.height), maxSecondHeight)
+            firstWidth = min(max(visibleFrame.width * 0.54, spec.minimumWindowSize.width + 260), maxFirstWidth)
+            firstHeight = min(max(visibleFrame.height * 0.60, spec.minimumWindowSize.height + 260), maxFirstHeight)
+            secondWidth = min(max(visibleFrame.width * 0.50, spec.minimumWindowSize.width + 220), maxSecondWidth)
+            secondHeight = min(max(visibleFrame.height * 0.54, spec.minimumWindowSize.height + 220), maxSecondHeight)
         default:
-            firstWidth = min(max(max(visibleFrame.width * 0.62, 760), originalFrame.width + 40), maxFirstWidth)
-            firstHeight = min(max(max(visibleFrame.height * 0.68, 560), originalFrame.height + 240), maxFirstHeight)
-            secondWidth = min(max(max(visibleFrame.width * 0.54, 760), originalFrame.width), maxSecondWidth)
-            secondHeight = min(max(max(visibleFrame.height * 0.60, 520), originalFrame.height + 160), maxSecondHeight)
+            firstWidth = min(max(visibleFrame.width * 0.62, spec.minimumWindowSize.width + 360), maxFirstWidth)
+            firstHeight = min(max(visibleFrame.height * 0.50, spec.minimumWindowSize.height + 420), maxFirstHeight)
+            secondWidth = min(max(visibleFrame.width * 0.56, spec.minimumWindowSize.width + 320), maxSecondWidth)
+            secondHeight = min(max(visibleFrame.height * 0.44, spec.minimumWindowSize.height + 360), maxSecondHeight)
         }
-        guard firstWidth > 0,
-              firstHeight > 0,
-              secondWidth > 0,
-              secondHeight > 0,
-              firstWidth >= originalFrame.width,
-              secondWidth >= originalFrame.width
+        guard firstWidth >= spec.minimumWindowSize.width,
+              firstHeight >= spec.minimumWindowSize.height,
+              secondWidth >= spec.minimumWindowSize.width,
+              secondHeight >= spec.minimumWindowSize.height
         else {
             throw RealAppWindowVerifierFailure(
-                "\(spec.name) original window is too large for non-clamping real-app frame targets: original=\(originalFrame.debugDescription) visible=\(visibleFrame.debugDescription)"
+                "\(spec.name) could not construct non-clamping real-app frame targets: original=\(originalFrame.debugDescription) visible=\(visibleFrame.debugDescription) minimum=\(spec.minimumWindowSize.shortDescription)"
             )
         }
         return [

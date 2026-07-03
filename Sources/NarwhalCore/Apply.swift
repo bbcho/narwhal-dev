@@ -730,12 +730,18 @@ private func applyExternalFrameUpdate(_ windowID: WindowID, frame: CGRect, to wo
     }
 
     let ownership = externalFrameOwnership(windowID: windowID, frame: frame, in: world)
+    let spaces = spacesByApplyingExternalResize(
+        windowID,
+        from: metadata.frame,
+        to: frame,
+        in: world
+    ) ?? world.spaces
 
     return .success(World(
         displays: world.displays,
         activeSpace: world.activeSpace,
         activeSpaceByDisplay: world.activeSpaceByDisplay,
-        spaces: world.spaces,
+        spaces: spaces,
         windows: world.windows.setting(windowID, to: metadata.withFrame(frame)),
         windowDisplay: ownership.windowDisplay,
         windowSpace: ownership.windowSpace,
@@ -744,6 +750,98 @@ private func applyExternalFrameUpdate(_ windowID: WindowID, frame: CGRect, to wo
         pendingRules: world.pendingRules,
         config: world.config
     ))
+}
+
+private func spacesByApplyingExternalResize(
+    _ windowID: WindowID,
+    from oldFrame: CGRect,
+    to newFrame: CGRect,
+    in world: World
+) -> [SpaceID: SpaceState]? {
+    let directions = externalResizeDirections(from: oldFrame, to: newFrame)
+    guard !directions.isEmpty,
+          let key = workspaceKey(forWindow: windowID, in: world),
+          let space = world.spaces[key.spaceID],
+          let displayID = tiledDisplay(containing: windowID, in: space),
+          let displayState = space.displays[displayID],
+          let display = world.displays[displayID]
+    else {
+        return nil
+    }
+    guard display.visibleFrame.intersection(newFrame).area > 0,
+          displayContaining(newFrame, in: world.displays)?.id == displayID
+    else {
+        return nil
+    }
+
+    let rootFrame = rootLayoutFrame(display.visibleFrame, gaps: world.config.gaps)
+    var tree = displayState.tree
+    var changedTree = false
+    for direction in directions {
+        switch resizeSplitInTreeToMatchWindowFrame(
+            windowID,
+            direction,
+            desiredFrame: newFrame,
+            rootFrame: rootFrame,
+            innerGap: world.config.gaps.inner,
+            tree
+        ) {
+        case .success(let resized):
+            changedTree = changedTree || resized != tree
+            tree = resized
+        case .failure:
+            continue
+        }
+    }
+    guard changedTree else { return nil }
+
+    let displayStates = space.displays.setting(displayID, to: DisplaySpaceState(
+        displayID: displayID,
+        tree: tree,
+        floating: displayState.floating
+    ))
+    return world.spaces.setting(
+        key.spaceID,
+        to: SpaceState(id: space.id, displays: displayStates, focused: windowID)
+    )
+}
+
+private func externalResizeDirections(from oldFrame: CGRect, to newFrame: CGRect) -> [Direction] {
+    let tolerance: CGFloat = 1
+    var directions: [Direction] = []
+    if abs(newFrame.width - oldFrame.width) > tolerance {
+        let minChange = abs(newFrame.minX - oldFrame.minX)
+        let maxChange = abs(newFrame.maxX - oldFrame.maxX)
+        directions.append(minChange > maxChange ? .left : .right)
+    }
+    if abs(newFrame.height - oldFrame.height) > tolerance {
+        let minChange = abs(newFrame.minY - oldFrame.minY)
+        let maxChange = abs(newFrame.maxY - oldFrame.maxY)
+        directions.append(minChange > maxChange ? .up : .down)
+    }
+    return directions
+}
+
+private func rootLayoutFrame(_ visibleFrame: CGRect, gaps: Gaps) -> CGRect {
+    CGRect(
+        x: visibleFrame.minX + gaps.outer.left,
+        y: visibleFrame.minY + gaps.outer.top,
+        width: max(0, visibleFrame.width - gaps.outer.left - gaps.outer.right),
+        height: max(0, visibleFrame.height - gaps.outer.top - gaps.outer.bottom)
+    )
+}
+
+private func displayContaining(_ frame: CGRect, in displays: [DisplayID: DisplayInfo]) -> DisplayInfo? {
+    displays.values.max {
+        $0.visibleFrame.intersection(frame).area < $1.visibleFrame.intersection(frame).area
+    }
+}
+
+private extension CGRect {
+    var area: CGFloat {
+        guard !isNull && !isInfinite else { return 0 }
+        return max(0, width) * max(0, height)
+    }
 }
 
 private func worldBySettingConfig(_ config: Config, in world: World) -> World {

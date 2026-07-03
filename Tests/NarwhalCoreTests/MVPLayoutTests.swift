@@ -993,6 +993,64 @@ struct MVPLayoutTests {
         #expect(next.config == world.config)
     }
 
+    @Test("External resize of tiled window adjusts split weights and sibling frames")
+    func externalResizeOfTiledWindowAdjustsSiblings() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let chrome = WindowID(raw: 1)
+        let firefox = WindowID(raw: 2)
+        let companion = WindowID(raw: 3)
+        let tree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1, node: .leaf(chrome)),
+                try cell(weight: 1, node: .leaf(firefox))
+            ]))),
+            try cell(weight: 1, node: .leaf(companion))
+        ]))
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: tree, floating: [])],
+                    focused: chrome
+                )
+            ],
+            windows: [
+                chrome: metadata(for: chrome, bundleID: "com.google.Chrome", frame: CGRect(x: 0, y: 0, width: 600, height: 400)),
+                firefox: metadata(for: firefox, bundleID: "org.mozilla.firefox", frame: CGRect(x: 0, y: 400, width: 600, height: 400)),
+                companion: metadata(for: companion, bundleID: "net.kovidgoyal.kitty", frame: CGRect(x: 600, y: 0, width: 600, height: 800))
+            ],
+            windowDisplay: [
+                chrome: display,
+                firefox: display,
+                companion: display
+            ],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        let next = try requireWorld(
+            apply(.windowResizedExternally(chrome, CGSize(width: 600, height: 500)), to: world),
+            "Expected external resize to adjust tiled layout"
+        )
+        let flattened = try requireLayout(flattenedLayout(of: next), "Expected externally resized layout")
+
+        #expect(next.windows[chrome]?.frame == CGRect(x: 0, y: 0, width: 600, height: 500))
+        #expect(next.spaces[space]?.displays[display]?.tree == Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1.25, node: .leaf(chrome)),
+                try cell(weight: 0.75, node: .leaf(firefox))
+            ]))),
+            try cell(weight: 1, node: .leaf(companion))
+        ])))
+        #expect(flattened.tiled[chrome] == CGRect(x: 0, y: 0, width: 600, height: 500))
+        #expect(flattened.tiled[firefox] == CGRect(x: 0, y: 500, width: 600, height: 300))
+        #expect(flattened.tiled[companion] == CGRect(x: 600, y: 0, width: 600, height: 800))
+    }
+
     @Test("Tiled border targets follow externally resized tiled window frames")
     func tiledBorderTargetsFollowExternallyResizedTiledFrames() throws {
         let display = DisplayID(raw: 1)
@@ -1525,6 +1583,63 @@ struct MVPLayoutTests {
         #expect(next.config == world.config)
         #expect(flattened.tiled[first] == CGRect(x: 0, y: 0, width: 700, height: 800))
         #expect(flattened.tiled[second] == CGRect(x: 700, y: 0, width: 500, height: 800))
+    }
+
+    @Test("Apply resizeSplit resizes Chrome over Firefox on the same side")
+    func applyResizeSplitResizesChromeOverFirefox() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let chrome = WindowID(raw: 1)
+        let firefox = WindowID(raw: 2)
+        let companion = WindowID(raw: 3)
+        let tree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1, node: .leaf(chrome)),
+                try cell(weight: 1, node: .leaf(firefox))
+            ]))),
+            try cell(weight: 1, node: .leaf(companion))
+        ]))
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: tree, floating: [])],
+                    focused: chrome
+                )
+            ],
+            windows: [
+                chrome: metadata(for: chrome, bundleID: "com.google.Chrome"),
+                firefox: metadata(for: firefox, bundleID: "org.mozilla.firefox"),
+                companion: metadata(for: companion, bundleID: "net.kovidgoyal.kitty")
+            ],
+            windowDisplay: [
+                chrome: display,
+                firefox: display,
+                companion: display
+            ],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        let next = try requireWorld(
+            apply(.resizeSplit(chrome, .down, delta: 0.25), to: world),
+            "Expected Chrome over Firefox resize to succeed"
+        )
+        let flattened = try requireLayout(flattenedLayout(of: next), "Expected resized browser layout")
+
+        #expect(next.spaces[space]?.displays[display]?.tree == Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1.25, node: .leaf(chrome)),
+                try cell(weight: 0.75, node: .leaf(firefox))
+            ]))),
+            try cell(weight: 1, node: .leaf(companion))
+        ])))
+        #expect(flattened.tiled[chrome] == CGRect(x: 0, y: 0, width: 600, height: 500))
+        #expect(flattened.tiled[firefox] == CGRect(x: 0, y: 500, width: 600, height: 300))
+        #expect(flattened.tiled[companion] == CGRect(x: 600, y: 0, width: 600, height: 800))
     }
 
     @Test("Apply resizeSplit rejects invalid command state")
@@ -2357,6 +2472,80 @@ struct MVPLayoutTests {
         #expect(cleaned.windowConstraints.isEmpty)
         #expect(cleaned.pendingRules.isEmpty)
         #expect(cleaned.spaces[activeSpace]?.focused == nil)
+    }
+
+    @Test("Explicit window close prunes active tiling before preserving replacement refresh")
+    func explicitWindowClosePrunesActiveTilingBeforePreservingReplacementRefresh() throws {
+        let displayID = DisplayID(raw: 1)
+        let activeSpace = SpaceID(raw: 1)
+        let live = WindowID(raw: 11)
+        let closed = WindowID(raw: 12)
+        let replacement = WindowID(raw: 13)
+        let tree = pushIntoTree(closed, .left, pushIntoTree(live, .right, .void))
+        let display = self.display(displayID, x: 0, width: 1200)
+        let world = World(
+            displays: [displayID: display],
+            activeSpace: activeSpace,
+            spaces: [
+                activeSpace: SpaceState(
+                    id: activeSpace,
+                    displays: [displayID: DisplaySpaceState(displayID: displayID, tree: tree, floating: [])],
+                    focused: closed
+                )
+            ],
+            windows: [
+                live: metadata(for: live),
+                closed: metadata(for: closed)
+            ],
+            windowDisplay: [
+                live: displayID,
+                closed: displayID
+            ],
+            windowConstraints: [closed: WindowConstraints(minWidth: 600)],
+            pendingRules: [closed: .forceFloat],
+            config: .default
+        )
+
+        let afterClose = try requireWorld(
+            apply(.windowClosed(closed), to: world),
+            "Expected explicit close to prune closed active tile"
+        )
+        let replacementMetadata = WindowMetadata(
+            id: replacement,
+            bundleID: BundleID(raw: "com.example.app"),
+            title: "Replacement",
+            role: "AXWindow",
+            pid: 13,
+            frame: CGRect(x: 50, y: 50, width: 800, height: 600),
+            isResizable: true,
+            isMinimized: false
+        )
+        let preservingSnapshot = EnvironmentSnapshot(
+            activeSpace: activeSpace,
+            displays: [displayID: display],
+            axSnapshot: AXWindowSnapshot(
+                windows: [metadata(for: live), replacementMetadata],
+                quality: .complete
+            ),
+            preserveSpaceLayouts: true,
+            reconciliationMode: .preserveLayouts
+        )
+        let refreshed = try requireWorld(
+            apply(.environmentChanged(preservingSnapshot), to: afterClose),
+            "Expected preserving refresh to keep explicit close pruned"
+        )
+
+        let activeTree = refreshed.spaces[activeSpace]?.displays[displayID]?.tree ?? .void
+        #expect(Set(occupiedWindows(in: activeTree)) == [live])
+        #expect(refreshed.windows[closed] == nil)
+        #expect(refreshed.windowDisplay[closed] == nil)
+        #expect(refreshed.windowConstraints[closed] == nil)
+        #expect(refreshed.pendingRules[closed] == nil)
+        #expect(refreshed.spaces[activeSpace]?.focused == nil)
+        #expect(refreshed.windows[replacement] == replacementMetadata)
+
+        let borderTargets = try tiledBorderTargets(of: refreshed).get()
+        #expect(Set(borderTargets.map { $0.windowID }) == [live])
     }
 
     @Test("Active Space pruning keeps metadata for windows still tracked in inactive Spaces")

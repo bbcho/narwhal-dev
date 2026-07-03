@@ -41,7 +41,15 @@ let package = Package(
         ),
         .executableTarget(
             name: "NarwhalApp",
-            dependencies: ["NarwhalAppRuntime"]
+            dependencies: ["NarwhalAppRuntime"],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Packaging/NarwhalCLIInfo.plist"
+                ])
+            ]
         ),
         .executableTarget(
             name: "NarwhalCtl",

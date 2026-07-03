@@ -50,10 +50,16 @@ public enum NarwhalApplication {
     }
 }
 
+private struct PendingExternalGeometryEvent {
+    let event: AXEvent
+    let snapshot: FocusedWindowSnapshot?
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let instance = AppDelegate()
     private static let environmentRefreshCoalescingDelay: TimeInterval = 0.10
+    private static let externalGeometryEventTolerance: CGFloat = 4
     private static let activeSpaceTransitionPreserveDuration: TimeInterval = 1.25
     private static let activeSpaceFocusRecoveryDuration: TimeInterval = 5.0
     private static let activeSpaceSettledRefreshDelays: [TimeInterval] = [0.35, 0.80]
@@ -90,6 +96,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeSpaceFocusRecoveryDeadline: Date?
     private var pendingHotkeys: [HotkeyAction] = []
     private var isDrainingHotkeys = false
+    private var isHandlingExternalGeometry = false
+    private var pendingExternalGeometryEvent: PendingExternalGeometryEvent?
     private var runningServices: RunningServices?
     private var servicesStarted = false
     private var isPaused = false
@@ -290,6 +298,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setFocusBorder(nil)
         } else {
             setFocusBorder(snapshot.focusBorderTarget)
+        }
+    }
+
+    @MainActor
+    private func updateFocusBorderFromWorld(windowID: WindowID) async {
+        switch await worldActor.planFocus(windowID) {
+        case .success(let result):
+            setFocusBorder(FocusBorderTarget(window: result.window, frame: result.frame))
+        case .failure(let error):
+            reporter.error("Focus border refresh failed: \(error.message)")
         }
     }
 
@@ -764,6 +782,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if routeCommandOverlayHotkey(action) {
             return
         }
+
+        reporter.info("Hotkey received: \(AppDelegateText.describe(action))")
 
         if isPaused, pausesTilingBlocks(action) {
             reporter.info("Hotkey ignored while Narwhal is paused: \(AppDelegateText.describe(action))")
@@ -1943,6 +1963,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func requireExternalGeometryPlan(_ event: AXEvent) async -> Result<CommandPlanResult, CommandError> {
+        switch await worldActor.planExternalGeometry(event) {
+        case .success(let result?):
+            return .success(result)
+        case .success(nil):
+            return .failure(.configInvalid("external geometry produced no layout change"))
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    private func replanExternalGeometryAfterClamp(
+        _ result: CommandPlanResult
+    ) async -> Result<CommandPlanResult, CommandError> {
+        await worldActor.replanExternalGeometryAfterClamp(result)
+    }
+
     @MainActor
     private func applyPlannedBalance(
         _ result: CommandPlanResult,
@@ -2135,20 +2172,124 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             await updateTiledBordersFromWorld()
         case .windowMoved, .windowResized:
-            await worldActor.recordExternalGeometry(event)
-            if let snapshot {
-                updateFocusBorder(for: snapshot)
-            }
-            await updateTiledBordersFromWorld()
+            await handleExternalGeometryEvent(event, snapshot: snapshot)
         case .windowOpened(let metadata):
             scheduleCoalescedEnvironmentRefresh(.windowOpened(metadata.id))
         case .windowClosed(let windowID):
+            await worldActor.removeWindowFromActiveSpace(windowID)
             removeWindowFromOverlays(windowID)
             if operatingStatus.focusedWindowID == windowID {
                 updateOperatingStatus { $0.focusedWindowID = nil }
             }
+            await updateTiledBordersFromWorld()
             scheduleCoalescedEnvironmentRefresh(.windowClosed(windowID))
         }
+    }
+
+    @MainActor
+    private func handleExternalGeometryEvent(_ event: AXEvent, snapshot: FocusedWindowSnapshot?) async {
+        guard !isHandlingExternalGeometry else {
+            pendingExternalGeometryEvent = PendingExternalGeometryEvent(event: event, snapshot: snapshot)
+            return
+        }
+
+        isHandlingExternalGeometry = true
+        var current = PendingExternalGeometryEvent(event: event, snapshot: snapshot)
+        while true {
+            await processExternalGeometryEvent(current.event, snapshot: current.snapshot)
+            guard let pending = pendingExternalGeometryEvent else { break }
+            pendingExternalGeometryEvent = nil
+            current = pending
+        }
+        isHandlingExternalGeometry = false
+    }
+
+    @MainActor
+    private func processExternalGeometryEvent(_ event: AXEvent, snapshot: FocusedWindowSnapshot?) async {
+        guard externalGeometryEventMatchesLiveFrame(event) else {
+            reporter.info("Ignored stale external geometry event after live frame changed")
+            if let snapshot {
+                await updateFocusBorderFromWorld(windowID: snapshot.id)
+            }
+            await updateTiledBordersFromWorld()
+            return
+        }
+
+        switch await worldActor.planExternalGeometry(event) {
+        case .success(let result?):
+            let completed = await applyPlannedLayout(
+                result,
+                operation: "Manual resize",
+                persistReason: "manual resize",
+                retryOnClamp: true,
+                showFocusBorder: snapshot != nil
+            ) {
+                await self.replanExternalGeometryAfterClamp(result)
+            }
+            if let snapshot {
+                await updateFocusBorderFromWorld(windowID: snapshot.id)
+            }
+            if !completed {
+                await worldActor.recordExternalGeometry(event)
+                await updateTiledBordersFromWorld()
+            }
+        case .success(nil):
+            if let snapshot {
+                await updateFocusBorderFromWorld(windowID: snapshot.id)
+            }
+            await updateTiledBordersFromWorld()
+        case .failure(let error):
+            reporter.error("External geometry rejected by core: \(error.message)")
+            await worldActor.recordExternalGeometry(event)
+            if let snapshot {
+                await updateFocusBorderFromWorld(windowID: snapshot.id)
+            }
+            await updateTiledBordersFromWorld()
+        }
+    }
+
+    @MainActor
+    private func externalGeometryEventMatchesLiveFrame(_ event: AXEvent) -> Bool {
+        let windowID: WindowID
+        switch event {
+        case .windowMoved(let id, _), .windowResized(let id, _):
+            windowID = id
+        case .windowOpened, .windowClosed, .windowFocused:
+            return true
+        }
+
+        let snapshot = axClient.windowSnapshot()
+        guard case .complete = snapshot.quality,
+              let live = snapshot.windows.first(where: { $0.id == windowID })
+        else { return true }
+
+        switch event {
+        case .windowMoved(_, let frame):
+            return framesApproximatelyEqual(
+                live.frame,
+                frame,
+                tolerance: Self.externalGeometryEventTolerance
+            )
+        case .windowResized(_, let size):
+            return sizesApproximatelyEqual(
+                live.frame.size,
+                size,
+                tolerance: Self.externalGeometryEventTolerance
+            )
+        case .windowOpened, .windowClosed, .windowFocused:
+            return true
+        }
+    }
+
+    private func framesApproximatelyEqual(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {
+        abs(lhs.origin.x - rhs.origin.x) <= tolerance
+            && abs(lhs.origin.y - rhs.origin.y) <= tolerance
+            && sizesApproximatelyEqual(lhs.size, rhs.size, tolerance: tolerance)
+    }
+
+    private func sizesApproximatelyEqual(_ lhs: CGSize, _ rhs: CGSize, tolerance: CGFloat) -> Bool {
+        abs(lhs.width - rhs.width) <= tolerance
+            && abs(lhs.height - rhs.height) <= tolerance
     }
 
     @MainActor
