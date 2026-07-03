@@ -632,6 +632,19 @@ enum LiveFocusWorkflowVerification {
         guard let tiledBorder = overlay.debugTiledBorderWindowNumber(for: tiledID) else {
             throw LiveFocusWorkflowFailure("\(context) tiled border is not visible")
         }
+        if !overlay.debugTiledBorderIsVisuallyVisible(for: tiledID) {
+            guard let tiledBorderFrame = overlay.debugTiledBorderFrame(for: tiledID) else {
+                throw LiveFocusWorkflowFailure("\(context) tiled border is hidden but has no debug frame")
+            }
+            let axTiledBorderFrame = axFrame(forAppKitFrame: tiledBorderFrame, display: display)
+            let floatingFrame = windowServerFrame(for: floating.windowNumber) ?? floating.metadata.frame
+            guard floatingFrame.intersects(axTiledBorderFrame) else {
+                throw LiveFocusWorkflowFailure(
+                    "\(context) tiled border was hidden without an overlapping floating window: floating=\(floatingFrame.debugDescription) border=\(axTiledBorderFrame.debugDescription)"
+                )
+            }
+            return
+        }
         guard let resolvedTiledBorder = windowServerNumber(
             appKitWindowNumber: tiledBorder,
             frame: overlay.debugTiledBorderFrame(for: tiledID).map { axFrame(forAppKitFrame: $0, display: display) },

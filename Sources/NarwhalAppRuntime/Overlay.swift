@@ -65,7 +65,6 @@ struct OverlayRenderResult: Equatable, Sendable {
 private struct OverlayWindowEntry {
     let cgID: CGWindowID
     let frame: CGRect
-    let isOwn: Bool
 
     var stackEntry: WindowStackEntry {
         WindowStackEntry(id: WindowID(raw: cgID), frame: frame)
@@ -149,6 +148,7 @@ final class Overlay {
     /// when the WindowServer refuses to honor our re-order requests.
     private func enforceTiledBorderObscurationVisibility(targets: [FocusBorderTarget], entries: [OverlayWindowEntry]) {
         let tileIDs = Set(targets.map(\.windowID.raw))
+        let overlayWindowNumbers = ownOverlayWindowNumbers()
 
         for target in targets {
             guard let borderWindow = tiledBorderWindows[target.windowID] else { continue }
@@ -164,7 +164,7 @@ final class Overlay {
             // obscured.
             var obscured = false
             for above in entries[0..<tileIndex] {
-                if above.isOwn { continue }
+                if overlayWindowNumbers.contains(above.cgID) { continue }
                 if tileIDs.contains(above.cgID) { continue }
                 if appKitFrame(forAXFrame: above.frame).intersects(tileFrame) {
                     obscured = true
@@ -178,6 +178,15 @@ final class Overlay {
             // place, just transparent.
             borderWindow.alphaValue = obscured ? 0.0 : 1.0
         }
+    }
+
+    private func ownOverlayWindowNumbers() -> Set<CGWindowID> {
+        let windows = [borderWindow, commandWindow, hudWindow, dragPreviewWindow]
+            + Array(tiledBorderWindows.values)
+        return Set(windows.compactMap { window -> CGWindowID? in
+            guard let number = window?.windowNumber, number > 0 else { return nil }
+            return CGWindowID(number)
+        })
     }
 
 #if NARWHAL_ENABLE_VERIFIERS
@@ -206,7 +215,7 @@ final class Overlay {
     }
 
     func debugVisibleTiledBorderCount() -> Int {
-        tiledBorderWindows.values.filter(\.isVisible).count
+        tiledBorderWindows.values.filter { $0.isVisible && $0.alphaValue > 0 }.count
     }
 
     func debugTiledBorderFrame(for windowID: WindowID) -> CGRect? {
@@ -215,6 +224,11 @@ final class Overlay {
 
     func debugTiledBorderWindowNumber(for windowID: WindowID) -> Int? {
         tiledBorderWindows[windowID]?.windowNumber
+    }
+
+    func debugTiledBorderIsVisuallyVisible(for windowID: WindowID) -> Bool {
+        guard let window = tiledBorderWindows[windowID] else { return false }
+        return window.isVisible && window.alphaValue > 0
     }
 
     func debugTiledBorderLevelRawValue(for windowID: WindowID) -> Int? {
@@ -361,10 +375,8 @@ final class Overlay {
             kCGNullWindowID
         ) as? [[String: Any]] else { return nil }
 
-        let ourPID = getpid()
         return windows.compactMap { window in
             guard let cgID = window[kCGWindowNumber as String] as? CGWindowID,
-                  let pid = window[kCGWindowOwnerPID as String] as? pid_t,
                   let layer = window[kCGWindowLayer as String] as? Int,
                   layer == NSWindow.Level.normal.rawValue,
                   let boundsDict = window[kCGWindowBounds as String] as? NSDictionary,
@@ -372,8 +384,7 @@ final class Overlay {
             else { return nil }
             return OverlayWindowEntry(
                 cgID: cgID,
-                frame: frame,
-                isOwn: pid == ourPID
+                frame: frame
             )
         }
     }
