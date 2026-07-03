@@ -221,16 +221,26 @@ private final class LuaConfigDecoder {
             return .table(stringEntries)
         }
 
-        let count = Int(narwhal_lua_rawlen(state, index))
+        let rawCount = narwhal_lua_rawlen(state, index)
+        guard rawCount <= lua_Unsigned(Int.max) else {
+            throw StartupConfigError.luaDecodeFailed(path: url.path, message: "\(path) must be a dense array")
+        }
+        let count = Int(rawCount)
         guard integerEntries.count == count else {
             throw StartupConfigError.luaDecodeFailed(path: url.path, message: "\(path) must be a dense array")
         }
         guard count > 0 else {
             return .array([])
         }
-        return .array((1...count).map { position in
-            integerEntries[position]!
-        })
+        var values: [LuaValue] = []
+        values.reserveCapacity(count)
+        for position in 1...count {
+            guard let value = integerEntries[position] else {
+                throw StartupConfigError.luaDecodeFailed(path: url.path, message: "\(path) must be a dense array")
+            }
+            values.append(value)
+        }
+        return .array(values)
     }
 
     private func decodeTableKey(_ state: OpaquePointer, index: CInt, path: String) throws -> LuaTableKey {

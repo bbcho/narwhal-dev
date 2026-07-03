@@ -19,7 +19,7 @@ let package = Package(
     targets: [
         .systemLibrary(
             name: "CLua",
-            pkgConfig: "lua5.4",
+            pkgConfig: "lua5.5",
             providers: [
                 .brew(["lua"])
             ]
