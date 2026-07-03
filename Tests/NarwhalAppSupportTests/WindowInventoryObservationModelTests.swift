@@ -173,6 +173,37 @@ struct WindowInventoryObservationModelTests {
         #expect(transition.effect == nil)
     }
 
+    @Test("Focused frame event exclusion keeps inventory state without duplicate geometry")
+    func focusedFrameEventExclusionKeepsInventoryStateWithoutDuplicateGeometry() {
+        let focused = metadata(WindowID(raw: 90))
+        let other = metadata(WindowID(raw: 91))
+        let state = windowInventoryObservationBaseline(
+            windows: [focused, other],
+            activeSpaceByDisplay: [DisplayID(raw: 1): SpaceID(raw: 9)]
+        )
+        let movedFocused = metadata(focused.id, frame: focused.frame.offsetBy(dx: 20, dy: 0))
+        let movedOther = metadata(other.id, frame: other.frame.offsetBy(dx: 25, dy: 0))
+
+        let transition = observeWindowInventory(
+            windows: [movedOther, movedFocused],
+            activeSpaceByDisplay: [DisplayID(raw: 1): SpaceID(raw: 9)],
+            tolerance: 1,
+            excludedFrameEventWindowIDs: [focused.id],
+            in: state
+        )
+
+        #expect(transition.state.inventory == WindowInventoryState(visibleWindowIDs: [focused.id, other.id]))
+        #expect(transition.state.frameInventory == WindowFrameInventoryState(framesByWindowID: [
+            focused.id: movedFocused.frame,
+            other.id: movedOther.frame
+        ]))
+        #expect(transition.events == [])
+        #expect(transition.frameEvents == [
+            .windowMoved(other.id, movedOther.frame)
+        ])
+        #expect(transition.effect == nil)
+    }
+
     private func metadata(
         _ id: WindowID,
         frame: CGRect? = nil

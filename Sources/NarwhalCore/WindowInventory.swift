@@ -109,7 +109,8 @@ public func pollWindowInventorySuppressingLikelySpaceReplacement(
 public func pollWindowFrameInventory(
     previous: WindowFrameInventoryState,
     current: [WindowMetadata],
-    tolerance: CGFloat = 1
+    tolerance: CGFloat = 1,
+    excludedWindowIDs: Set<WindowID> = []
 ) -> WindowFrameInventoryPoll {
     let currentFrames = Dictionary(
         current.map { ($0.id, $0.frame) },
@@ -119,6 +120,7 @@ public func pollWindowFrameInventory(
     let previousIDs = Set(previous.framesByWindowID.keys)
     let sharedIDs = currentIDs.intersection(previousIDs).sorted { $0.raw < $1.raw }
     let events = sharedIDs.compactMap { windowID -> AXEvent? in
+        guard !excludedWindowIDs.contains(windowID) else { return nil }
         guard let oldFrame = previous.framesByWindowID[windowID],
               let newFrame = currentFrames[windowID],
               !framesEqual(oldFrame, newFrame, tolerance: tolerance)

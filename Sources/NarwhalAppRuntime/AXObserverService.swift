@@ -226,6 +226,7 @@ final class AXObserverService {
             windows: snapshot.windows,
             activeSpaceByDisplay: activeSpaceByDisplay(snapshot.windows),
             tolerance: Self.frameTolerance,
+            excludedFrameEventWindowIDs: focusedFrameInventoryEventExclusions(),
             in: windowInventoryObservationState
         )
         windowInventoryObservationState = transition.state
@@ -254,5 +255,10 @@ final class AXObserverService {
             }
             emit(event, nil)
         }
+    }
+
+    private func focusedFrameInventoryEventExclusions() -> Set<WindowID> {
+        guard let windowID = focusedObservationState.geometry.windowID else { return [] }
+        return [windowID]
     }
 }

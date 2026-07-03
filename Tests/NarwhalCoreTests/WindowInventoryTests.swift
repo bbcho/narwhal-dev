@@ -228,6 +228,51 @@ struct WindowInventoryTests {
         ])
     }
 
+    @Test("Frame inventory updates excluded window frames without emitting duplicate geometry")
+    func frameInventoryUpdatesExcludedWindowFramesWithoutEmittingDuplicateGeometry() {
+        let focused = metadata(WindowID(raw: 40))
+        let other = metadata(WindowID(raw: 41))
+        let previous = WindowFrameInventoryState(framesByWindowID: [
+            focused.id: focused.frame,
+            other.id: other.frame
+        ])
+        let movedFocused = WindowMetadata(
+            id: focused.id,
+            bundleID: focused.bundleID,
+            title: focused.title,
+            role: focused.role,
+            pid: focused.pid,
+            frame: focused.frame.offsetBy(dx: 15, dy: 0),
+            isResizable: true,
+            isMinimized: false
+        )
+        let movedOther = WindowMetadata(
+            id: other.id,
+            bundleID: other.bundleID,
+            title: other.title,
+            role: other.role,
+            pid: other.pid,
+            frame: other.frame.offsetBy(dx: 20, dy: 0),
+            isResizable: true,
+            isMinimized: false
+        )
+
+        let poll = pollWindowFrameInventory(
+            previous: previous,
+            current: [movedFocused, movedOther],
+            tolerance: 1,
+            excludedWindowIDs: [focused.id]
+        )
+
+        #expect(poll.events == [
+            .windowMoved(other.id, movedOther.frame)
+        ])
+        #expect(poll.state.framesByWindowID == [
+            focused.id: movedFocused.frame,
+            other.id: movedOther.frame
+        ])
+    }
+
     private func metadata(_ id: WindowID) -> WindowMetadata {
         WindowMetadata(
             id: id,

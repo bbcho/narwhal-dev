@@ -64,6 +64,7 @@ public func observeWindowInventory(
     windows: [WindowMetadata],
     activeSpaceByDisplay: [DisplayID: SpaceID],
     tolerance: CGFloat,
+    excludedFrameEventWindowIDs: Set<WindowID> = [],
     in state: WindowInventoryObservationState
 ) -> WindowInventoryObservationTransition {
     guard let previous = state.inventory else {
@@ -103,7 +104,8 @@ public func observeWindowInventory(
     let framePoll = pollWindowFrameInventory(
         previous: state.frameInventory ?? .empty,
         current: windows,
-        tolerance: tolerance
+        tolerance: tolerance,
+        excludedWindowIDs: excludedFrameEventWindowIDs
     )
     return WindowInventoryObservationTransition(
         state: WindowInventoryObservationState(
