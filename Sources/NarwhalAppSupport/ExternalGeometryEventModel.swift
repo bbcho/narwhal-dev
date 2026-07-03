@@ -11,16 +11,54 @@ public struct ExternalGeometryEventSelection: Equatable, Sendable {
     }
 }
 
+public struct ExternalGeometryEventQueue<Event: Sendable>: Sendable {
+    private var windowOrder: [WindowID]
+    private var eventsByWindow: [WindowID: Event]
+
+    public init() {
+        self.windowOrder = []
+        self.eventsByWindow = [:]
+    }
+
+    public var isEmpty: Bool {
+        eventsByWindow.isEmpty
+    }
+
+    public mutating func enqueue(_ event: Event, for windowID: WindowID) {
+        if eventsByWindow[windowID] == nil {
+            windowOrder.append(windowID)
+        }
+        eventsByWindow[windowID] = event
+    }
+
+    public mutating func dequeue() -> Event? {
+        while !windowOrder.isEmpty {
+            let windowID = windowOrder.removeFirst()
+            if let event = eventsByWindow.removeValue(forKey: windowID) {
+                return event
+            }
+        }
+        return nil
+    }
+}
+
+extension ExternalGeometryEventQueue: Equatable where Event: Equatable {}
+
+public func externalGeometryWindowID(for event: AXEvent) -> WindowID? {
+    switch event {
+    case .windowMoved(let id, _), .windowResized(let id, _):
+        return id
+    case .windowOpened, .windowClosed, .windowFocused:
+        return nil
+    }
+}
+
 public func externalGeometryEventSelection(
     for event: AXEvent,
     liveSnapshot: AXWindowSnapshot,
     tolerance: CGFloat
 ) -> ExternalGeometryEventSelection {
-    let windowID: WindowID
-    switch event {
-    case .windowMoved(let id, _), .windowResized(let id, _):
-        windowID = id
-    case .windowOpened, .windowClosed, .windowFocused:
+    guard let windowID = externalGeometryWindowID(for: event) else {
         return ExternalGeometryEventSelection(event: event, usedLiveFrame: false)
     }
 

@@ -137,6 +137,82 @@ struct ExternalGeometryEventModelTests {
         #expect(next.windows[window]?.frame == liveFrame)
     }
 
+    @Test("Pending geometry queue drains one latest event per window")
+    func pendingGeometryQueueDrainsOneLatestEventPerWindow() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let first = WindowID(raw: 60)
+        let second = WindowID(raw: 61)
+        let firstOldFrame = CGRect(x: 0, y: 0, width: 500, height: 400)
+        let secondOldFrame = CGRect(x: 500, y: 0, width: 500, height: 400)
+        let firstNewFrame = CGRect(x: 10, y: 20, width: 510, height: 390)
+        let secondStaleFrame = CGRect(x: 520, y: 10, width: 480, height: 390)
+        let secondNewFrame = CGRect(x: 530, y: 20, width: 470, height: 380)
+        var queue = ExternalGeometryEventQueue<AXEvent>()
+        queue.enqueue(.windowMoved(second, secondStaleFrame), for: second)
+        queue.enqueue(.windowMoved(first, firstNewFrame), for: first)
+        queue.enqueue(.windowMoved(second, secondNewFrame), for: second)
+
+        let world = twoWindowWorld(
+            display: display,
+            space: space,
+            first: metadata(first, frame: firstOldFrame),
+            second: metadata(second, frame: secondOldFrame)
+        )
+        var next = world
+        var drained: [AXEvent] = []
+        while let event = queue.dequeue() {
+            drained.append(event)
+            next = try apply(event.toCommand(), to: next).get()
+        }
+
+        #expect(drained == [
+            .windowMoved(second, secondNewFrame),
+            .windowMoved(first, firstNewFrame)
+        ])
+        #expect(next.windows[first]?.frame == firstNewFrame)
+        #expect(next.windows[second]?.frame == secondNewFrame)
+        #expect(queue.isEmpty)
+    }
+
+    private func twoWindowWorld(
+        display: DisplayID,
+        space: SpaceID,
+        first: WindowMetadata,
+        second: WindowMetadata
+    ) -> World {
+        World(
+            displays: [
+                display: DisplayInfo(
+                    id: display,
+                    slot: 0,
+                    fingerprint: "main",
+                    frame: CGRect(x: 0, y: 0, width: 1200, height: 900),
+                    visibleFrame: CGRect(x: 0, y: 0, width: 1200, height: 860)
+                )
+            ],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [
+                        display: DisplaySpaceState(
+                            displayID: display,
+                            tree: .void,
+                            floating: [first.id, second.id]
+                        )
+                    ],
+                    focused: first.id
+                )
+            ],
+            windows: [first.id: first, second.id: second],
+            windowDisplay: [first.id: display, second.id: display],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+    }
+
     private func metadata(_ id: WindowID, frame: CGRect) -> WindowMetadata {
         WindowMetadata(
             id: id,

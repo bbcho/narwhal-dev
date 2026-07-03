@@ -97,7 +97,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingHotkeys: [HotkeyAction] = []
     private var isDrainingHotkeys = false
     private var isHandlingExternalGeometry = false
-    private var pendingExternalGeometryEvent: PendingExternalGeometryEvent?
+    private var pendingExternalGeometryEvents =
+        ExternalGeometryEventQueue<PendingExternalGeometryEvent>()
     private var runningServices: RunningServices?
     private var servicesStarted = false
     private var isPaused = false
@@ -2187,25 +2188,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func handleExternalGeometryEvent(_ event: AXEvent, snapshot: FocusedWindowSnapshot?) async {
+    private func handleExternalGeometryEvent(
+        _ event: AXEvent,
+        snapshot: FocusedWindowSnapshot?
+    ) async {
+        let incoming = PendingExternalGeometryEvent(event: event, snapshot: snapshot)
         guard !isHandlingExternalGeometry else {
-            pendingExternalGeometryEvent = PendingExternalGeometryEvent(event: event, snapshot: snapshot)
+            if let windowID = externalGeometryWindowID(for: event) {
+                pendingExternalGeometryEvents.enqueue(incoming, for: windowID)
+            }
             return
         }
 
         isHandlingExternalGeometry = true
-        var current = PendingExternalGeometryEvent(event: event, snapshot: snapshot)
-        while true {
-            await processExternalGeometryEvent(current.event, snapshot: current.snapshot)
-            guard let pending = pendingExternalGeometryEvent else { break }
-            pendingExternalGeometryEvent = nil
-            current = pending
+        var current: PendingExternalGeometryEvent? = incoming
+        while let currentEvent = current {
+            await processExternalGeometryEvent(currentEvent.event, snapshot: currentEvent.snapshot)
+            current = pendingExternalGeometryEvents.dequeue()
         }
         isHandlingExternalGeometry = false
     }
 
     @MainActor
-    private func processExternalGeometryEvent(_ event: AXEvent, snapshot: FocusedWindowSnapshot?) async {
+    private func processExternalGeometryEvent(
+        _ event: AXEvent,
+        snapshot: FocusedWindowSnapshot?
+    ) async {
         let selectedEvent = externalGeometryEventSelection(
             for: event,
             liveSnapshot: axClient.windowSnapshot(),
