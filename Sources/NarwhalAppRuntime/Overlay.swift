@@ -215,7 +215,7 @@ final class Overlay {
     }
 
     func debugVisibleTiledBorderCount() -> Int {
-        tiledBorderWindows.values.filter { $0.isVisible && $0.alphaValue > 0 }.count
+        tiledBorderWindows.values.filter(\.isVisible).count
     }
 
     func debugTiledBorderFrame(for windowID: WindowID) -> CGRect? {
