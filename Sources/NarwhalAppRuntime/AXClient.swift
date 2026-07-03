@@ -272,7 +272,14 @@ struct AXClient {
                 role: role,
                 subrole: subrole,
                 frame: frame,
-                isResizable: isResizable(focusedWindow),
+                isResizable: isResizeEligible(
+                    focusedWindow,
+                    role: role,
+                    subrole: subrole,
+                    frame: frame,
+                    isMinimized: isMinimized,
+                    isFullscreen: isFullscreen
+                ),
                 isMinimized: isMinimized,
                 isFullscreen: isFullscreen
             ))
@@ -687,13 +694,54 @@ struct AXClient {
     ) -> Bool {
         switch windowElement(processID: processID, title: title, role: role, frame: frame, windowID: windowID) {
         case .success(let element):
-            return isResizable(element)
+            return isResizeEligible(element, fallbackRole: role, frame: frame)
         case .failure:
             return false
         }
     }
 
-    private func isResizable(_ window: AXUIElement) -> Bool {
+    private func isResizeEligible(
+        _ window: AXUIElement,
+        fallbackRole: String = "",
+        frame fallbackFrame: CGRect
+    ) -> Bool {
+        let role = stringAttribute(window, kAXRoleAttribute)
+        let frame: CGRect
+        switch focusedWindowFrame(window) {
+        case .success(let value):
+            frame = value
+        case .failure:
+            frame = fallbackFrame
+        }
+        return isResizeEligible(
+            window,
+            role: role.isEmpty ? fallbackRole : role,
+            subrole: stringAttribute(window, kAXSubroleAttribute),
+            frame: frame,
+            isMinimized: boolAttribute(window, kAXMinimizedAttribute, defaultValue: false),
+            isFullscreen: boolAttribute(window, "AXFullScreen", defaultValue: false)
+        )
+    }
+
+    private func isResizeEligible(
+        _ window: AXUIElement,
+        role: String,
+        subrole: String,
+        frame: CGRect,
+        isMinimized: Bool,
+        isFullscreen: Bool
+    ) -> Bool {
+        windowResizeEligibility(WindowResizeEligibilityTraits(
+            role: role,
+            subrole: subrole,
+            axSizeAttributeSettable: isSizeAttributeSettable(window),
+            isMinimized: isMinimized,
+            isFullscreen: isFullscreen,
+            frame: frame
+        ))
+    }
+
+    private func isSizeAttributeSettable(_ window: AXUIElement) -> Bool {
         var settable = DarwinBoolean(false)
         let error = AXUIElementIsAttributeSettable(window, kAXSizeAttribute as CFString, &settable)
         return error == .success && settable.boolValue
