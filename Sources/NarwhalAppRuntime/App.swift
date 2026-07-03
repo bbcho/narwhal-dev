@@ -59,7 +59,7 @@ private struct PendingExternalGeometryEvent {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let instance = AppDelegate()
     private static let environmentRefreshCoalescingDelay: TimeInterval = 0.10
-    private static let externalGeometryEventTolerance: CGFloat = 4
+    private static let externalGeometryEventTolerance: CGFloat = frameWriteSettleTolerance
     private static let activeSpaceTransitionPreserveDuration: TimeInterval = 1.25
     private static let activeSpaceFocusRecoveryDuration: TimeInterval = 5.0
     private static let activeSpaceSettledRefreshDelays: [TimeInterval] = [0.35, 0.80]

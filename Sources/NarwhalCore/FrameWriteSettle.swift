@@ -1,5 +1,7 @@
 import CoreGraphics
 
+public let frameWriteSettleTolerance: CGFloat = 4
+
 public func frameWriteApproximatelySettled(
     target: CGRect,
     actual: CGRect,

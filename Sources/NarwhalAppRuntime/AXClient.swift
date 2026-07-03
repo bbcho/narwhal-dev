@@ -612,10 +612,18 @@ struct AXClient {
     }
 
     private func frameWriteDidNotConverge(target: CGRect, actual: CGRect) -> AXFrameWriteOutcome {
-        if let observed = inferObservedConstraints(target: target, actual: actual, tolerance: 4) {
+        if let observed = inferObservedConstraints(
+            target: target,
+            actual: actual,
+            tolerance: Double(frameWriteSettleTolerance)
+        ) {
             return .clamped(actual: actual, observed: observed)
         }
-        if frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 4) {
+        if frameWriteApproximatelySettled(
+            target: target,
+            actual: actual,
+            tolerance: Double(frameWriteSettleTolerance)
+        ) {
             return .converged(actual: actual)
         }
         return .failed(.frameDidNotConverge(target: target, actual: actual, attempts: 3))
@@ -938,10 +946,10 @@ struct AXClient {
     }
 
     private func framesApproximatelyMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
-        abs(lhs.origin.x - rhs.origin.x) <= 4
-            && abs(lhs.origin.y - rhs.origin.y) <= 4
-            && abs(lhs.size.width - rhs.size.width) <= 4
-            && abs(lhs.size.height - rhs.size.height) <= 4
+        abs(lhs.origin.x - rhs.origin.x) <= frameWriteSettleTolerance
+            && abs(lhs.origin.y - rhs.origin.y) <= frameWriteSettleTolerance
+            && abs(lhs.size.width - rhs.size.width) <= frameWriteSettleTolerance
+            && abs(lhs.size.height - rhs.size.height) <= frameWriteSettleTolerance
     }
 
     private func frameDistance(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
