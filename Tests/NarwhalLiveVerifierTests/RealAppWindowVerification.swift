@@ -1,6 +1,7 @@
 #if NARWHAL_ENABLE_VERIFIERS
 @testable import NarwhalAppRuntime
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 import NarwhalAppSupport
@@ -174,6 +175,11 @@ enum RealAppWindowVerification {
     }
 
     private static func waitForUnlockedSession() throws {
+        guard AXIsProcessTrusted() else {
+            throw RealAppWindowVerifierFailure(
+                "real app verification requires Accessibility trust for the test runner"
+            )
+        }
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {
             if !realAppSessionIsLocked() {
