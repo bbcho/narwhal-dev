@@ -43,7 +43,10 @@ public func externalGeometryEventSelection(
     guard !matchesLiveFrame else {
         return ExternalGeometryEventSelection(event: event, usedLiveFrame: false)
     }
-    return ExternalGeometryEventSelection(event: .windowMoved(windowID, live.frame), usedLiveFrame: true)
+    return ExternalGeometryEventSelection(
+        event: .windowMoved(windowID, live.frame),
+        usedLiveFrame: true
+    )
 }
 
 private func framesApproximatelyEqual(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {

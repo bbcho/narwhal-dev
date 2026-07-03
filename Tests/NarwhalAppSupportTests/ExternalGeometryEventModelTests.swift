@@ -108,7 +108,11 @@ struct ExternalGeometryEventModelTests {
                 space: SpaceState(
                     id: space,
                     displays: [
-                        display: DisplaySpaceState(displayID: display, tree: .void, floating: [window])
+                        display: DisplaySpaceState(
+                            displayID: display,
+                            tree: .void,
+                            floating: [window]
+                        )
                     ],
                     focused: window
                 )
