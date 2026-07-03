@@ -7,6 +7,7 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 cd "$repo_root"
 export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/narwhal-clang-module-cache}"
 export NARWHAL_RUN_LIVE_VERIFIERS=1
+export NARWHAL_RUN_REAL_APP_VERIFIERS=1
 
 log_file="$(mktemp "${TMPDIR:-/tmp}/narwhal-live-verify.XXXXXX")"
 trap 'rm -f "$log_file"' EXIT
@@ -25,8 +26,18 @@ if grep -Eq 'No matching test cases were run|Test run with 0 tests' "$log_file";
   exit 1
 fi
 
+if ! grep -Eq 'Suite "Real app window verifiers" started' "$log_file"; then
+  echo "live_verify_all failed: real-app verifier suite did not start" >&2
+  exit 1
+fi
+
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
+fi
+
+if grep -Eq 'skipped:' "$log_file"; then
+  echo "live_verify_all failed: verifier output contains skipped tests" >&2
+  exit 1
 fi
 
 if grep -Eq 'recorded an issue|failed after .* with [1-9][0-9]* issue' "$log_file"; then
