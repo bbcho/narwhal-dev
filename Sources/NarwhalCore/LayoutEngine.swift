@@ -181,13 +181,20 @@ private struct PendingTileRuleApplicationAccumulator {
             return .success(self)
         }
 
-        return apply(.dropAtZone(windowID, displayID, zoneID), to: world)
-            .map { next in
-                PendingTileRuleApplicationAccumulator(
-                    world: next.clearingPendingRule(for: windowID),
-                    focusedWindowID: windowID
-                )
-            }
+        switch apply(.dropAtZone(windowID, displayID, zoneID), to: world) {
+        case .success(let next):
+            return .success(PendingTileRuleApplicationAccumulator(
+                world: next.clearingPendingRule(for: windowID),
+                focusedWindowID: windowID
+            ))
+        case .failure(.zoneNotFound):
+            return .success(PendingTileRuleApplicationAccumulator(
+                world: world.clearingPendingRule(for: windowID),
+                focusedWindowID: focusedWindowID
+            ))
+        case .failure(let error):
+            return .failure(error)
+        }
     }
 }
 

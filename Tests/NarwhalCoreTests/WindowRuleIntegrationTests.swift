@@ -162,8 +162,8 @@ struct WindowRuleIntegrationTests {
         #expect(try applyingPendingTileRules(in: world).get() == nil)
     }
 
-    @Test("Pending tile rule application returns command failures explicitly")
-    func pendingTileRuleApplicationReturnsCommandFailures() {
+    @Test("Pending tile rule application clears stale missing-zone rules")
+    func pendingTileRuleApplicationClearsStaleMissingZoneRules() throws {
         let display = DisplayID(raw: 1)
         let space = SpaceID(raw: 1)
         let window = WindowID(raw: 70)
@@ -186,7 +186,52 @@ struct WindowRuleIntegrationTests {
             config: .default
         )
 
-        #expect(applyingPendingTileRules(in: world) == .failure(.zoneNotFound(missingZone)))
+        let plan = try #require(try applyingPendingTileRules(in: world).get())
+
+        #expect(plan.focusedWindowID == nil)
+        #expect(plan.world.pendingRules.isEmpty)
+        #expect(plan.world.spaces[space]?.displays[display]?.floating == [window])
+        #expect(plan.world.spaces[space]?.displays[display]?.tree == .void)
+    }
+
+    @Test("Stale pending tile rule does not block later valid pending tile rule")
+    func stalePendingTileRuleDoesNotBlockLaterValidPendingTileRule() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let stale = WindowID(raw: 70)
+        let valid = WindowID(raw: 71)
+        let missingZone = ZoneID(raw: "missing")
+        let centerZone = ZoneID(raw: "center")
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: .void, floating: [stale, valid])],
+                    focused: nil
+                )
+            ],
+            windows: [
+                stale: metadata(stale, bundleID: "com.example.stale-zone"),
+                valid: metadata(valid, bundleID: "com.example.valid-zone")
+            ],
+            windowDisplay: [stale: display, valid: display],
+            windowConstraints: [:],
+            pendingRules: [
+                stale: .tileToZone(missingZone),
+                valid: .tileToZone(centerZone)
+            ],
+            config: .default
+        )
+
+        let plan = try #require(try applyingPendingTileRules(in: world).get())
+
+        #expect(plan.focusedWindowID == valid)
+        #expect(plan.world.pendingRules.isEmpty)
+        #expect(plan.world.spaces[space]?.displays[display]?.floating == [stale])
+        let tree: Node? = plan.world.spaces[space]?.displays[display]?.tree
+        #expect(tree.map { occupiedWindows(in: $0) } == [valid])
     }
 
     @Test("Window closed command prunes metadata, ownership, pending rules, constraints, focus, and tree leaves")
