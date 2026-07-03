@@ -696,7 +696,14 @@ struct AXClient {
         case .success(let element):
             return isResizeEligible(element, fallbackRole: role, frame: frame)
         case .failure:
-            return false
+            return windowResizeEligibility(WindowResizeEligibilityTraits(
+                role: role,
+                subrole: "",
+                axSizeAttributeSettable: false,
+                isMinimized: false,
+                isFullscreen: false,
+                frame: frame
+            ))
         }
     }
 

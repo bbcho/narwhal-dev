@@ -49,16 +49,6 @@ scripts/live_verify_all.sh
 scripts/build_app_bundle.sh --configuration debug --output .build/narwhal-package-next --replace
 ```
 
-Real-app live verification requires stable local code signing so macOS
-Accessibility trust survives rebuilds of the packaged app and SwiftPM test
-bundle:
-
-```sh
-scripts/create_local_codesign_identity.sh
-export NARWHAL_SIGNING_IDENTITY="Narwhal Local Code Signing"
-scripts/live_verify_real_apps.sh
-```
-
 Install a development build for the current user:
 
 ```sh
