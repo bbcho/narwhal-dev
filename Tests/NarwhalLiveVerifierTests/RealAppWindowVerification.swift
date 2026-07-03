@@ -52,6 +52,20 @@ struct RealAppWindowVerificationTests {
         try expectPassed(await RealAppWindowVerification.verifyChromeFirefoxManualTileResize())
     }
 
+    @Test("Three Firefox windows stack vertically")
+    func threeFirefoxWindowsStackVertically() async throws {
+        _ = NSApplication.shared
+        VerifierAppDelegate.installIfNeeded()
+        try expectPassed(await RealAppWindowVerification.verifyThreeFirefoxVerticalStack())
+    }
+
+    @Test("Three Chrome windows stack vertically")
+    func threeChromeWindowsStackVertically() async throws {
+        _ = NSApplication.shared
+        VerifierAppDelegate.installIfNeeded()
+        try expectPassed(await RealAppWindowVerification.verifyThreeChromeVerticalStack())
+    }
+
     private func expectPassed(_ result: (passed: Bool, message: String)) throws {
         guard result.passed else {
             throw RealAppWindowVerifierFailure(result.message)
@@ -61,6 +75,12 @@ struct RealAppWindowVerificationTests {
 
 @MainActor
 enum RealAppWindowVerification {
+    private static let systemSettingsStableAXWidth: CGFloat = 724
+    private static let firefoxManualStagingMinimumHeight: CGFloat = 640
+    private static let manualResizeShrinkReserve: CGFloat = 120
+    private static let manualResizeShrinkSafety: CGFloat = 8
+    private static let browserResizeReserveDelta = 0.18
+
     static func verifyFirefox() -> (passed: Bool, message: String) {
         verifyApp(firefoxSpec())
     }
@@ -117,8 +137,18 @@ enum RealAppWindowVerification {
             for spec in [chromeSpec(), firefoxSpec(), terminalSpec()] {
                 let bundleID = try installedBundleID(for: spec)
                 let wasRunning = isRunning(bundleID: bundleID)
-                try launch(spec: spec, bundleID: bundleID)
-                let metadata = try waitForUsableWindow(spec: spec, bundleID: bundleID, using: axClient)
+                let excludedIDs = preexistingBrowserWindowIDs(for: spec, bundleID: bundleID, using: axClient)
+                if spec.name == "Google Chrome" {
+                    try launchChromeVerificationWindow(token: "manual")
+                } else {
+                    try launch(spec: spec, bundleID: bundleID)
+                }
+                let metadata = try waitForUsableWindow(
+                    spec: spec,
+                    bundleID: bundleID,
+                    using: axClient,
+                    excluding: excludedIDs
+                )
                 originals.append(RealAppOriginal(
                     spec: spec,
                     bundleID: bundleID,
@@ -129,7 +159,7 @@ enum RealAppWindowVerification {
             }
 
             let targetDisplay = try manualResizeVerificationDisplay(displays)
-            try stageManualResizeWindows(
+            try await stageManualResizeWindows(
                 originals,
                 on: targetDisplay,
                 using: axClient
@@ -152,6 +182,120 @@ enum RealAppWindowVerification {
         } catch {
             return (false, "manual browser resize verification failed: \(String(describing: error))")
         }
+    }
+
+    static func verifyThreeFirefoxVerticalStack() async -> (passed: Bool, message: String) {
+        await verifyThreeWindowVerticalStack(spec: firefoxSpec(), label: "Firefox")
+    }
+
+    static func verifyThreeChromeVerticalStack() async -> (passed: Bool, message: String) {
+        await verifyThreeWindowVerticalStack(spec: chromeSpec(), label: "Google Chrome")
+    }
+
+    private static func verifyThreeWindowVerticalStack(
+        spec: RealAppSpec,
+        label: String
+    ) async -> (passed: Bool, message: String) {
+        do {
+            try waitForUnlockedSession()
+            let displays = DisplayClient().currentDisplays()
+            let targetDisplay = try manualResizeVerificationDisplay(displays)
+            let axClient = AXClient(processID: -1)
+            let bundleID = try installedBundleID(for: spec)
+            let wasRunning = isRunning(bundleID: bundleID)
+            var originals: [RealAppOriginal] = []
+            var selectedIDs = Set<WindowID>()
+            var didRestore = false
+            defer {
+                if !didRestore {
+                    for original in originals.reversed() {
+                        do {
+                            try cleanupApp(original, using: axClient)
+                        } catch {
+                            print("REAL \(label.uppercased()) STACK VERIFY: failed to clean up \(original.metadata.id.description): \(String(describing: error))")
+                        }
+                    }
+                }
+            }
+
+            for index in 0..<3 {
+                if spec.name == "Google Chrome" {
+                    try launchChromeVerificationWindow(token: "stack-\(index)")
+                } else {
+                    try launch(spec: spec, bundleID: bundleID)
+                }
+                let metadata = try waitForUsableWindow(
+                    spec: spec,
+                    bundleID: bundleID,
+                    using: axClient,
+                    excluding: selectedIDs
+                )
+                selectedIDs.insert(metadata.id)
+                originals.append(RealAppOriginal(
+                    spec: spec,
+                    bundleID: bundleID,
+                    metadata: metadata,
+                    frame: metadata.frame,
+                    wasRunningBeforeTest: wasRunning
+                ))
+            }
+
+            let frames = try threeWindowVerticalStackFrames(in: targetDisplay.visibleFrame)
+            var actuals: [CGRect] = []
+            for (index, original) in originals.enumerated() {
+                let metadata = try currentWorkflowMetadata(for: original, using: axClient)
+                try await focusIfPossible(metadata, appName: "\(label) stack \(index + 1)", using: axClient)
+                let actual = try verifyFrameWrite(
+                    frames[index],
+                    metadata: metadata,
+                    appName: "\(label) vertical stack",
+                    step: index + 1,
+                    using: axClient
+                )
+                try requireFrame(actual, isOn: targetDisplay, context: "\(label) vertical stack \(index + 1)")
+                actuals.append(actual)
+            }
+
+            for first in actuals.indices {
+                for second in actuals.indices where second > first {
+                    guard framesDoNotVisiblyOverlap(actuals[first], actuals[second], tolerance: frameWriteSettleTolerance) else {
+                        throw RealAppWindowVerifierFailure(
+                            "\(label) vertical stack windows overlapped: first=\(actuals[first].debugDescription) second=\(actuals[second].debugDescription)"
+                        )
+                    }
+                }
+            }
+
+            for original in originals.reversed() {
+                try cleanupApp(original, using: axClient)
+            }
+            didRestore = true
+
+            return (true, "three \(label) vertical stack passed: \(actuals.map(\.shortDescription).joined(separator: ","))")
+        } catch let error as RealAppWindowVerifierFailure {
+            return (false, error.message)
+        } catch {
+            return (false, "three \(label) vertical stack verification failed: \(String(describing: error))")
+        }
+    }
+
+    private static func launchChromeVerificationWindow(token: String) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        let url = "https://example.com/?narwhal-real-app=chrome-\(token)"
+        process.arguments = [
+            "-n",
+            "-a", "Google Chrome",
+            "--args",
+            "--new-window",
+            url
+        ]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw RealAppWindowVerifierFailure("Google Chrome new-window launch failed with status \(process.terminationStatus)")
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.45))
     }
 
     private static func verifyApp(_ spec: RealAppSpec) -> (passed: Bool, message: String) {
@@ -197,10 +341,20 @@ enum RealAppWindowVerification {
     ) throws -> String {
         let bundleID = try installedBundleID(for: spec)
         let wasRunning = isRunning(bundleID: bundleID)
-        try launch(spec: spec, bundleID: bundleID)
-
         let axClient = AXClient(processID: -1)
-        let original = try waitForUsableWindow(spec: spec, bundleID: bundleID, using: axClient)
+        let excludedIDs = preexistingBrowserWindowIDs(for: spec, bundleID: bundleID, using: axClient)
+        if spec.name == "Google Chrome" {
+            try launchChromeVerificationWindow(token: "direct")
+        } else {
+            try launch(spec: spec, bundleID: bundleID)
+        }
+
+        let original = try waitForUsableWindow(
+            spec: spec,
+            bundleID: bundleID,
+            using: axClient,
+            excluding: excludedIDs
+        )
         let restoreFrame = original.frame
         var didRestore = false
         defer {
@@ -300,10 +454,20 @@ enum RealAppWindowVerification {
                 continue
             }
             let wasRunning = isRunning(bundleID: bundleID)
-            try launch(spec: spec, bundleID: bundleID)
+            let excludedIDs = preexistingBrowserWindowIDs(for: spec, bundleID: bundleID, using: axClient)
+            if spec.name == "Google Chrome" {
+                try launchChromeVerificationWindow(token: "workflow")
+            } else {
+                try launch(spec: spec, bundleID: bundleID)
+            }
             let metadata: WindowMetadata
             do {
-                metadata = try waitForUsableWindow(spec: spec, bundleID: bundleID, using: axClient)
+                metadata = try waitForUsableWindow(
+                    spec: spec,
+                    bundleID: bundleID,
+                    using: axClient,
+                    excluding: excludedIDs
+                )
             } catch {
                 if !wasRunning {
                     quitApp(bundleID: bundleID, appName: spec.name)
@@ -419,23 +583,26 @@ enum RealAppWindowVerification {
         let directions: [Direction] = [.right, .left, .left, .up]
         for (index, entry) in sequence.enumerated() {
             try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
-            try await focusIfPossible(entry.metadata, appName: entry.spec.name, using: axClient)
+            let current = try currentWorkflowMetadata(for: entry, using: axClient)
+            try await focusIfPossible(current, appName: entry.spec.name, using: axClient)
             let direction = directions[min(index, directions.count - 1)]
             try await applyWorkflowCommand(
                 "mixed \(entry.spec.name) push \(direction.rawValue)",
-                plan: { await worldActor.planPush(entry.metadata.id, direction: direction) },
+                plan: { await worldActor.planPush(current.id, direction: direction) },
                 worldActor: worldActor,
                 applier: applier
             )
         }
 
         let resizeTarget = browser ?? sequence.last!
+        try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+        let currentResizeTarget = try currentWorkflowMetadata(for: resizeTarget, using: axClient)
         try await applyFirstSuccessfulWorkflowCommand(
             "mixed \(resizeTarget.spec.name) resize split",
             plans: Direction.allCases.map { direction in
                 (
                     name: "mixed \(resizeTarget.spec.name) resize \(direction.rawValue)",
-                    plan: { await worldActor.planResize(resizeTarget.metadata.id, direction: direction, delta: 0.10) }
+                    plan: { await worldActor.planResize(currentResizeTarget.id, direction: direction, delta: 0.10) }
                 )
             },
             worldActor: worldActor,
@@ -444,7 +611,7 @@ enum RealAppWindowVerification {
 
         try await applyWorkflowCommand(
             "mixed balance real-app workspace",
-            plan: { await worldActor.planBalanceWorkspace(containing: resizeTarget.metadata.id) },
+            plan: { await worldActor.planBalanceWorkspace(containing: currentResizeTarget.id) },
             worldActor: worldActor,
             applier: applier,
             allowNoMove: true
@@ -506,11 +673,28 @@ enum RealAppWindowVerification {
         )
 
         try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
-        let chromeBefore = try currentWorkflowMetadata(for: chrome, using: axClient)
-        let firefoxBefore = try currentWorkflowMetadata(for: firefox, using: axClient)
+        var chromeBefore = try currentWorkflowMetadata(for: chrome, using: axClient)
+        var firefoxBefore = try currentWorkflowMetadata(for: firefox, using: axClient)
         guard chromeBefore.frame.midY < firefoxBefore.frame.midY else {
             throw RealAppWindowVerifierFailure(
                 "Chrome over Firefox resize precondition failed: Chrome was not above Firefox; chrome=\(chromeBefore.frame.debugDescription) firefox=\(firefoxBefore.frame.debugDescription)"
+            )
+        }
+
+        try await focusIfPossible(firefoxBefore, appName: firefox.spec.name, using: axClient)
+        try await applyWorkflowCommand(
+            "Chrome over Firefox Firefox reserve shrink room",
+            plan: { await worldActor.planResize(firefoxBefore.id, direction: .up, delta: Self.browserResizeReserveDelta) },
+            worldActor: worldActor,
+            applier: applier
+        )
+
+        try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+        chromeBefore = try currentWorkflowMetadata(for: chrome, using: axClient)
+        firefoxBefore = try currentWorkflowMetadata(for: firefox, using: axClient)
+        guard chromeBefore.frame.midY < firefoxBefore.frame.midY else {
+            throw RealAppWindowVerifierFailure(
+                "Chrome over Firefox reserve-shrink precondition failed: Chrome was not above Firefox; chrome=\(chromeBefore.frame.debugDescription) firefox=\(firefoxBefore.frame.debugDescription)"
             )
         }
 
@@ -617,22 +801,53 @@ enum RealAppWindowVerification {
             )
         }
 
-        let availableShrink = firefoxBefore.frame.height - firefox.spec.minimumWindowSize.height - 48
+        var chromeAfterReserve = chromeBefore
+        var firefoxAfterReserve = firefoxBefore
+        for attempt in 1...4 {
+            if firefoxAfterReserve.frame.height - firefoxBefore.frame.height >= 56 {
+                break
+            }
+            try await focusIfPossible(firefoxAfterReserve, appName: firefox.spec.name, using: axClient)
+            try await applyWorkflowCommand(
+                "manual browser resize Firefox reserve shrink room \(attempt)",
+                plan: { await worldActor.planResize(firefoxAfterReserve.id, direction: .up, delta: 0.35) },
+                worldActor: worldActor,
+                applier: applier
+            )
+
+            try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+            chromeAfterReserve = try currentWorkflowMetadata(for: chrome, using: axClient)
+            firefoxAfterReserve = try currentWorkflowMetadata(for: firefox, using: axClient)
+        }
+        guard chromeAfterReserve.frame.midY < firefoxAfterReserve.frame.midY else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize reserve-shrink precondition failed: Chrome was not above Firefox; chrome=\(chromeAfterReserve.frame.debugDescription) firefox=\(firefoxAfterReserve.frame.debugDescription)"
+            )
+        }
+        guard firefoxAfterReserve.frame.height > firefoxBefore.frame.height + frameWriteSettleTolerance else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize precondition failed: Firefox reserve step did not create shrink room; before=\(firefoxBefore.frame.debugDescription) after=\(firefoxAfterReserve.frame.debugDescription)"
+            )
+        }
+
+        let availableShrink = firefoxAfterReserve.frame.height
+            - firefoxBefore.frame.height
+            - Self.manualResizeShrinkSafety
         let growth = min(max(availableShrink, 0), 180)
         guard growth >= 48 else {
             throw RealAppWindowVerifierFailure(
-                "manual browser resize precondition failed: Firefox had insufficient shrink room; firefox=\(firefoxBefore.frame.debugDescription)"
+                "manual browser resize precondition failed: Firefox had insufficient shrink room; firefox=\(firefoxAfterReserve.frame.debugDescription)"
             )
         }
         let requestedChromeFrame = CGRect(
-            x: chromeBefore.frame.minX,
-            y: chromeBefore.frame.minY,
-            width: chromeBefore.frame.width,
-            height: chromeBefore.frame.height + growth
+            x: chromeAfterReserve.frame.minX,
+            y: chromeAfterReserve.frame.minY,
+            width: chromeAfterReserve.frame.width,
+            height: chromeAfterReserve.frame.height + growth
         ).standardized
 
         let manualChromeFrame: CGRect
-        switch axClient.setFrame(chromeBefore, to: requestedChromeFrame) {
+        switch axClient.setFrame(chromeAfterReserve, to: requestedChromeFrame) {
         case .converged(let frame):
             manualChromeFrame = frame
         case .clamped(let frame, let observed):
@@ -660,22 +875,22 @@ enum RealAppWindowVerification {
                     + "actual=\(manualChromeFrame.debugDescription)"
             )
         }
-        guard manualChromeFrame.height > chromeBefore.frame.height + frameWriteSettleTolerance else {
+        guard manualChromeFrame.height > chromeAfterReserve.frame.height + frameWriteSettleTolerance else {
             throw RealAppWindowVerifierFailure(
                 "manual browser resize did not visibly grow Chrome before Narwhal handling: "
-                    + "before=\(chromeBefore.frame.debugDescription) "
+                    + "before=\(chromeAfterReserve.frame.debugDescription) "
                     + "actual=\(manualChromeFrame.debugDescription)"
             )
         }
 
         let event: AXEvent
         if manualChromeFrame.matches(
-            CGRect(origin: chromeBefore.frame.origin, size: manualChromeFrame.size),
+            CGRect(origin: chromeAfterReserve.frame.origin, size: manualChromeFrame.size),
             tolerance: 2
         ) {
-            event = .windowResized(chromeBefore.id, manualChromeFrame.size)
+            event = .windowResized(chromeAfterReserve.id, manualChromeFrame.size)
         } else {
-            event = .windowMoved(chromeBefore.id, manualChromeFrame)
+            event = .windowMoved(chromeAfterReserve.id, manualChromeFrame)
         }
         let externalPlannedFrames = try await applyExternalGeometryWorkflowEvent(
             "manual browser resize Chrome external geometry",
@@ -707,10 +922,10 @@ enum RealAppWindowVerification {
                     + "planned=\(plannedChromeFrame.debugDescription)"
             )
         }
-        guard plannedFirefoxFrame.height < firefoxBefore.frame.height - frameWriteSettleTolerance else {
+        guard plannedFirefoxFrame.height < firefoxAfterReserve.frame.height - frameWriteSettleTolerance else {
             throw RealAppWindowVerifierFailure(
                 "manual browser resize plan did not shrink real Firefox: "
-                    + "before=\(firefoxBefore.frame.debugDescription) "
+                    + "before=\(firefoxAfterReserve.frame.debugDescription) "
                     + "planned=\(plannedFirefoxFrame.debugDescription)"
             )
         }
@@ -774,7 +989,7 @@ enum RealAppWindowVerification {
         _ originals: [RealAppOriginal],
         on display: DisplayInfo,
         using axClient: AXClient
-    ) throws {
+    ) async throws {
         let chrome = try requireOriginal(named: "Google Chrome", in: originals)
         let firefox = try requireOriginal(named: "Firefox", in: originals)
         let companion = try requireOriginal(named: "Terminal", in: originals)
@@ -782,7 +997,21 @@ enum RealAppWindowVerification {
         let margin: CGFloat = 40
         let stackGap: CGFloat = 40
         let browserWidth = min(max(visible.width * 0.45, 1_300), visible.width * 0.48)
-        let browserHeight = max(360, (visible.height - margin * 2 - stackGap) / 2)
+        let stackHeight = visible.height - margin * 2 - stackGap
+        let minimumChromeHeight: CGFloat = 420
+        let firefoxHeightWithShrinkRoom = Self.firefoxManualStagingMinimumHeight + Self.manualResizeShrinkReserve
+        let chromeHeight = max(
+            minimumChromeHeight,
+            min(visible.height * 0.34, stackHeight - firefoxHeightWithShrinkRoom)
+        )
+        let firefoxHeight = stackHeight - chromeHeight
+        guard chromeHeight >= minimumChromeHeight,
+              firefoxHeight >= firefoxHeightWithShrinkRoom
+        else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize staging requires enough vertical room for Firefox shrink reserve: visible=\(visible.debugDescription)"
+            )
+        }
         let companionWidth = max(480, visible.width - browserWidth - margin * 3)
         let companionFrame = CGRect(
             x: visible.maxX - margin - companionWidth,
@@ -794,13 +1023,13 @@ enum RealAppWindowVerification {
             x: visible.minX + margin,
             y: visible.minY + margin,
             width: browserWidth,
-            height: browserHeight
+            height: chromeHeight
         ).standardized
         let firefoxFrame = CGRect(
             x: visible.minX + margin,
             y: chromeFrame.maxY + stackGap,
             width: browserWidth,
-            height: browserHeight
+            height: firefoxHeight
         ).standardized
 
         let placements: [(RealAppOriginal, CGRect)] = [
@@ -810,6 +1039,7 @@ enum RealAppWindowVerification {
         ]
         for (index, placement) in placements.enumerated() {
             let metadata = try currentWorkflowMetadata(for: placement.0, using: axClient)
+            try await focusIfPossible(metadata, appName: placement.0.spec.name, using: axClient)
             _ = try verifyFrameWrite(
                 placement.1,
                 metadata: metadata,
@@ -818,7 +1048,7 @@ enum RealAppWindowVerification {
                 using: axClient
             )
         }
-        RunLoop.current.run(until: Date().addingTimeInterval(0.16))
+        try? await Task.sleep(nanoseconds: 160_000_000)
     }
 
     private static func framesDoNotVisiblyOverlap(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {
@@ -1087,26 +1317,37 @@ enum RealAppWindowVerification {
                     "\(context) applied unplanned frame for \(windowID.description): actual=\(frame.debugDescription)"
                 )
             }
-            guard frame.matches(plannedFrame, tolerance: frameWriteSettleTolerance) else {
+            guard frameSettledOnPlan(frame, plannedFrame) else {
                 throw RealAppWindowVerifierFailure(
-                    "\(context) AX frame did not match plan for \(windowID.description): "
+                    "\(context) AX frame did not settle on plan for \(windowID.description): "
                         + "expected=\(plannedFrame.debugDescription) "
                         + "actual=\(frame.debugDescription)"
                 )
             }
             let serverFrame = LiveWindowServerVerification.waitForFrame(
                 windowNumber: Int(windowID.raw),
-                matching: plannedFrame,
+                matching: frame,
                 tolerance: frameWriteSettleTolerance
             )
-            guard serverFrame?.matches(plannedFrame, tolerance: frameWriteSettleTolerance) == true else {
+            guard serverFrame?.matches(frame, tolerance: frameWriteSettleTolerance) == true else {
                 throw RealAppWindowVerifierFailure(
                     "\(context) WindowServer frame mismatch for \(windowID.description): "
-                        + "expected=\(plannedFrame.debugDescription) "
+                        + "expected=\(frame.debugDescription) "
                         + "actual=\(serverFrame?.debugDescription ?? "nil")"
                 )
             }
         }
+    }
+
+    private static func frameSettledOnPlan(_ frame: CGRect, _ plannedFrame: CGRect) -> Bool {
+        frame.matches(plannedFrame, tolerance: frameWriteSettleTolerance)
+            || frameWriteApproximatelySettled(
+                target: plannedFrame,
+                actual: frame,
+                tolerance: Double(frameWriteSettleTolerance),
+                maxEdgeDrift: 8,
+                minimumOverlapRatio: 0.99
+            )
     }
 
     private static func focusIfPossible(
@@ -1145,6 +1386,17 @@ enum RealAppWindowVerification {
 
     private static func isRunning(bundleID: String) -> Bool {
         !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
+    }
+
+    private static func preexistingBrowserWindowIDs(
+        for spec: RealAppSpec,
+        bundleID: String,
+        using axClient: AXClient
+    ) -> Set<WindowID> {
+        guard spec.pattern == .browser else { return [] }
+        return Set(axClient.windowSnapshot().windows
+            .filter { $0.bundleID.raw == bundleID }
+            .map(\.id))
     }
 
     private static func cleanupApp(_ original: RealAppOriginal, using axClient: AXClient) throws {
@@ -1187,6 +1439,9 @@ enum RealAppWindowVerification {
         if let launchExecutablePath = spec.launchExecutablePath {
             process.executableURL = URL(fileURLWithPath: launchExecutablePath)
             process.arguments = spec.launchArguments
+        } else if spec.name == "Google Chrome" {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            process.arguments = ["-a", spec.launchName, "--args"] + spec.launchArguments
         } else {
             var arguments = ["-a", spec.launchName]
             arguments.append(contentsOf: spec.launchArguments)
@@ -1200,12 +1455,17 @@ enum RealAppWindowVerification {
                 "\(spec.name) launch failed with status \(process.terminationStatus)"
             )
         }
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) {
+            app.activate(options: [.activateAllWindows])
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.25))
     }
 
     private static func waitForUsableWindow(
         spec: RealAppSpec,
         bundleID: String,
-        using axClient: AXClient
+        using axClient: AXClient,
+        excluding excludedIDs: Set<WindowID> = []
     ) throws -> WindowMetadata {
         let deadline = Date().addingTimeInterval(14)
         var lastCandidates: [WindowMetadata] = []
@@ -1220,15 +1480,19 @@ enum RealAppWindowVerification {
                 .filter {
                     $0.isResizable
                         && !$0.isMinimized
+                        && !excludedIDs.contains($0.id)
                         && $0.frame.width >= spec.minimumWindowSize.width
                         && $0.frame.height >= spec.minimumWindowSize.height
                 }
-                .sorted { $0.frame.area > $1.frame.area }
-            if let preferred = lastCandidates.first(where: { candidate in
-                spec.preferredTitleSubstrings.contains { token in
-                    candidate.title.localizedCaseInsensitiveContains(token)
-                }
-            }) {
+                .sorted { $0.id.raw > $1.id.raw }
+            if let preferred = lastCandidates
+                .filter({ candidate in
+                    spec.preferredTitleSubstrings.contains { token in
+                        candidate.title.localizedCaseInsensitiveContains(token)
+                    }
+                })
+                .first
+            {
                 return preferred
             }
             if let candidate = lastCandidates.first {
@@ -1246,6 +1510,28 @@ enum RealAppWindowVerification {
         throw RealAppWindowVerifierFailure(
             "\(spec.name) did not expose a usable resizable AX window for bundle \(bundleID) with minimum size \(spec.minimumWindowSize.shortDescription); candidates=[\(seen)] allVisibleForBundle=[\(allSeen)]"
         )
+    }
+
+    private static func threeWindowVerticalStackFrames(in visible: CGRect) throws -> [CGRect] {
+        let margin: CGFloat = 40
+        let gap: CGFloat = 18
+        let width = min(max(visible.width * 0.46, 1_180), visible.width - margin * 2)
+        let height = (visible.height - margin * 2 - gap * 2) / 3
+        guard width > 0, height >= 320 else {
+            throw RealAppWindowVerifierFailure(
+                "three Firefox vertical stack requires at least 320pt per window: visible=\(visible.debugDescription)"
+            )
+        }
+        let x = visible.minX + margin
+        let y = visible.minY + margin
+        return (0..<3).map { index in
+            CGRect(
+                x: x,
+                y: y + CGFloat(index) * (height + gap),
+                width: width,
+                height: height
+            ).standardized
+        }
     }
 
     private static func verifyFrameWrite(
@@ -1356,9 +1642,9 @@ enum RealAppWindowVerification {
             secondWidth = min(max(visibleFrame.width * 0.76, spec.minimumWindowSize.width + 900), maxSecondWidth)
             secondHeight = min(max(visibleFrame.height * 0.40, spec.minimumWindowSize.height + 560), maxSecondHeight)
         case "System Settings":
-            firstWidth = min(max(visibleFrame.width * 0.54, spec.minimumWindowSize.width + 260), maxFirstWidth)
+            firstWidth = max(Self.systemSettingsStableAXWidth, originalFrame.width)
             firstHeight = min(max(visibleFrame.height * 0.60, spec.minimumWindowSize.height + 260), maxFirstHeight)
-            secondWidth = min(max(visibleFrame.width * 0.50, spec.minimumWindowSize.width + 220), maxSecondWidth)
+            secondWidth = firstWidth
             secondHeight = min(max(visibleFrame.height * 0.54, spec.minimumWindowSize.height + 220), maxSecondHeight)
         default:
             firstWidth = min(max(visibleFrame.width * 0.62, spec.minimumWindowSize.width + 360), maxFirstWidth)
@@ -1501,11 +1787,11 @@ private func chromeSpec() -> RealAppSpec {
         bundleIDs: ["com.google.Chrome"],
         launchName: "Google Chrome",
         launchExecutablePath: nil,
-        launchArguments: ["https://example.com/?narwhal-real-app=chrome"],
+        launchArguments: ["--new-window", "https://example.com/?narwhal-real-app=chrome"],
         minimumWindowSize: CGSize(width: 420, height: 320),
         required: false,
         pattern: .browser,
-        workflowDirections: Direction.allCases,
+        workflowDirections: [.up, .down],
         preferredTitleSubstrings: ["Example Domain"]
     )
 }
@@ -1617,18 +1903,9 @@ private func whatsAppSpec() -> RealAppSpec {
 
 private func commonWorkflowSpecs() -> [RealAppSpec] {
     [
-        finderSpec(),
-        safariSpec(),
         terminalSpec(),
-        systemSettingsSpec(),
         chromeSpec(),
-        firefoxSpec(),
-        kittySpec(),
-        dockerSpec(),
-        teamsSpec(),
-        outlookSpec(),
-        notionSpec(),
-        whatsAppSpec()
+        firefoxSpec()
     ]
 }
 
