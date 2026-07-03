@@ -2206,16 +2206,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func processExternalGeometryEvent(_ event: AXEvent, snapshot: FocusedWindowSnapshot?) async {
-        guard externalGeometryEventMatchesLiveFrame(event) else {
-            reporter.info("Ignored stale external geometry event after live frame changed")
-            if let snapshot {
-                await updateFocusBorderFromWorld(windowID: snapshot.id)
-            }
-            await updateTiledBordersFromWorld()
-            return
+        let selectedEvent = externalGeometryEventSelection(
+            for: event,
+            liveSnapshot: axClient.windowSnapshot(),
+            tolerance: Self.externalGeometryEventTolerance
+        )
+        if selectedEvent.usedLiveFrame {
+            reporter.info("External geometry event converged to settled live frame")
         }
 
-        switch await worldActor.planExternalGeometry(event) {
+        switch await worldActor.planExternalGeometry(selectedEvent.event) {
         case .success(let result?):
             let completed = await applyPlannedLayout(
                 result,
@@ -2230,7 +2230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await updateFocusBorderFromWorld(windowID: snapshot.id)
             }
             if !completed {
-                await worldActor.recordExternalGeometry(event)
+                await worldActor.recordExternalGeometry(selectedEvent.event)
                 await updateTiledBordersFromWorld()
             }
         case .success(nil):
@@ -2240,56 +2240,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await updateTiledBordersFromWorld()
         case .failure(let error):
             reporter.error("External geometry rejected by core: \(error.message)")
-            await worldActor.recordExternalGeometry(event)
+            await worldActor.recordExternalGeometry(selectedEvent.event)
             if let snapshot {
                 await updateFocusBorderFromWorld(windowID: snapshot.id)
             }
             await updateTiledBordersFromWorld()
         }
-    }
-
-    @MainActor
-    private func externalGeometryEventMatchesLiveFrame(_ event: AXEvent) -> Bool {
-        let windowID: WindowID
-        switch event {
-        case .windowMoved(let id, _), .windowResized(let id, _):
-            windowID = id
-        case .windowOpened, .windowClosed, .windowFocused:
-            return true
-        }
-
-        let snapshot = axClient.windowSnapshot()
-        guard case .complete = snapshot.quality,
-              let live = snapshot.windows.first(where: { $0.id == windowID })
-        else { return true }
-
-        switch event {
-        case .windowMoved(_, let frame):
-            return framesApproximatelyEqual(
-                live.frame,
-                frame,
-                tolerance: Self.externalGeometryEventTolerance
-            )
-        case .windowResized(_, let size):
-            return sizesApproximatelyEqual(
-                live.frame.size,
-                size,
-                tolerance: Self.externalGeometryEventTolerance
-            )
-        case .windowOpened, .windowClosed, .windowFocused:
-            return true
-        }
-    }
-
-    private func framesApproximatelyEqual(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {
-        abs(lhs.origin.x - rhs.origin.x) <= tolerance
-            && abs(lhs.origin.y - rhs.origin.y) <= tolerance
-            && sizesApproximatelyEqual(lhs.size, rhs.size, tolerance: tolerance)
-    }
-
-    private func sizesApproximatelyEqual(_ lhs: CGSize, _ rhs: CGSize, tolerance: CGFloat) -> Bool {
-        abs(lhs.width - rhs.width) <= tolerance
-            && abs(lhs.height - rhs.height) <= tolerance
     }
 
     @MainActor
