@@ -24,14 +24,6 @@ public func diff(old: Layout, new: Layout) -> LayoutDelta {
     )
 }
 
-public func frameWriteOrder(for layout: Layout, focused focusedWindowID: WindowID?) -> [WindowID] {
-    let ordered = layout.tiled.keys.sorted { $0.raw < $1.raw }
-    guard let focusedWindowID, ordered.contains(focusedWindowID) else {
-        return ordered
-    }
-    return ordered.filter { $0 != focusedWindowID } + [focusedWindowID]
-}
-
 public func flattenedLayout(of world: World) -> Result<Layout, UnsatisfiableLayout> {
     let workspaceKeys = activeWorkspaceKeys(in: world)
     guard !workspaceKeys.isEmpty else {

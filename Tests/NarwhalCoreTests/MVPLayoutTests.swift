@@ -3802,23 +3802,6 @@ struct MVPLayoutTests {
         #expect(apply(.swapInTree(a, .right), to: world) == .failure(.windowNotFound(stale)))
     }
 
-    @Test("Frame writes apply focused window last to avoid AX rematching during swaps")
-    func frameWriteOrderMovesFocusedWindowLast() {
-        let focused = WindowID(raw: 1)
-        let other = WindowID(raw: 2)
-        let layout = Layout(
-            tiled: [
-                focused: CGRect(x: 0, y: 0, width: 500, height: 800),
-                other: CGRect(x: 500, y: 0, width: 500, height: 800)
-            ],
-            floatingZOrder: [],
-            hidden: []
-        )
-
-        #expect(frameWriteOrder(for: layout, focused: focused) == [other, focused])
-        #expect(frameWriteOrder(for: layout, focused: nil) == [focused, other])
-    }
-
     @Test("Reset layout clears tree memory without dropping live windows")
     func resetLayoutClearsTreeMemoryOnly() throws {
         let display = DisplayID(raw: 1)

@@ -1,6 +1,7 @@
 #if NARWHAL_ENABLE_VERIFIERS
 @testable import NarwhalAppRuntime
 import CoreGraphics
+import NarwhalAppSupport
 import NarwhalCore
 
 enum ObservationReplayVerification {
@@ -122,22 +123,48 @@ enum ObservationReplayVerification {
         ] else {
             return (false, "observation replay focus cycle did not include visible unmapped untiled windows")
         }
-        guard frameWriteOrder(
-            for: Layout(
-                tiled: [
-                    spaceThreeLeft: CGRect(x: 0, y: 30, width: 1920, height: 2030),
-                    spaceThreeRight: CGRect(x: 1920, y: 30, width: 1920, height: 2030)
-                ],
-                floatingZOrder: [],
-                hidden: []
+        let replayLayout = Layout(
+            tiled: [
+                spaceThreeLeft: CGRect(x: 0, y: 30, width: 1920, height: 2030),
+                spaceThreeRight: CGRect(x: 1920, y: 30, width: 1920, height: 2030)
+            ],
+            floatingZOrder: [],
+            hidden: []
+        )
+        guard let leftMetadata = next.windows[spaceThreeLeft],
+              let rightMetadata = next.windows[spaceThreeRight],
+              let leftFrame = replayLayout.tiled[spaceThreeLeft],
+              let rightFrame = replayLayout.tiled[spaceThreeRight] else {
+            return (false, "observation replay missing tiled window metadata for production write-order check")
+        }
+        let replayPlan = CommandPlanResult(
+            focusedWindowID: spaceThreeLeft,
+            desiredLayout: DesiredLayout(
+                generation: LayoutGeneration(raw: 1),
+                layout: replayLayout,
+                delta: LayoutDelta(moves: replayLayout.tiled, raises: [], hides: [], shows: [])
             ),
-            focused: spaceThreeLeft
-        ) == [spaceThreeRight, spaceThreeLeft] else {
-            return (false, "layout write order no longer keeps the focused window last")
+            windows: next.windows,
+            plannedWorld: next,
+            undoWorld: nil
+        )
+        guard layoutFrameWriteIntents(for: replayPlan) == [
+            .write(
+                windowID: spaceThreeRight,
+                metadata: rightMetadata,
+                targetFrame: rightFrame
+            ),
+            .write(
+                windowID: spaceThreeLeft,
+                metadata: leftMetadata,
+                targetFrame: leftFrame
+            )
+        ] else {
+            return (false, "production layout write order no longer keeps an existing focused window last")
         }
         return (
             true,
-            "observation replay verified: partial topology preserved inactive memory, visible unmapped windows cycled, focused writes remain last"
+            "observation replay verified: partial topology preserved inactive memory, visible unmapped windows cycled, production focused writes remain last"
         )
     }
 
