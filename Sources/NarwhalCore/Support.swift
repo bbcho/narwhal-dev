@@ -60,12 +60,18 @@ public struct BorderConfig: Equatable, Codable, Sendable {
 }
 
 public struct HUDConfig: Equatable, Codable, Sendable {
+    public static let maximumDurationMillis = 60_000
+
     public let enabled: Bool
     public let durationMillis: Int
 
     public init(enabled: Bool, durationMillis: Int) {
         self.enabled = enabled
         self.durationMillis = durationMillis
+    }
+
+    public static func clampedDurationMillis(_ durationMillis: Int) -> Int {
+        min(max(0, durationMillis), maximumDurationMillis)
     }
 
     public static let `default` = HUDConfig(enabled: true, durationMillis: 700)

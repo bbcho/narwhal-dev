@@ -269,7 +269,12 @@ private struct ConfigParser {
         let table = try table(value, key: "hud")
         return HUDConfig(
             enabled: try bool(required("enabled", in: table, path: "hud"), key: "hud.enabled"),
-            durationMillis: try nonNegativeInt(required("duration_millis", in: table, path: "hud"), key: "hud.duration_millis")
+            durationMillis: try boundedInt(
+                required("duration_millis", in: table, path: "hud"),
+                key: "hud.duration_millis",
+                min: 0,
+                max: HUDConfig.maximumDurationMillis
+            )
         )
     }
 
@@ -414,12 +419,22 @@ private struct ConfigParser {
     }
 
     private func nonNegativeInt(_ value: LuaValue, key: String) throws -> Int {
-        let number = try nonNegativeNumber(value, key: key)
+        try boundedInt(value, key: key, min: 0, max: nil)
+    }
+
+    private func boundedInt(_ value: LuaValue, key: String, min: Int, max: Int?) throws -> Int {
+        let number = try finiteNumber(value, key: key)
         guard number.rounded() == number else {
             throw ConfigError.invalidValue(key: key, reason: "number must be an integer")
         }
         guard let integer = Int(exactly: number) else {
             throw ConfigError.invalidValue(key: key, reason: "number must fit in Int")
+        }
+        guard integer >= min else {
+            throw ConfigError.invalidValue(key: key, reason: "number must be >= \(min)")
+        }
+        if let max, integer > max {
+            throw ConfigError.invalidValue(key: key, reason: "number must be <= \(max)")
         }
         return integer
     }

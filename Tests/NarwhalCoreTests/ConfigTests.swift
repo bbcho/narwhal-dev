@@ -260,6 +260,42 @@ struct ConfigTests {
         ))
     }
 
+    @Test("Lua config parser accepts maximum HUD duration")
+    func luaConfigParserAcceptsMaximumHUDDuration() throws {
+        var root = defaultLuaRoot()
+        root["hud"] = .table([
+            "enabled": .bool(true),
+            "duration_millis": .number(Double(HUDConfig.maximumDurationMillis))
+        ])
+
+        let config = try parseConfig(LuaConfigData(root: root)).get()
+
+        #expect(config.hud.durationMillis == HUDConfig.maximumDurationMillis)
+    }
+
+    @Test("Lua config parser rejects HUD duration above maximum")
+    func luaConfigParserRejectsHUDDurationAboveMaximum() {
+        var root = defaultLuaRoot()
+        root["hud"] = .table([
+            "enabled": .bool(true),
+            "duration_millis": .number(Double(HUDConfig.maximumDurationMillis + 1))
+        ])
+
+        #expect(parseConfig(LuaConfigData(root: root)) == .failure(
+            .invalidValue(
+                key: "hud.duration_millis",
+                reason: "number must be <= \(HUDConfig.maximumDurationMillis)"
+            )
+        ))
+    }
+
+    @Test("HUD duration clamps direct runtime values")
+    func hudDurationClampsDirectRuntimeValues() {
+        #expect(HUDConfig.clampedDurationMillis(-1) == 0)
+        #expect(HUDConfig.clampedDurationMillis(700) == 700)
+        #expect(HUDConfig.clampedDurationMillis(Int.max) == HUDConfig.maximumDurationMillis)
+    }
+
     @Test("Lua config parser rejects duplicate hotkeys")
     func luaConfigParserRejectsDuplicateHotkeys() {
         var root = defaultLuaRoot()

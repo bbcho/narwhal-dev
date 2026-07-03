@@ -257,7 +257,8 @@ final class Overlay {
         hudWindow = window
 
         hudHideTask?.cancel()
-        let duration = UInt64(max(0, hudConfig.durationMillis)) * 1_000_000
+        let durationMillis = HUDConfig.clampedDurationMillis(hudConfig.durationMillis)
+        let duration = UInt64(durationMillis) * 1_000_000
         hudHideTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: duration)
             guard !Task.isCancelled else { return }
