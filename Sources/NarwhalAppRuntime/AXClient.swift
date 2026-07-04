@@ -315,6 +315,33 @@ struct AXClient {
         }
     }
 
+    func closeWindow(_ window: WindowMetadata) -> Result<Void, AXClientError> {
+        switch windowElement(matching: window) {
+        case .success(let element):
+            var closeButtonValue: CFTypeRef?
+            let copyError = AXUIElementCopyAttributeValue(
+                element,
+                kAXCloseButtonAttribute as CFString,
+                &closeButtonValue
+            )
+            guard copyError == .success,
+                  let closeButtonValue,
+                  CFGetTypeID(closeButtonValue) == AXUIElementGetTypeID()
+            else {
+                return .failure(.copyAttributeFailed(kAXCloseButtonAttribute, copyError))
+            }
+
+            let closeButton = Self.bounded(closeButtonValue as! AXUIElement)
+            let error = AXUIElementPerformAction(closeButton, kAXPressAction as CFString)
+            guard error == .success else {
+                return .failure(.performActionFailed(kAXPressAction, error))
+            }
+            return .success(())
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
     func focusWindow(_ window: WindowMetadata) -> Result<Void, AXClientError> {
         guard activateApplication(processID: window.pid) else {
             return .failure(.applicationActivateFailed(window.pid))

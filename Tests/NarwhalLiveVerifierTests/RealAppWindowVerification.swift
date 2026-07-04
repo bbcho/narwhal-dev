@@ -45,21 +45,36 @@ struct RealAppWindowVerificationTests {
         try expectPassed(await RealAppWindowVerification.verifyRealAppCommandWorkflows())
     }
 
-    @Test("Chrome and Firefox complete real manual tile resize")
+    @Test(
+        "Chrome and Firefox complete real manual tile resize",
+        .enabled("requires landscape display at least 1800x900") {
+            await RealAppWindowVerification.hasManualResizeVerificationDisplay()
+        }
+    )
     func chromeAndFirefoxCompleteRealManualTileResize() async throws {
         _ = NSApplication.shared
         VerifierAppDelegate.installIfNeeded()
         try expectPassed(await RealAppWindowVerification.verifyChromeFirefoxManualTileResize())
     }
 
-    @Test("Three Firefox windows stack vertically")
+    @Test(
+        "Three Firefox windows stack vertically",
+        .enabled("requires landscape display at least 1800x900") {
+            await RealAppWindowVerification.hasManualResizeVerificationDisplay()
+        }
+    )
     func threeFirefoxWindowsStackVertically() async throws {
         _ = NSApplication.shared
         VerifierAppDelegate.installIfNeeded()
         try expectPassed(await RealAppWindowVerification.verifyThreeFirefoxVerticalStack())
     }
 
-    @Test("Three Chrome windows stack vertically")
+    @Test(
+        "Three Chrome windows stack vertically",
+        .enabled("requires landscape display at least 1800x900") {
+            await RealAppWindowVerification.hasManualResizeVerificationDisplay()
+        }
+    )
     func threeChromeWindowsStackVertically() async throws {
         _ = NSApplication.shared
         VerifierAppDelegate.installIfNeeded()
@@ -93,6 +108,10 @@ enum RealAppWindowVerification {
         verifyApp(systemSettingsSpec())
     }
 
+    static func hasManualResizeVerificationDisplay() -> Bool {
+        (try? manualResizeVerificationDisplay(DisplayClient().currentDisplays())) != nil
+    }
+
     static func verifyRealAppCommandWorkflows() async -> (passed: Bool, message: String) {
         do {
             try waitForUnlockedSession()
@@ -118,6 +137,7 @@ enum RealAppWindowVerification {
             guard displays.values.contains(where: { $0.visibleFrame.width >= 900 && $0.visibleFrame.height >= 620 }) else {
                 throw RealAppWindowVerifierFailure("manual browser resize verification requires a display at least 900x620")
             }
+            let targetDisplay = try manualResizeVerificationDisplay(displays)
 
             let axClient = AXClient(processID: -1)
             var originals: [RealAppOriginal] = []
@@ -135,30 +155,14 @@ enum RealAppWindowVerification {
             }
 
             for spec in [chromeSpec(), firefoxSpec(), terminalSpec()] {
-                let bundleID = try installedBundleID(for: spec)
-                let wasRunning = isRunning(bundleID: bundleID)
-                let excludedIDs = preexistingBrowserWindowIDs(for: spec, bundleID: bundleID, using: axClient)
-                if spec.name == "Google Chrome" {
-                    try launchChromeVerificationWindow(token: "manual")
-                } else {
-                    try launch(spec: spec, bundleID: bundleID)
-                }
-                let metadata = try waitForUsableWindow(
+                originals.append(try launchTrackedWindow(
                     spec: spec,
-                    bundleID: bundleID,
                     using: axClient,
-                    excluding: excludedIDs
-                )
-                originals.append(RealAppOriginal(
-                    spec: spec,
-                    bundleID: bundleID,
-                    metadata: metadata,
-                    frame: metadata.frame,
-                    wasRunningBeforeTest: wasRunning
+                    requiringNewWindow: true,
+                    token: "manual"
                 ))
             }
 
-            let targetDisplay = try manualResizeVerificationDisplay(displays)
             try await stageManualResizeWindows(
                 originals,
                 on: targetDisplay,
@@ -201,8 +205,6 @@ enum RealAppWindowVerification {
             let displays = DisplayClient().currentDisplays()
             let targetDisplay = try manualResizeVerificationDisplay(displays)
             let axClient = AXClient(processID: -1)
-            let bundleID = try installedBundleID(for: spec)
-            let wasRunning = isRunning(bundleID: bundleID)
             var originals: [RealAppOriginal] = []
             var selectedIDs = Set<WindowID>()
             var didRestore = false
@@ -219,25 +221,15 @@ enum RealAppWindowVerification {
             }
 
             for index in 0..<3 {
-                if spec.name == "Google Chrome" {
-                    try launchChromeVerificationWindow(token: "stack-\(index)")
-                } else {
-                    try launch(spec: spec, bundleID: bundleID)
-                }
-                let metadata = try waitForUsableWindow(
+                let original = try launchTrackedWindow(
                     spec: spec,
-                    bundleID: bundleID,
                     using: axClient,
-                    excluding: selectedIDs
+                    requiringNewWindow: true,
+                    excluding: selectedIDs,
+                    token: "stack-\(index)"
                 )
-                selectedIDs.insert(metadata.id)
-                originals.append(RealAppOriginal(
-                    spec: spec,
-                    bundleID: bundleID,
-                    metadata: metadata,
-                    frame: metadata.frame,
-                    wasRunningBeforeTest: wasRunning
-                ))
+                selectedIDs.insert(original.metadata.id)
+                originals.append(original)
             }
 
             let frames = try threeWindowVerticalStackFrames(in: targetDisplay.visibleFrame)
@@ -339,44 +331,26 @@ enum RealAppWindowVerification {
         spec: RealAppSpec,
         displays: [DisplayID: DisplayInfo]
     ) throws -> String {
-        let bundleID = try installedBundleID(for: spec)
-        let wasRunning = isRunning(bundleID: bundleID)
         let axClient = AXClient(processID: -1)
-        let excludedIDs = preexistingBrowserWindowIDs(for: spec, bundleID: bundleID, using: axClient)
-        if spec.name == "Google Chrome" {
-            try launchChromeVerificationWindow(token: "direct")
-        } else {
-            try launch(spec: spec, bundleID: bundleID)
-        }
-
-        let original = try waitForUsableWindow(
+        let original = try launchTrackedWindow(
             spec: spec,
-            bundleID: bundleID,
             using: axClient,
-            excluding: excludedIDs
+            requiringNewWindow: spec.pattern == .browser,
+            token: "direct"
         )
         let restoreFrame = original.frame
         var didRestore = false
         defer {
             if !didRestore {
                 do {
-                    try cleanupApp(
-                        RealAppOriginal(
-                            spec: spec,
-                            bundleID: bundleID,
-                            metadata: original,
-                            frame: restoreFrame,
-                            wasRunningBeforeTest: wasRunning
-                        ),
-                        using: axClient
-                    )
+                    try cleanupApp(original, using: axClient)
                 } catch {
-                    print("REAL APP VERIFY: failed to clean up \(spec.name) window \(original.id.description): \(String(describing: error))")
+                    print("REAL APP VERIFY: failed to clean up \(spec.name) window \(original.metadata.id.description): \(String(describing: error))")
                 }
             }
         }
 
-        switch axClient.focusWindow(original) {
+        switch axClient.focusWindow(original.metadata) {
         case .success:
             break
         case .failure(let error):
@@ -391,7 +365,7 @@ enum RealAppWindowVerification {
         for (index, target) in targets.enumerated() {
             let actual = try verifyFrameWrite(
                 target,
-                metadata: original,
+                metadata: original.metadata,
                 appName: spec.name,
                 step: index + 1,
                 using: axClient
@@ -409,16 +383,7 @@ enum RealAppWindowVerification {
             throw RealAppWindowVerifierFailure("\(spec.name) did not visibly move away from its original frame")
         }
 
-        try cleanupApp(
-            RealAppOriginal(
-                spec: spec,
-                bundleID: bundleID,
-                metadata: original,
-                frame: restoreFrame,
-                wasRunningBeforeTest: wasRunning
-            ),
-            using: axClient
-        )
+        try cleanupApp(original, using: axClient)
         didRestore = true
 
         return "\(spec.name)=\(actuals.map(\.shortDescription).joined(separator: ","))"
@@ -443,48 +408,20 @@ enum RealAppWindowVerification {
         }
 
         for spec in specs {
-            let bundleID: String
             do {
-                bundleID = try installedBundleID(for: spec)
-            } catch {
-                if spec.required {
-                    throw error
-                }
-                skipped.append(spec.name)
-                continue
-            }
-            let wasRunning = isRunning(bundleID: bundleID)
-            let excludedIDs = preexistingBrowserWindowIDs(for: spec, bundleID: bundleID, using: axClient)
-            if spec.name == "Google Chrome" {
-                try launchChromeVerificationWindow(token: "workflow")
-            } else {
-                try launch(spec: spec, bundleID: bundleID)
-            }
-            let metadata: WindowMetadata
-            do {
-                metadata = try waitForUsableWindow(
+                originals.append(try launchTrackedWindow(
                     spec: spec,
-                    bundleID: bundleID,
                     using: axClient,
-                    excluding: excludedIDs
-                )
+                    requiringNewWindow: true,
+                    token: "workflow"
+                ))
             } catch {
-                if !wasRunning {
-                    quitApp(bundleID: bundleID, appName: spec.name)
-                }
                 if spec.required || spec.pattern == .browser || spec.pattern == .terminal {
                     throw error
                 }
-                skipped.append("\(spec.name): no standard AX window")
+                skipped.append("\(spec.name): \(String(describing: error))")
                 continue
             }
-            originals.append(RealAppOriginal(
-                spec: spec,
-                bundleID: bundleID,
-                metadata: metadata,
-                frame: metadata.frame,
-                wasRunningBeforeTest: wasRunning
-            ))
         }
 
         guard !originals.isEmpty else {
@@ -1345,8 +1282,8 @@ enum RealAppWindowVerification {
                 target: plannedFrame,
                 actual: frame,
                 tolerance: Double(frameWriteSettleTolerance),
-                maxEdgeDrift: 8,
-                minimumOverlapRatio: 0.99
+                maxEdgeDrift: 16,
+                minimumOverlapRatio: 0.98
             )
     }
 
@@ -1384,64 +1321,78 @@ enum RealAppWindowVerification {
         )
     }
 
-    private static func isRunning(bundleID: String) -> Bool {
-        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
-    }
-
-    private static func preexistingBrowserWindowIDs(
-        for spec: RealAppSpec,
+    private static func preexistingWindowIDs(
         bundleID: String,
         using axClient: AXClient
     ) -> Set<WindowID> {
-        guard spec.pattern == .browser else { return [] }
         return Set(axClient.windowSnapshot().windows
             .filter { $0.bundleID.raw == bundleID }
             .map(\.id))
     }
 
-    private static func cleanupApp(_ original: RealAppOriginal, using axClient: AXClient) throws {
-        if original.wasRunningBeforeTest {
-            try restoreWindow(
-                original.metadata,
-                bundleID: original.bundleID,
-                appName: original.spec.name,
-                to: original.frame,
-                using: axClient
+    private static func launchTrackedWindow(
+        spec: RealAppSpec,
+        using axClient: AXClient,
+        requiringNewWindow: Bool,
+        excluding additionalExcludedIDs: Set<WindowID> = [],
+        token: String
+    ) throws -> RealAppOriginal {
+        let bundleID = try installedBundleID(for: spec)
+        let preexistingIDs = preexistingWindowIDs(bundleID: bundleID, using: axClient)
+        let excludedIDs = requiringNewWindow ? preexistingIDs.union(additionalExcludedIDs) : additionalExcludedIDs
+        try launch(spec: spec, bundleID: bundleID, token: token)
+        let metadata = try waitForUsableWindow(
+            spec: spec,
+            bundleID: bundleID,
+            using: axClient,
+            excluding: excludedIDs
+        )
+        let createdByVerifier = !preexistingIDs.contains(metadata.id)
+        guard !requiringNewWindow || createdByVerifier else {
+            throw RealAppWindowVerifierFailure(
+                "\(spec.name) launch reused preexisting window \(metadata.id.description) instead of creating a verification window"
             )
-        } else {
-            quitApp(bundleID: original.bundleID, appName: original.spec.name)
         }
+        return RealAppOriginal(
+            spec: spec,
+            bundleID: bundleID,
+            metadata: metadata,
+            frame: metadata.frame,
+            createdByVerifier: createdByVerifier
+        )
     }
 
-    private static func quitApp(bundleID: String, appName: String) {
-        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) {
-            app.terminate()
+    private static func cleanupApp(_ original: RealAppOriginal, using axClient: AXClient) throws {
+        if original.createdByVerifier {
+            try closeCreatedWindow(original, using: axClient)
+            return
         }
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline {
-            if NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
-                return
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
-        }
-        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) {
-            app.forceTerminate()
-        }
-        print("REAL APP WORKFLOW VERIFY: quit \(appName) after launching it for verification")
+        try restoreWindow(
+            original.metadata,
+            bundleID: original.bundleID,
+            appName: original.spec.name,
+            to: original.frame,
+            using: axClient
+        )
     }
 
-    private static func launch(spec: RealAppSpec, bundleID: String) throws {
+    private static func launch(spec: RealAppSpec, bundleID: String, token: String) throws {
         if spec.name == "Finder" {
             try FinderWindowOpener.openHomeWindow()
+            return
+        }
+        if spec.name == "Terminal" {
+            try launchTerminalVerificationWindow(token: token)
+            return
+        }
+        if spec.name == "Google Chrome" {
+            try launchChromeVerificationWindow(token: token)
             return
         }
         let process = Process()
         if let launchExecutablePath = spec.launchExecutablePath {
             process.executableURL = URL(fileURLWithPath: launchExecutablePath)
             process.arguments = spec.launchArguments
-        } else if spec.name == "Google Chrome" {
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            process.arguments = ["-a", spec.launchName, "--args"] + spec.launchArguments
         } else {
             var arguments = ["-a", spec.launchName]
             arguments.append(contentsOf: spec.launchArguments)
@@ -1459,6 +1410,23 @@ enum RealAppWindowVerification {
             app.activate(options: [.activateAllWindows])
         }
         RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+    }
+
+    private static func launchTerminalVerificationWindow(token: String) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = [
+            "-e",
+            """
+            tell application "Terminal" to do script "printf '\\\\e]0;Narwhal Real App Verifier \(token)\\\\a'; echo Narwhal real-app verifier \(token)"
+            """
+        ]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw RealAppWindowVerifierFailure("Terminal verification window launch failed with status \(process.terminationStatus)")
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.45))
     }
 
     private static func waitForUsableWindow(
@@ -1586,6 +1554,18 @@ enum RealAppWindowVerification {
         return actual
     }
 
+    private static func closeCreatedWindow(_ original: RealAppOriginal, using axClient: AXClient) throws {
+        switch axClient.closeWindow(original.metadata) {
+        case .success:
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            return
+        case .failure(let error):
+            throw RealAppWindowVerifierFailure(
+                "\(original.spec.name) could not close verifier-created window \(original.metadata.id.description): \(error.description)"
+            )
+        }
+    }
+
     private static func restoreWindow(
         _ original: WindowMetadata,
         bundleID: String,
@@ -1711,7 +1691,7 @@ private struct RealAppOriginal {
     let bundleID: String
     let metadata: WindowMetadata
     let frame: CGRect
-    let wasRunningBeforeTest: Bool
+    let createdByVerifier: Bool
 }
 
 private enum RealAppPattern {

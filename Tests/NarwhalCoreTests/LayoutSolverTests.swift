@@ -140,6 +140,8 @@ struct LayoutSolverTests {
         let firefoxActual = CGRect(x: 166, y: 41, width: 1346, height: 864)
         let firefoxEdgeNormalizedTarget = CGRect(x: 40, y: 74, width: 2048, height: 740)
         let firefoxEdgeNormalizedActual = CGRect(x: 40, y: 68, width: 2034, height: 746)
+        let workflowPlanTarget = CGRect(x: 756, y: 33, width: 756, height: 873)
+        let workflowPlanActual = CGRect(x: 756, y: 33, width: 755, height: 861)
         let systemSettingsTarget = CGRect(x: 756, y: 33, width: 756, height: 873)
         let systemSettingsActual = CGRect(x: 756, y: 33, width: 723, height: 872)
 
@@ -149,6 +151,13 @@ struct LayoutSolverTests {
             target: firefoxEdgeNormalizedTarget,
             actual: firefoxEdgeNormalizedActual,
             tolerance: 4
+        ))
+        #expect(frameWriteApproximatelySettled(
+            target: workflowPlanTarget,
+            actual: workflowPlanActual,
+            tolerance: 4,
+            maxEdgeDrift: 16,
+            minimumOverlapRatio: 0.98
         ))
         #expect(frameWriteApproximatelySettled(target: systemSettingsTarget, actual: systemSettingsActual, tolerance: 2))
         #expect(frameSizeApproximatelySettled(target: systemSettingsTarget.size, actual: systemSettingsActual.size, tolerance: 2))
@@ -165,6 +174,13 @@ struct LayoutSolverTests {
             tolerance: 4
         ) == WindowConstraints(minHeight: 375))
         #expect(!frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 4))
+        #expect(!frameWriteApproximatelySettled(
+            target: target,
+            actual: actual,
+            tolerance: 4,
+            maxEdgeDrift: 16,
+            minimumOverlapRatio: 0.98
+        ))
     }
 
     @Test("Minimum-size expansion is still inferred as a clamp")

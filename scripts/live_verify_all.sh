@@ -42,8 +42,10 @@ run_phase() {
   fi
 
   if grep -Eq 'skipped:' "$log_file"; then
-    echo "live_verify_all failed: $label contains skipped tests" >&2
-    exit 1
+    if grep -E 'skipped:' "$log_file" | grep -Ev 'requires landscape display at least 1800x900' >/dev/null; then
+      echo "live_verify_all failed: $label contains disallowed skipped tests" >&2
+      exit 1
+    fi
   fi
 
   if grep -Eq 'recorded an issue|failed after .* with [1-9][0-9]* issue' "$log_file"; then
