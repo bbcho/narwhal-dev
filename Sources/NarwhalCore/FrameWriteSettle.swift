@@ -14,9 +14,6 @@ public func frameWriteApproximatelySettled(
         return true
     }
     guard target.isUsableFrame, actual.isUsableFrame else { return false }
-    guard inferObservedConstraints(target: target, actual: actual, tolerance: Double(tolerance)) == nil else {
-        return false
-    }
 
     let maxDrift = CGFloat(max(0, maxEdgeDrift))
     let edgesAreClose = abs(target.minX - actual.minX) <= maxDrift
@@ -24,6 +21,9 @@ public func frameWriteApproximatelySettled(
         && abs(target.maxX - actual.maxX) <= maxDrift
         && abs(target.maxY - actual.maxY) <= maxDrift
     guard edgesAreClose else { return false }
+    guard expandedDimensionsAreEdgeNormalized(target: target, actual: actual, tolerance: tolerance) else {
+        return false
+    }
 
     let intersection = target.intersection(actual)
     guard intersection.isUsableFrame else { return false }
@@ -63,6 +63,48 @@ private func framesApproximatelyMatch(_ lhs: CGRect, _ rhs: CGRect, tolerance: C
 private func sizesApproximatelyMatch(_ lhs: CGSize, _ rhs: CGSize, tolerance: CGFloat) -> Bool {
     abs(lhs.width - rhs.width) <= tolerance
         && abs(lhs.height - rhs.height) <= tolerance
+}
+
+private func expandedDimensionsAreEdgeNormalized(target: CGRect, actual: CGRect, tolerance: CGFloat) -> Bool {
+    dimensionExpansionIsEdgeNormalized(
+        targetLower: target.minX,
+        targetUpper: target.maxX,
+        targetLength: target.width,
+        actualLower: actual.minX,
+        actualUpper: actual.maxX,
+        actualLength: actual.width,
+        tolerance: tolerance
+    )
+        && dimensionExpansionIsEdgeNormalized(
+            targetLower: target.minY,
+            targetUpper: target.maxY,
+            targetLength: target.height,
+            actualLower: actual.minY,
+            actualUpper: actual.maxY,
+            actualLength: actual.height,
+            tolerance: tolerance
+        )
+}
+
+private func dimensionExpansionIsEdgeNormalized(
+    targetLower: CGFloat,
+    targetUpper: CGFloat,
+    targetLength: CGFloat,
+    actualLower: CGFloat,
+    actualUpper: CGFloat,
+    actualLength: CGFloat,
+    tolerance: CGFloat
+) -> Bool {
+    let expansion = actualLength - targetLength
+    guard expansion > tolerance else { return true }
+
+    let maximumEdgeNormalizationExpansion = max(tolerance * 2, 12)
+    guard expansion <= maximumEdgeNormalizationExpansion else { return false }
+
+    let lowerDelta = actualLower - targetLower
+    let upperDelta = actualUpper - targetUpper
+    return abs(upperDelta) <= tolerance
+        && abs(lowerDelta + expansion) <= tolerance
 }
 
 private extension CGRect {

@@ -612,19 +612,19 @@ struct AXClient {
     }
 
     private func frameWriteDidNotConverge(target: CGRect, actual: CGRect) -> AXFrameWriteOutcome {
-        if let observed = inferObservedConstraints(
-            target: target,
-            actual: actual,
-            tolerance: Double(frameWriteSettleTolerance)
-        ) {
-            return .clamped(actual: actual, observed: observed)
-        }
         if frameWriteApproximatelySettled(
             target: target,
             actual: actual,
             tolerance: Double(frameWriteSettleTolerance)
         ) {
             return .converged(actual: actual)
+        }
+        if let observed = inferObservedConstraints(
+            target: target,
+            actual: actual,
+            tolerance: Double(frameWriteSettleTolerance)
+        ) {
+            return .clamped(actual: actual, observed: observed)
         }
         return .failed(.frameDidNotConverge(target: target, actual: actual, attempts: 3))
     }

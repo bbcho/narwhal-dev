@@ -111,13 +111,12 @@ struct LayoutSolverTests {
 
     @Test("Finder-width clamp is inferred as a width minimum only")
     func inferFinderWidthClamp() {
-        let observed = inferObservedConstraints(
-            target: CGRect(x: 12, y: 45, width: 490.666_666_666_7, height: 420.5),
-            actual: CGRect(x: 12, y: 45, width: 500, height: 421),
-            tolerance: 2
-        )
+        let target = CGRect(x: 12, y: 45, width: 490.666_666_666_7, height: 420.5)
+        let actual = CGRect(x: 12, y: 45, width: 500, height: 421)
+        let observed = inferObservedConstraints(target: target, actual: actual, tolerance: 2)
 
         #expect(observed == WindowConstraints(minWidth: 500))
+        #expect(!frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 2))
     }
 
     @Test("Origin drift and invalid sizes do not become minimum constraints")
@@ -139,13 +138,33 @@ struct LayoutSolverTests {
     func browserChromeAdjustedFramesSettle() {
         let firefoxTarget = CGRect(x: 166, y: 33, width: 1346, height: 873)
         let firefoxActual = CGRect(x: 166, y: 41, width: 1346, height: 864)
+        let firefoxEdgeNormalizedTarget = CGRect(x: 40, y: 74, width: 2048, height: 740)
+        let firefoxEdgeNormalizedActual = CGRect(x: 40, y: 68, width: 2034, height: 746)
         let systemSettingsTarget = CGRect(x: 756, y: 33, width: 756, height: 873)
         let systemSettingsActual = CGRect(x: 756, y: 33, width: 723, height: 872)
 
         #expect(frameWriteApproximatelySettled(target: firefoxTarget, actual: firefoxActual, tolerance: 2))
         #expect(frameSizeApproximatelySettled(target: firefoxTarget.size, actual: firefoxActual.size, tolerance: 2))
+        #expect(frameWriteApproximatelySettled(
+            target: firefoxEdgeNormalizedTarget,
+            actual: firefoxEdgeNormalizedActual,
+            tolerance: 4
+        ))
         #expect(frameWriteApproximatelySettled(target: systemSettingsTarget, actual: systemSettingsActual, tolerance: 2))
         #expect(frameSizeApproximatelySettled(target: systemSettingsTarget.size, actual: systemSettingsActual.size, tolerance: 2))
+    }
+
+    @Test("Same-origin browser minimum expansion does not settle")
+    func sameOriginBrowserMinimumExpansionDoesNotSettle() {
+        let target = CGRect(x: 0, y: 33, width: 756, height: 357.11)
+        let actual = CGRect(x: 0, y: 33, width: 756, height: 375)
+
+        #expect(inferObservedConstraints(
+            target: target,
+            actual: actual,
+            tolerance: 4
+        ) == WindowConstraints(minHeight: 375))
+        #expect(!frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 4))
     }
 
     @Test("Minimum-size expansion is still inferred as a clamp")
