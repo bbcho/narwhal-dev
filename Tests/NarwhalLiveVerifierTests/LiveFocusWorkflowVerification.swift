@@ -1125,10 +1125,7 @@ private extension LiveFocusWorkflowVerification {
 
 private extension CGRect {
     func matches(_ other: CGRect, tolerance: CGFloat) -> Bool {
-        abs(minX - other.minX) <= tolerance
-            && abs(minY - other.minY) <= tolerance
-            && abs(width - other.width) <= tolerance
-            && abs(height - other.height) <= tolerance
+        narwhalApproximatelyEquals(other, tolerance: tolerance)
     }
 }
 

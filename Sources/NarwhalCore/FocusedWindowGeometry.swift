@@ -35,22 +35,12 @@ public func pollFocusedWindowGeometry(
     guard let previousFrame = previous.frame else {
         return FocusedWindowGeometryPoll(state: nextState, event: nil)
     }
-    guard !framesApproximatelyMatch(previousFrame, currentFrame, tolerance: tolerance) else {
+    guard !previousFrame.narwhalApproximatelyEquals(currentFrame, tolerance: tolerance) else {
         return FocusedWindowGeometryPoll(state: previous, event: nil)
     }
 
-    let event: AXEvent = originsApproximatelyMatch(previousFrame.origin, currentFrame.origin, tolerance: tolerance)
+    let event: AXEvent = previousFrame.origin.narwhalApproximatelyEquals(currentFrame.origin, tolerance: tolerance)
         ? .windowResized(currentWindowID, currentFrame.size)
         : .windowMoved(currentWindowID, currentFrame)
     return FocusedWindowGeometryPoll(state: nextState, event: event)
-}
-
-private func framesApproximatelyMatch(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {
-    originsApproximatelyMatch(lhs.origin, rhs.origin, tolerance: tolerance)
-        && abs(lhs.size.width - rhs.size.width) <= tolerance
-        && abs(lhs.size.height - rhs.size.height) <= tolerance
-}
-
-private func originsApproximatelyMatch(_ lhs: CGPoint, _ rhs: CGPoint, tolerance: CGFloat) -> Bool {
-    abs(lhs.x - rhs.x) <= tolerance && abs(lhs.y - rhs.y) <= tolerance
 }

@@ -16,13 +16,13 @@ public func focusTarget(windows: [WindowMetadata], from focused: WindowID, direc
 
 private func focusTarget(in frames: [WindowID: CGRect], from focused: WindowID, direction: Direction) -> WindowID? {
     guard let sourceFrame = frames[focused],
-          sourceFrame.isFinitePositive
+          sourceFrame.narwhalIsFinitePositive
     else { return nil }
 
     return frames
         .compactMap { windowID, frame -> FocusCandidate? in
             guard windowID != focused,
-                  frame.isFinitePositive,
+                  frame.narwhalIsFinitePositive,
                   isCandidate(frame, from: sourceFrame, direction: direction)
             else {
                 return nil
@@ -157,10 +157,4 @@ private func focusCycleSort(_ lhs: WindowMetadata, _ rhs: WindowMetadata) -> Boo
     if lhs.bundleID.raw != rhs.bundleID.raw { return lhs.bundleID.raw < rhs.bundleID.raw }
     if lhs.title != rhs.title { return lhs.title < rhs.title }
     return lhs.id.raw < rhs.id.raw
-}
-
-private extension CGRect {
-    var isFinitePositive: Bool {
-        minX.isFinite && minY.isFinite && width.isFinite && height.isFinite && width > 0 && height > 0
-    }
 }

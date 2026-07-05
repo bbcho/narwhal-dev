@@ -33,7 +33,7 @@ public func windowStackVisibility(
     }
     let targetFrame = frontToBackWindows[targetIndex].frame
     for entry in frontToBackWindows.prefix(targetIndex) where entry.id != target {
-        if entry.frame.intersection(targetFrame).area > minimumIntersectionArea {
+        if entry.frame.intersection(targetFrame).narwhalArea > minimumIntersectionArea {
             return .blockedBy(entry.id)
         }
     }
@@ -59,15 +59,5 @@ private func framesApproximatelyMatch(_ lhs: CGRect, _ rhs: CGRect, minimumToler
         minimumTolerance,
         min(lhs.width, lhs.height, rhs.width, rhs.height) * 0.04
     )
-    return abs(lhs.origin.x - rhs.origin.x) <= tolerance
-        && abs(lhs.origin.y - rhs.origin.y) <= tolerance
-        && abs(lhs.size.width - rhs.size.width) <= tolerance
-        && abs(lhs.size.height - rhs.size.height) <= tolerance
-}
-
-private extension CGRect {
-    var area: CGFloat {
-        guard !isNull && !isInfinite else { return 0 }
-        return max(0, width) * max(0, height)
-    }
+    return lhs.narwhalApproximatelyEquals(rhs, tolerance: tolerance)
 }

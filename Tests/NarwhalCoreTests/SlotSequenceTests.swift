@@ -266,24 +266,6 @@ struct SlotSequenceTests {
         }
     }
 
-    private func splitFrames(_ frame: CGRect, axis: Axis, weights: [Double]) -> [CGRect] {
-        let total = weights.reduce(0, +)
-        var offset: CGFloat = 0
-        return weights.enumerated().map { index, weight in
-            let isLast = index == weights.count - 1
-            switch axis {
-            case .horizontal:
-                let width = isLast ? frame.width - offset : frame.width * CGFloat(weight / total)
-                defer { offset += width }
-                return CGRect(x: frame.minX + offset, y: frame.minY, width: width, height: frame.height)
-            case .vertical:
-                let height = isLast ? frame.height - offset : frame.height * CGFloat(weight / total)
-                defer { offset += height }
-                return CGRect(x: frame.minX, y: frame.minY + offset, width: frame.width, height: height)
-            }
-        }
-    }
-
     private func rectsArePairwiseDisjoint(_ rects: [CGRect]) -> Bool {
         for firstIndex in rects.indices {
             for secondIndex in rects.indices where secondIndex > firstIndex {

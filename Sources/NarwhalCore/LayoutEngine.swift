@@ -70,7 +70,7 @@ public func tiledBorderTargets(of world: World) -> Result<[FocusBorderTarget], U
             layout.tiled
                 .compactMap { windowID, layoutFrame -> FocusBorderTarget? in
                     guard let window = world.windows[windowID] else { return nil }
-                    let frame = window.frame.isFinitePositive ? window.frame : layoutFrame
+                    let frame = window.frame.narwhalIsFinitePositive ? window.frame : layoutFrame
                     return FocusBorderTarget(window: window, frame: frame)
                 }
                 .sorted { $0.windowID.raw < $1.windowID.raw }
@@ -213,49 +213,5 @@ private extension World {
             pendingRules: pendingRules.filter { $0.key != windowID },
             config: config
         )
-    }
-}
-
-private func splitFrames(_ frame: CGRect, axis: Axis, weights: [Double]) -> [CGRect] {
-    let total = weights.reduce(0, +)
-    guard total > 0 else { return [] }
-
-    let lengths = splitLengths(
-        extent: axis == .horizontal ? frame.width : frame.height,
-        weights: weights,
-        totalWeight: total
-    )
-    return zip(splitOffsets(for: lengths), lengths).map { offset, length in
-        switch axis {
-        case .horizontal:
-            return CGRect(x: frame.minX + offset, y: frame.minY, width: length, height: frame.height)
-        case .vertical:
-            return CGRect(x: frame.minX, y: frame.minY + offset, width: frame.width, height: length)
-        }
-    }
-}
-
-private func splitLengths(extent: CGFloat, weights: [Double], totalWeight: Double) -> [CGFloat] {
-    guard !weights.isEmpty else { return [] }
-    let leading = weights.dropLast().map { extent * CGFloat($0 / totalWeight) }
-    return leading + [extent - leading.reduce(0, +)]
-}
-
-private func splitOffsets(for lengths: [CGFloat]) -> [CGFloat] {
-    lengths.indices.map { lengths.prefix($0).reduce(0, +) }
-}
-
-private func applyOuterGaps(_ gaps: Insets, to frame: CGRect) -> CGRect {
-    CGRect(
-        x: frame.minX + gaps.left,
-        y: frame.minY + gaps.top,
-        width: max(0, frame.width - gaps.left - gaps.right),
-        height: max(0, frame.height - gaps.top - gaps.bottom)
-    )
-}
-
-private extension CGRect {
-    var isFinitePositive: Bool {
-        minX.isFinite && minY.isFinite && width.isFinite && height.isFinite && width > 0 && height > 0
     }
 }

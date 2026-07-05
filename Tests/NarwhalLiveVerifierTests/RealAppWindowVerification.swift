@@ -1555,6 +1555,12 @@ enum RealAppWindowVerification {
     }
 
     private static func closeCreatedWindow(_ original: RealAppOriginal, using axClient: AXClient) throws {
+        if original.spec.name == "Terminal",
+           closeTerminalWindow(windowID: original.metadata.id) {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            return
+        }
+
         switch axClient.closeWindow(original.metadata) {
         case .success:
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
@@ -1563,6 +1569,26 @@ enum RealAppWindowVerification {
             throw RealAppWindowVerifierFailure(
                 "\(original.spec.name) could not close verifier-created window \(original.metadata.id.description): \(error.description)"
             )
+        }
+    }
+
+    private static func closeTerminalWindow(windowID: WindowID) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = [
+            "-e",
+            """
+            tell application "Terminal"
+                if exists window id \(windowID.raw) then close (window id \(windowID.raw)) saving no
+            end tell
+            """
+        ]
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
         }
     }
 
@@ -1661,15 +1687,8 @@ enum RealAppWindowVerification {
         _ frame: CGRect,
         displays: [DisplayID: DisplayInfo]
     ) -> DisplayInfo? {
-        if let byIntersection = displays.values.max(by: {
-            $0.visibleFrame.intersection(frame).area < $1.visibleFrame.intersection(frame).area
-        }), byIntersection.visibleFrame.intersection(frame).area > 0 {
-            return byIntersection
-        }
-        let center = CGPoint(x: frame.midX, y: frame.midY)
-        return displays.values.min {
-            $0.visibleFrame.center.distanceSquared(to: center) < $1.visibleFrame.center.distanceSquared(to: center)
-        }
+        guard let displayID = displayContainingFrame(frame, displays: displays) else { return nil }
+        return displays[displayID]
     }
 }
 
@@ -1900,12 +1919,7 @@ private struct RealAppWindowVerifierFailure: Error, CustomStringConvertible {
 
 private extension CGRect {
     var area: CGFloat {
-        guard !isNull && !isInfinite else { return 0 }
-        return max(0, width) * max(0, height)
-    }
-
-    var center: CGPoint {
-        CGPoint(x: midX, y: midY)
+        narwhalArea
     }
 
     var shortDescription: String {
@@ -1913,10 +1927,7 @@ private extension CGRect {
     }
 
     func matches(_ other: CGRect, tolerance: CGFloat) -> Bool {
-        abs(minX - other.minX) <= tolerance
-            && abs(minY - other.minY) <= tolerance
-            && abs(width - other.width) <= tolerance
-            && abs(height - other.height) <= tolerance
+        narwhalApproximatelyEquals(other, tolerance: tolerance)
     }
 }
 
@@ -1926,11 +1937,4 @@ private extension CGSize {
     }
 }
 
-private extension CGPoint {
-    func distanceSquared(to other: CGPoint) -> CGFloat {
-        let dx = x - other.x
-        let dy = y - other.y
-        return dx * dx + dy * dy
-    }
-}
 #endif

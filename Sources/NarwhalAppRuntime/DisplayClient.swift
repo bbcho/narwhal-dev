@@ -31,16 +31,7 @@ struct DisplayClient {
     }
 
     func displayContaining(frame: CGRect, displays: [DisplayID: DisplayInfo]) -> DisplayID? {
-        if let byIntersection = displays.max(by: { lhs, rhs in
-            lhs.value.visibleFrame.intersection(frame).area < rhs.value.visibleFrame.intersection(frame).area
-        }), byIntersection.value.visibleFrame.intersection(frame).area > 0 {
-            return byIntersection.key
-        }
-
-        let center = CGPoint(x: frame.midX, y: frame.midY)
-        return displays.min(by: { lhs, rhs in
-            lhs.value.visibleFrame.center.distanceSquared(to: center) < rhs.value.visibleFrame.center.distanceSquared(to: center)
-        })?.key
+        displayContainingFrame(frame, displays: displays)
     }
 
     private func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
@@ -66,24 +57,5 @@ struct DisplayClient {
             width: appVisible.width,
             height: appVisible.height
         )
-    }
-}
-
-private extension CGRect {
-    var area: CGFloat {
-        guard !isNull && !isInfinite else { return 0 }
-        return max(0, width) * max(0, height)
-    }
-
-    var center: CGPoint {
-        CGPoint(x: midX, y: midY)
-    }
-}
-
-private extension CGPoint {
-    func distanceSquared(to other: CGPoint) -> CGFloat {
-        let dx = x - other.x
-        let dy = y - other.y
-        return dx * dx + dy * dy
     }
 }

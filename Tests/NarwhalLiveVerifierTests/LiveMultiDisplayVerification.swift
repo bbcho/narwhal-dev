@@ -481,12 +481,11 @@ enum LiveMultiDisplayVerification {
     }
 
     private static func displayContaining(_ frame: CGRect, displays: [DisplayID: DisplayInfo]) -> DisplayInfo? {
-        if let byIntersection = displays.values.max(by: {
-            $0.visibleFrame.intersection(frame).area < $1.visibleFrame.intersection(frame).area
-        }), byIntersection.visibleFrame.intersection(frame).area > 0 {
-            return byIntersection
-        }
-        return nil
+        guard let displayID = displayContainingFrame(frame, displays: displays),
+              let display = displays[displayID],
+              display.visibleFrame.intersection(frame).narwhalArea > 0
+        else { return nil }
+        return display
     }
 
     private static func liveWindow(_ id: WindowID, in windows: [LiveVerificationWindow]) -> LiveVerificationWindow? {
@@ -535,15 +534,11 @@ private struct LiveVerificationWindow {
 
 private extension CGRect {
     var area: CGFloat {
-        guard !isNull && !isInfinite else { return 0 }
-        return max(0, width) * max(0, height)
+        narwhalArea
     }
 
     func matches(_ other: CGRect, tolerance: CGFloat) -> Bool {
-        abs(minX - other.minX) <= tolerance
-            && abs(minY - other.minY) <= tolerance
-            && abs(width - other.width) <= tolerance
-            && abs(height - other.height) <= tolerance
+        narwhalApproximatelyEquals(other, tolerance: tolerance)
     }
 }
 #endif

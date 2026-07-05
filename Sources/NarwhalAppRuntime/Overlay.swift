@@ -667,7 +667,8 @@ final class Overlay {
 
     private func appKitFrame(forAXFrame frame: CGRect) -> CGRect {
         guard let screen = NSScreen.screens.max(by: { lhs, rhs in
-            cgFrame(for: lhs).intersection(frame).area < cgFrame(for: rhs).intersection(frame).area
+            cgFrame(for: lhs).intersection(frame).narwhalArea
+                < cgFrame(for: rhs).intersection(frame).narwhalArea
         }) else {
             return frame
         }
@@ -690,14 +691,22 @@ final class Overlay {
     private func isScreenFillingAXFrame(_ frame: CGRect) -> Bool {
         let tolerance: CGFloat = 3
         guard let screen = NSScreen.screens.max(by: { lhs, rhs in
-            cgFrame(for: lhs).intersection(frame).area < cgFrame(for: rhs).intersection(frame).area
+            cgFrame(for: lhs).intersection(frame).narwhalArea
+                < cgFrame(for: rhs).intersection(frame).narwhalArea
         }) else {
             return false
         }
         let displayFrame = cgFrame(for: screen)
-        return frame.matches(displayFrame, tolerance: tolerance)
-            || frame.matches(axVisibleFrame(for: screen, displayFrame: displayFrame), tolerance: tolerance)
-            || frame.fills(axVisibleFrame(for: screen, displayFrame: displayFrame), tolerance: 18, minimumAreaRatio: 0.96)
+        return frame.narwhalApproximatelyEquals(displayFrame, tolerance: tolerance)
+            || frame.narwhalApproximatelyEquals(
+                axVisibleFrame(for: screen, displayFrame: displayFrame),
+                tolerance: tolerance
+            )
+            || frame.narwhalFills(
+                axVisibleFrame(for: screen, displayFrame: displayFrame),
+                tolerance: 18,
+                minimumAreaRatio: 0.96
+            )
     }
 
     private func axVisibleFrame(for screen: NSScreen, displayFrame: CGRect) -> CGRect {
@@ -719,8 +728,8 @@ final class Overlay {
         guard let suppression = focusBorderSuppression, suppression.windowID == windowID else {
             return false
         }
-        if frame.matches(suppression.frame, tolerance: 18)
-            || frame.fills(suppression.frame, tolerance: 18, minimumAreaRatio: 0.96) {
+        if frame.narwhalApproximatelyEquals(suppression.frame, tolerance: 18)
+            || frame.narwhalFills(suppression.frame, tolerance: 18, minimumAreaRatio: 0.96) {
             return true
         }
         focusBorderSuppression = nil
@@ -2014,7 +2023,10 @@ enum FocusBorderVerification {
                 "rendered standard focus radius mismatch: requested=\(standardRadius) rendered=\(standardSnapshot.renderedCornerRadius)"
             )
         }
-        guard standardSnapshot.pathBoundingBox.matches(standardSnapshot.strokeRect, tolerance: 1) else {
+        guard standardSnapshot.pathBoundingBox.narwhalApproximatelyEquals(
+            standardSnapshot.strokeRect,
+            tolerance: 1
+        ) else {
             return (
                 false,
                 "focus border path does not match stroke rect: path=\(standardSnapshot.pathBoundingBox.debugDescription) rect=\(standardSnapshot.strokeRect.debugDescription)"
@@ -2998,29 +3010,4 @@ private func formatDelta(_ delta: Double) -> String {
     return String(format: "%.2f", delta)
         .trimmingCharacters(in: CharacterSet(charactersIn: "0"))
         .trimmingCharacters(in: CharacterSet(charactersIn: "."))
-}
-
-private extension CGRect {
-    var area: CGFloat {
-        guard !isNull && !isInfinite else { return 0 }
-        return max(0, width) * max(0, height)
-    }
-
-    func matches(_ other: CGRect, tolerance: CGFloat) -> Bool {
-        abs(minX - other.minX) <= tolerance
-            && abs(minY - other.minY) <= tolerance
-            && abs(width - other.width) <= tolerance
-            && abs(height - other.height) <= tolerance
-    }
-
-    func fills(_ other: CGRect, tolerance: CGFloat, minimumAreaRatio: CGFloat) -> Bool {
-        guard width > 0, height > 0, other.width > 0, other.height > 0 else { return false }
-        let expanded = other.insetBy(dx: -tolerance, dy: -tolerance)
-        guard minX >= expanded.minX,
-              minY >= expanded.minY,
-              maxX <= expanded.maxX,
-              maxY <= expanded.maxY
-        else { return false }
-        return area / other.area >= minimumAreaRatio
-    }
 }

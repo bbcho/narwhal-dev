@@ -116,7 +116,7 @@ private func consumeFrameEcho(
     in state: AXEchoState
 ) -> AXEchoConsumeResult {
     consumeFrameEcho(windowID: windowID, component: component, tolerance: tolerance, in: state) { echo in
-        originsApproximatelyMatch(echo.targetFrame.origin, frame.origin, tolerance: tolerance)
+        echo.targetFrame.origin.narwhalApproximatelyEquals(frame.origin, tolerance: tolerance)
             || frameWriteApproximatelySettled(target: echo.targetFrame, actual: frame, tolerance: Double(tolerance))
     }
 }
@@ -129,7 +129,7 @@ private func consumeFrameEcho(
     in state: AXEchoState
 ) -> AXEchoConsumeResult {
     consumeFrameEcho(windowID: windowID, component: component, tolerance: tolerance, in: state) { echo in
-        sizesApproximatelyMatch(echo.targetFrame.size, size, tolerance: tolerance)
+        echo.targetFrame.size.narwhalApproximatelyEquals(size, tolerance: tolerance)
             || frameSizeApproximatelySettled(target: echo.targetFrame.size, actual: size, tolerance: Double(tolerance))
     }
 }
@@ -227,12 +227,4 @@ private func echoesByRemoving<Echo>(
     from echoes: [Echo]
 ) -> [Echo] {
     Array(echoes.prefix(index) + echoes.dropFirst(index + 1))
-}
-
-private func originsApproximatelyMatch(_ lhs: CGPoint, _ rhs: CGPoint, tolerance: CGFloat) -> Bool {
-    abs(lhs.x - rhs.x) <= tolerance && abs(lhs.y - rhs.y) <= tolerance
-}
-
-private func sizesApproximatelyMatch(_ lhs: CGSize, _ rhs: CGSize, tolerance: CGFloat) -> Bool {
-    abs(lhs.width - rhs.width) <= tolerance && abs(lhs.height - rhs.height) <= tolerance
 }

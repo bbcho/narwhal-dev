@@ -123,13 +123,13 @@ public func pollWindowFrameInventory(
         guard !excludedWindowIDs.contains(windowID) else { return nil }
         guard let oldFrame = previous.framesByWindowID[windowID],
               let newFrame = currentFrames[windowID],
-              !framesEqual(oldFrame, newFrame, tolerance: tolerance)
+              !oldFrame.narwhalApproximatelyEquals(newFrame, tolerance: tolerance)
         else { return nil }
 
-        if !originsEqual(oldFrame.origin, newFrame.origin, tolerance: tolerance) {
+        if !oldFrame.origin.narwhalApproximatelyEquals(newFrame.origin, tolerance: tolerance) {
             return .windowMoved(windowID, newFrame)
         }
-        if sizesEqual(oldFrame.size, newFrame.size, tolerance: tolerance) {
+        if oldFrame.size.narwhalApproximatelyEquals(newFrame.size, tolerance: tolerance) {
             return nil
         }
         return .windowResized(windowID, newFrame.size)
@@ -138,19 +138,4 @@ public func pollWindowFrameInventory(
         state: WindowFrameInventoryState(framesByWindowID: currentFrames),
         events: events
     )
-}
-
-private func framesEqual(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {
-    originsEqual(lhs.origin, rhs.origin, tolerance: tolerance)
-        && sizesEqual(lhs.size, rhs.size, tolerance: tolerance)
-}
-
-private func originsEqual(_ lhs: CGPoint, _ rhs: CGPoint, tolerance: CGFloat) -> Bool {
-    abs(lhs.x - rhs.x) <= tolerance
-        && abs(lhs.y - rhs.y) <= tolerance
-}
-
-private func sizesEqual(_ lhs: CGSize, _ rhs: CGSize, tolerance: CGFloat) -> Bool {
-    abs(lhs.width - rhs.width) <= tolerance
-        && abs(lhs.height - rhs.height) <= tolerance
 }

@@ -71,9 +71,9 @@ public func externalGeometryEventSelection(
     let matchesLiveFrame: Bool
     switch event {
     case .windowMoved(_, let frame):
-        matchesLiveFrame = framesApproximatelyEqual(live.frame, frame, tolerance: tolerance)
+        matchesLiveFrame = live.frame.narwhalApproximatelyEquals(frame, tolerance: tolerance)
     case .windowResized(_, let size):
-        matchesLiveFrame = sizesApproximatelyEqual(live.frame.size, size, tolerance: tolerance)
+        matchesLiveFrame = live.frame.size.narwhalApproximatelyEquals(size, tolerance: tolerance)
     case .windowOpened, .windowClosed, .windowFocused:
         matchesLiveFrame = true
     }
@@ -85,15 +85,4 @@ public func externalGeometryEventSelection(
         event: .windowMoved(windowID, live.frame),
         usedLiveFrame: true
     )
-}
-
-private func framesApproximatelyEqual(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {
-    abs(lhs.origin.x - rhs.origin.x) <= tolerance
-        && abs(lhs.origin.y - rhs.origin.y) <= tolerance
-        && sizesApproximatelyEqual(lhs.size, rhs.size, tolerance: tolerance)
-}
-
-private func sizesApproximatelyEqual(_ lhs: CGSize, _ rhs: CGSize, tolerance: CGFloat) -> Bool {
-    abs(lhs.width - rhs.width) <= tolerance
-        && abs(lhs.height - rhs.height) <= tolerance
 }
