@@ -618,7 +618,7 @@ struct AXClient {
             switch focusedWindowFrame(window) {
             case .success(let actual):
                 lastFrame = actual
-                if framesApproximatelyMatch(actual, frame) {
+                if actual.narwhalApproximatelyEquals(frame, tolerance: frameWriteSettleTolerance) {
                     return .converged(actual: actual)
                 }
             case .failure(let error):
@@ -815,7 +815,10 @@ struct AXClient {
             guard expectedRole.isEmpty || role.isEmpty || role == expectedRole else { continue }
 
             switch focusedWindowFrame(window) {
-            case .success(let frame) where framesApproximatelyMatch(frame, expectedFrame):
+            case .success(let frame) where frame.narwhalApproximatelyEquals(
+                expectedFrame,
+                tolerance: frameWriteSettleTolerance
+            ):
                 return .success(window)
             case .success(let frame):
                 candidates.append((element: window, frame: frame))
@@ -956,7 +959,7 @@ struct AXClient {
                 let number = window[kCGWindowNumber as String] as? CGWindowID,
                 let boundsDictionary = window[kCGWindowBounds as String] as? NSDictionary,
                 let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
-                framesApproximatelyMatch(bounds, frame)
+                bounds.narwhalApproximatelyEquals(frame, tolerance: frameWriteSettleTolerance)
             else {
                 continue
             }
@@ -970,13 +973,6 @@ struct AXClient {
         }
 
         return nil
-    }
-
-    private func framesApproximatelyMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
-        abs(lhs.origin.x - rhs.origin.x) <= frameWriteSettleTolerance
-            && abs(lhs.origin.y - rhs.origin.y) <= frameWriteSettleTolerance
-            && abs(lhs.size.width - rhs.size.width) <= frameWriteSettleTolerance
-            && abs(lhs.size.height - rhs.size.height) <= frameWriteSettleTolerance
     }
 
     private func frameDistance(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {

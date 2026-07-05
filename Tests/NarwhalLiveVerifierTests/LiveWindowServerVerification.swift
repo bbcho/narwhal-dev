@@ -1,6 +1,7 @@
 #if NARWHAL_ENABLE_VERIFIERS
 import CoreGraphics
 import Foundation
+import NarwhalCore
 
 enum LiveWindowServerVerification {
     static func waitForFrame(windowNumber: Int, matching expected: CGRect, tolerance: CGFloat = 2) -> CGRect? {
@@ -54,10 +55,7 @@ enum LiveWindowServerVerification {
 
 private extension CGRect {
     func matches(_ other: CGRect, tolerance: CGFloat) -> Bool {
-        abs(minX - other.minX) <= tolerance
-            && abs(minY - other.minY) <= tolerance
-            && abs(width - other.width) <= tolerance
-            && abs(height - other.height) <= tolerance
+        narwhalApproximatelyEquals(other, tolerance: tolerance)
     }
 }
 #endif

@@ -768,13 +768,13 @@ private func spacesByApplyingExternalResize(
     else {
         return nil
     }
-    guard display.visibleFrame.intersection(newFrame).area > 0,
-          displayContaining(newFrame, in: world.displays)?.id == displayID
+    guard display.visibleFrame.intersection(newFrame).narwhalArea > 0,
+          displayContainingFrame(newFrame, displays: world.displays) == displayID
     else {
         return nil
     }
 
-    let rootFrame = rootLayoutFrame(display.visibleFrame, gaps: world.config.gaps)
+    let rootFrame = applyOuterGaps(world.config.gaps.outer, to: display.visibleFrame)
     var tree = displayState.tree
     var changedTree = false
     for direction in directions {
@@ -807,7 +807,7 @@ private func spacesByApplyingExternalResize(
 }
 
 private func externalResizeDirections(from oldFrame: CGRect, to newFrame: CGRect) -> [Direction] {
-    let tolerance: CGFloat = 1
+    let tolerance = GeometryTolerances.externalResizeDirection
     var directions: [Direction] = []
     if abs(newFrame.width - oldFrame.width) > tolerance {
         let minChange = abs(newFrame.minX - oldFrame.minX)
@@ -820,28 +820,6 @@ private func externalResizeDirections(from oldFrame: CGRect, to newFrame: CGRect
         directions.append(minChange > maxChange ? .up : .down)
     }
     return directions
-}
-
-private func rootLayoutFrame(_ visibleFrame: CGRect, gaps: Gaps) -> CGRect {
-    CGRect(
-        x: visibleFrame.minX + gaps.outer.left,
-        y: visibleFrame.minY + gaps.outer.top,
-        width: max(0, visibleFrame.width - gaps.outer.left - gaps.outer.right),
-        height: max(0, visibleFrame.height - gaps.outer.top - gaps.outer.bottom)
-    )
-}
-
-private func displayContaining(_ frame: CGRect, in displays: [DisplayID: DisplayInfo]) -> DisplayInfo? {
-    displays.values.max {
-        $0.visibleFrame.intersection(frame).area < $1.visibleFrame.intersection(frame).area
-    }
-}
-
-private extension CGRect {
-    var area: CGFloat {
-        guard !isNull && !isInfinite else { return 0 }
-        return max(0, width) * max(0, height)
-    }
 }
 
 private func worldBySettingConfig(_ config: Config, in world: World) -> World {

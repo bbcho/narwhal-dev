@@ -130,8 +130,8 @@ public func resizeSplitInTreeToMatchWindowFrame(
     innerGap: Double,
     _ node: Node
 ) -> Result<Node, TreeResizeError> {
-    guard desiredFrame.isFinitePositive,
-          rootFrame.isFinitePositive,
+    guard desiredFrame.narwhalIsFinitePositive,
+          rootFrame.narwhalIsFinitePositive,
           innerGap.isFinite
     else {
         return .failure(.nonFiniteDelta)
@@ -143,7 +143,7 @@ public func resizeSplitInTreeToMatchWindowFrame(
         return .failure(.noNeighbor(direction))
     }
     guard let parentFrame = frame(at: target.parentPath, in: node, rootFrame: rootFrame),
-          parentFrame.isFinitePositive
+          parentFrame.narwhalIsFinitePositive
     else {
         return .failure(.nonPositiveWeight)
     }
@@ -349,42 +349,6 @@ private func split(at path: NodePath, in node: Node) -> Split? {
         return nil
     }
     return split(at: Array(path.dropFirst()), in: currentSplit.cells[nextIndex].node)
-}
-
-private func splitFrames(_ frame: CGRect, axis: Axis, weights: [Double]) -> [CGRect] {
-    let total = weights.reduce(0, +)
-    guard total > 0 else { return [] }
-    let extent = axis == .horizontal ? frame.width : frame.height
-    let lengths = splitLengths(extent: extent, weights: weights, totalWeight: total)
-    return zip(splitOffsets(for: lengths), lengths).map { offset, length in
-        switch axis {
-        case .horizontal:
-            return CGRect(x: frame.minX + offset, y: frame.minY, width: length, height: frame.height)
-        case .vertical:
-            return CGRect(x: frame.minX, y: frame.minY + offset, width: frame.width, height: length)
-        }
-    }
-}
-
-private func splitLengths(extent: CGFloat, weights: [Double], totalWeight: Double) -> [CGFloat] {
-    guard !weights.isEmpty else { return [] }
-    let leading = weights.dropLast().map { extent * CGFloat($0 / totalWeight) }
-    return leading + [extent - leading.reduce(0, +)]
-}
-
-private func splitOffsets(for lengths: [CGFloat]) -> [CGFloat] {
-    lengths.indices.map { lengths.prefix($0).reduce(0, +) }
-}
-
-private extension CGRect {
-    var isFinitePositive: Bool {
-        minX.isFinite
-            && minY.isFinite
-            && width.isFinite
-            && height.isFinite
-            && width > 0
-            && height > 0
-    }
 }
 
 private func insertAtCenter(_ window: WindowID, _ node: Node) -> Node {

@@ -368,32 +368,6 @@ private func fillRemainingLengths(
     }.result
 }
 
-private struct SplitFrameAccumulator {
-    let offset: Double
-    let frames: [CGRect]
-}
-
-private func splitFrames(_ frame: CGRect, axis: Axis, lengths: [Double]) -> [CGRect] {
-    lengths.enumerated().reduce(SplitFrameAccumulator(offset: 0, frames: [])) { state, entry in
-        let (index, length) = entry
-        let isLast = index == lengths.count - 1
-        switch axis {
-        case .horizontal:
-            let width = isLast ? Double(frame.width) - state.offset : length
-            return SplitFrameAccumulator(
-                offset: state.offset + width,
-                frames: state.frames + [CGRect(x: frame.minX + state.offset, y: frame.minY, width: width, height: frame.height)]
-            )
-        case .vertical:
-            let height = isLast ? Double(frame.height) - state.offset : length
-            return SplitFrameAccumulator(
-                offset: state.offset + height,
-                frames: state.frames + [CGRect(x: frame.minX, y: frame.minY + state.offset, width: frame.width, height: height)]
-            )
-        }
-    }.frames
-}
-
 private extension Array {
     func setting(_ index: Index, to value: Element) -> [Element] {
         enumerated().map { currentIndex, element in
@@ -433,15 +407,6 @@ private func adjustments(
         }
         return nil
     }
-}
-
-private func applyOuterGaps(_ gaps: Insets, to frame: CGRect) -> CGRect {
-    CGRect(
-        x: frame.minX + gaps.left,
-        y: frame.minY + gaps.top,
-        width: max(0, frame.width - gaps.left - gaps.right),
-        height: max(0, frame.height - gaps.top - gaps.bottom)
-    )
 }
 
 private func maxOptional(_ lhs: Double?, _ rhs: Double?) -> Double? {
