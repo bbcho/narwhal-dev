@@ -1014,7 +1014,7 @@ struct MVPLayoutTests {
                 space: SpaceState(
                     id: space,
                     displays: [display: DisplaySpaceState(displayID: display, tree: tree, floating: [])],
-                    focused: chrome
+                    focused: firefox
                 )
             ],
             windows: [
@@ -1049,6 +1049,53 @@ struct MVPLayoutTests {
         #expect(flattened.tiled[chrome] == CGRect(x: 0, y: 0, width: 600, height: 500))
         #expect(flattened.tiled[firefox] == CGRect(x: 0, y: 500, width: 600, height: 300))
         #expect(flattened.tiled[companion] == CGRect(x: 600, y: 0, width: 600, height: 800))
+        #expect(next.spaces[space]?.focused == firefox)
+    }
+
+    @Test("External resize of tiled window preserves nil focus")
+    func externalResizeOfTiledWindowPreservesNilFocus() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let chrome = WindowID(raw: 1)
+        let firefox = WindowID(raw: 2)
+        let tree = Node.split(try split(axis: .vertical, cells: [
+            try cell(weight: 1, node: .leaf(chrome)),
+            try cell(weight: 1, node: .leaf(firefox))
+        ]))
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: tree, floating: [])],
+                    focused: nil
+                )
+            ],
+            windows: [
+                chrome: metadata(for: chrome, frame: CGRect(x: 0, y: 0, width: 1200, height: 400)),
+                firefox: metadata(for: firefox, frame: CGRect(x: 0, y: 400, width: 1200, height: 400))
+            ],
+            windowDisplay: [
+                chrome: display,
+                firefox: display
+            ],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        let next = try requireWorld(
+            apply(.windowResizedExternally(chrome, CGSize(width: 1200, height: 500)), to: world),
+            "Expected external resize to adjust tiled layout"
+        )
+
+        #expect(next.windows[chrome]?.frame == CGRect(x: 0, y: 0, width: 1200, height: 500))
+        #expect(next.spaces[space]?.displays[display]?.tree == Node.split(try split(axis: .vertical, cells: [
+            try cell(weight: 1.25, node: .leaf(chrome)),
+            try cell(weight: 0.75, node: .leaf(firefox))
+        ])))
+        #expect(next.spaces[space]?.focused == nil)
     }
 
     @Test("Tiled border targets follow externally resized tiled window frames")
