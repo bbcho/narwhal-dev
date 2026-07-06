@@ -802,7 +802,7 @@ private func spacesByApplyingExternalResize(
     ))
     return world.spaces.setting(
         key.spaceID,
-        to: SpaceState(id: space.id, displays: displayStates, focused: windowID)
+        to: SpaceState(id: space.id, displays: displayStates, focused: space.focused)
     )
 }
 
