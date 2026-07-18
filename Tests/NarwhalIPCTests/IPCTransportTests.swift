@@ -105,6 +105,47 @@ struct IPCTransportTests {
         #expect(try client.send(.resetLayout) == .ok(commandID: CommandID(raw: "still-running")))
     }
 
+    @Test("Idle clients time out and release bounded server slots")
+    func idleClientsReleaseServerSlotsAfterTimeout() async throws {
+        let path = tempSocketPath()
+        let server = IPCServer(socketPath: path, maxConnections: 2, ioTimeout: 0.08) { _ in
+            .ok(commandID: CommandID(raw: "recovered"))
+        }
+        try server.start()
+        defer { server.stop() }
+
+        let first = try connectRawSocket(path: path)
+        defer { Darwin.close(first) }
+        let second = try connectRawSocket(path: path)
+        defer { Darwin.close(second) }
+        try await Task.sleep(nanoseconds: 180_000_000)
+
+        let client = IPCClient(socketPath: path, ioTimeout: 0.5)
+        defer { client.close() }
+        #expect(try client.send(.resetLayout) == .ok(commandID: CommandID(raw: "recovered")))
+    }
+
+    @Test("Client abandons a connection when its reply deadline expires")
+    func clientAbandonsConnectionAfterReplyTimeout() async throws {
+        let path = tempSocketPath()
+        let server = IPCServer(socketPath: path, ioTimeout: 1.0) { _ in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            return .ok(commandID: CommandID(raw: "late"))
+        }
+        try server.start()
+        defer { server.stop() }
+
+        let client = IPCClient(socketPath: path, ioTimeout: 0.05)
+        do {
+            _ = try client.send(.resetLayout)
+            Issue.record("Expected client read timeout")
+        } catch IPCTransportError.timedOut(let operation) {
+            #expect(operation == "read")
+        } catch {
+            Issue.record("Expected IPC read timeout, got \(String(describing: error))")
+        }
+    }
+
     private func tempSocketPath() -> String {
         "/private/tmp/narwhal-ipc-\(UUID().uuidString).sock"
     }

@@ -23,6 +23,7 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
     case lineTooLong(maxBytes: Int)
     case invalidUTF8
     case alreadyRunning(path: String)
+    case timedOut(operation: String)
 
     public var description: String {
         switch self {
@@ -54,6 +55,8 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
             return "IPC payload was not valid UTF-8"
         case .alreadyRunning(let path):
             return "Another narwhal daemon is already serving \(path)"
+        case .timedOut(let operation):
+            return "IPC \(operation) timed out"
         }
     }
 
@@ -67,11 +70,17 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
 public final class IPCClient {
     private let socketPath: String
     private let maxLineBytes: Int
+    private let ioTimeout: TimeInterval
     private var fd: Int32?
 
-    public init(socketPath: String = IPCDefaults.socketPath, maxLineBytes: Int = 64 * 1024) {
+    public init(
+        socketPath: String = IPCDefaults.socketPath,
+        maxLineBytes: Int = 64 * 1024,
+        ioTimeout: TimeInterval = 5.0
+    ) {
         self.socketPath = socketPath
         self.maxLineBytes = maxLineBytes
+        self.ioTimeout = boundedSocketTimeout(ioTimeout)
     }
 
     deinit {
@@ -85,7 +94,7 @@ public final class IPCClient {
             throw IPCTransportError.socketCreateFailed(errno: errno)
         }
         do {
-            try configureSocket(socketFD)
+            try configureSocket(socketFD, ioTimeout: ioTimeout)
             try withSocketAddress(path: socketPath) { address, length in
                 guard Darwin.connect(socketFD, address, length) == 0 else {
                     throw IPCTransportError.connectFailed(path: socketPath, errno: errno)
@@ -110,11 +119,16 @@ public final class IPCClient {
     func sendRawLine(_ request: Data) throws -> IPCReplyDTO {
         try connect()
         guard let fd else { throw IPCTransportError.connectionClosed }
-        try writeAll(request, to: fd)
-        guard let replyData = try readLine(from: fd, maxBytes: maxLineBytes) else {
-            throw IPCTransportError.connectionClosed
+        do {
+            try writeAll(request, to: fd)
+            guard let replyData = try readLine(from: fd, maxBytes: maxLineBytes) else {
+                throw IPCTransportError.connectionClosed
+            }
+            return try JSONDecoder().decode(IPCReplyDTO.self, from: replyData)
+        } catch {
+            close()
+            throw error
         }
-        return try JSONDecoder().decode(IPCReplyDTO.self, from: replyData)
     }
 
     public func close() {
@@ -129,6 +143,7 @@ public final class IPCServer: @unchecked Sendable {
     private let socketPath: String
     private let maxLineBytes: Int
     private let maxConnections: Int
+    private let ioTimeout: TimeInterval
     private let handle: @Sendable (IPCCommandDTO) async -> IPCReplyDTO
     private let log: @Sendable (String) -> Void
     private let state = IPCServerState()
@@ -137,12 +152,14 @@ public final class IPCServer: @unchecked Sendable {
         socketPath: String = IPCDefaults.socketPath,
         maxLineBytes: Int = 64 * 1024,
         maxConnections: Int = 8,
+        ioTimeout: TimeInterval = 5.0,
         handle: @escaping @Sendable (IPCCommandDTO) async -> IPCReplyDTO,
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.socketPath = socketPath
         self.maxLineBytes = maxLineBytes
         self.maxConnections = maxConnections
+        self.ioTimeout = boundedSocketTimeout(ioTimeout)
         self.handle = handle
         self.log = log
     }
@@ -217,7 +234,7 @@ public final class IPCServer: @unchecked Sendable {
             }
 
             do {
-                try configureSocket(clientFD)
+                try configureSocket(clientFD, ioTimeout: ioTimeout)
             } catch {
                 log(String(describing: error))
                 closeSocket(clientFD)
@@ -239,7 +256,7 @@ public final class IPCServer: @unchecked Sendable {
         let probeFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard probeFD >= 0 else { return false }
         defer { Darwin.close(probeFD) }
-        try? configureSocket(probeFD)
+        try? configureSocket(probeFD, ioTimeout: min(ioTimeout, 0.25))
         var alive = false
         do {
             try withSocketAddress(path: path) { address, length in
@@ -352,7 +369,7 @@ private func closeSocket(_ fd: Int32) {
     Darwin.close(fd)
 }
 
-private func configureSocket(_ fd: Int32) throws {
+private func configureSocket(_ fd: Int32, ioTimeout: TimeInterval? = nil) throws {
     var noSIGPIPE: Int32 = 1
     let result = Darwin.setsockopt(
         fd,
@@ -364,6 +381,33 @@ private func configureSocket(_ fd: Int32) throws {
     guard result == 0 else {
         throw IPCTransportError.socketOptionFailed(option: "SO_NOSIGPIPE", errno: errno)
     }
+
+    guard let ioTimeout else { return }
+    var timeout = socketTimeval(ioTimeout)
+    for (option, name) in [(SO_RCVTIMEO, "SO_RCVTIMEO"), (SO_SNDTIMEO, "SO_SNDTIMEO")] {
+        let timeoutResult = Darwin.setsockopt(
+            fd,
+            SOL_SOCKET,
+            option,
+            &timeout,
+            socklen_t(MemoryLayout.size(ofValue: timeout))
+        )
+        guard timeoutResult == 0 else {
+            throw IPCTransportError.socketOptionFailed(option: name, errno: errno)
+        }
+    }
+}
+
+private func boundedSocketTimeout(_ timeout: TimeInterval) -> TimeInterval {
+    guard timeout.isFinite else { return 5.0 }
+    return min(300, max(0.01, timeout))
+}
+
+private func socketTimeval(_ timeout: TimeInterval) -> timeval {
+    let bounded = boundedSocketTimeout(timeout)
+    let seconds = floor(bounded)
+    let microseconds = (bounded - seconds) * 1_000_000
+    return timeval(tv_sec: Int(seconds), tv_usec: Int32(microseconds.rounded()))
 }
 
 private func encodeReplyLine(_ reply: IPCReplyDTO) throws -> Data {
@@ -386,6 +430,9 @@ private func readLine(from fd: Int32, maxBytes: Int) throws -> Data? {
         }
         if count < 0 {
             if errno == EINTR { continue }
+            if errno == EAGAIN || errno == EWOULDBLOCK {
+                throw IPCTransportError.timedOut(operation: "read")
+            }
             throw IPCTransportError.readFailed(errno: errno)
         }
         if byte == 0x0A {
@@ -406,6 +453,9 @@ private func writeAll(_ data: Data, to fd: Int32) throws {
             let count = Darwin.write(fd, baseAddress.advanced(by: written), buffer.count - written)
             if count < 0 {
                 if errno == EINTR { continue }
+                if errno == EAGAIN || errno == EWOULDBLOCK {
+                    throw IPCTransportError.timedOut(operation: "write")
+                }
                 throw IPCTransportError.writeFailed(errno: errno)
             }
             if count == 0 {
