@@ -151,7 +151,10 @@ final class Menubar {
     private var needsAttention: Bool {
         if case .failed = configStatus { return true }
         if operatingStatus.accessibilityTrusted == false { return true }
-        if case .permissionDenied = operatingStatus.snapshotQuality { return true }
+        if let quality = operatingStatus.snapshotQuality,
+           quality != .complete {
+            return true
+        }
         return false
     }
 
@@ -255,6 +258,8 @@ private func snapshotQualityDescription(_ quality: AXSnapshotQuality) -> String 
         return "partial (\(errors.count) error\(errors.count == 1 ? "" : "s"))"
     case .permissionDenied:
         return "permission denied"
+    case .unavailable:
+        return "unavailable"
     }
 }
 

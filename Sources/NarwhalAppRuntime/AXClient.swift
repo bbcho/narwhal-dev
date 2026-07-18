@@ -144,13 +144,17 @@ struct AXClient {
         else {
             return AXWindowSnapshot(
                 windows: [],
-                quality: .permissionDenied(AXClientError.visibleWindowListUnavailable.description)
+                quality: .unavailable(AXClientError.visibleWindowListUnavailable.description)
             )
         }
 
-        let metadata = windows.compactMap(windowMetadata(from:))
+        let inventory = inventoryFilter.read(windows)
+        let metadata = inventory.records.map(windowMetadata(from:))
             .sorted { $0.id.raw < $1.id.raw }
-        return AXWindowSnapshot(windows: metadata, quality: .complete)
+        let quality: AXSnapshotQuality = inventory.errors.isEmpty
+            ? .complete
+            : .partial(inventory.errors)
+        return AXWindowSnapshot(windows: metadata, quality: quality)
     }
 
     func visibleWindowIDs() -> Result<Set<WindowID>, AXClientError> {
@@ -207,31 +211,20 @@ struct AXClient {
         return .success(windowStackVisibility(target: target, frontToBackWindows: entries))
     }
 
-    private func windowMetadata(from window: [String: Any]) -> WindowMetadata? {
-        guard
-            let layer = window[kCGWindowLayer as String] as? Int,
-            let number = window[kCGWindowNumber as String] as? CGWindowID,
-            let ownerPID = window[kCGWindowOwnerPID as String] as? pid_t,
-            let boundsDictionary = window[kCGWindowBounds as String] as? NSDictionary,
-            let frame = CGRect(dictionaryRepresentation: boundsDictionary),
-            inventoryFilter.accepts(layer: layer, ownerPID: ownerPID, frame: frame)
-        else {
-            return nil
-        }
-
+    private func windowMetadata(from window: WindowInventoryRecord) -> WindowMetadata {
         return WindowMetadata(
-            id: WindowID(raw: number),
-            bundleID: BundleID(raw: NSRunningApplication(processIdentifier: ownerPID)?.bundleIdentifier ?? ""),
-            title: window[kCGWindowName as String] as? String ?? "",
+            id: window.id,
+            bundleID: BundleID(raw: NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier ?? ""),
+            title: window.title,
             role: kAXWindowRole,
-            pid: ownerPID,
-            frame: frame,
+            pid: window.ownerPID,
+            frame: window.frame,
             isResizable: isResizable(
-                processID: ownerPID,
-                title: window[kCGWindowName as String] as? String ?? "",
+                processID: window.ownerPID,
+                title: window.title,
                 role: kAXWindowRole,
-                frame: frame,
-                windowID: WindowID(raw: number)
+                frame: window.frame,
+                windowID: window.id
             ),
             isMinimized: false
         )

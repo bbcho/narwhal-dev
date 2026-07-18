@@ -145,6 +145,8 @@ enum AppDelegateText {
             return "partial(\(errors.count) errors)"
         case .permissionDenied(let message):
             return "permissionDenied(\(message))"
+        case .unavailable(let message):
+            return "unavailable(\(message))"
         }
     }
 

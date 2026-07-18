@@ -1,9 +1,63 @@
 import CoreGraphics
+import NarwhalCore
 import Testing
 @testable import NarwhalAppSupport
 
 @Suite("Window inventory filter")
 struct WindowInventoryFilterTests {
+    @Test("Valid records survive alongside malformed relevant windows")
+    func validRecordsSurviveAlongsideMalformedRelevantWindows() throws {
+        let filter = WindowInventoryFilter(currentProcessID: 42)
+        let validBounds = CGRect(x: 10, y: 20, width: 800, height: 600).dictionaryRepresentation
+        let batch = filter.read([
+            [
+                kCGWindowLayer as String: 0,
+                kCGWindowOwnerPID as String: pid_t(77),
+                kCGWindowNumber as String: CGWindowID(9),
+                kCGWindowName as String: "Editor",
+                kCGWindowBounds as String: validBounds
+            ],
+            [
+                kCGWindowLayer as String: 0,
+                kCGWindowOwnerPID as String: pid_t(88),
+                kCGWindowNumber as String: CGWindowID(10)
+            ]
+        ])
+
+        #expect(batch.records == [WindowInventoryRecord(
+            id: WindowID(raw: 9),
+            ownerPID: 77,
+            title: "Editor",
+            frame: CGRect(x: 10, y: 20, width: 800, height: 600)
+        )])
+        #expect(batch.errors == [AXWindowReadError(
+            windowID: WindowID(raw: 10),
+            pid: 88,
+            message: "missing or invalid window bounds"
+        )])
+    }
+
+    @Test("Expected excluded windows do not degrade inventory quality")
+    func expectedExcludedWindowsDoNotDegradeInventoryQuality() {
+        let filter = WindowInventoryFilter(currentProcessID: 42)
+        let batch = filter.read([
+            [kCGWindowLayer as String: 7],
+            [
+                kCGWindowLayer as String: 0,
+                kCGWindowOwnerPID as String: pid_t(42)
+            ],
+            [
+                kCGWindowLayer as String: 0,
+                kCGWindowOwnerPID as String: pid_t(77),
+                kCGWindowNumber as String: CGWindowID(11),
+                kCGWindowBounds as String: CGRect.zero.dictionaryRepresentation
+            ]
+        ])
+
+        #expect(batch.records.isEmpty)
+        #expect(batch.errors.isEmpty)
+    }
+
     @Test("Own process layer-zero windows are excluded")
     func ownProcessLayerZeroWindowsAreExcluded() {
         let filter = WindowInventoryFilter(currentProcessID: 42)

@@ -184,6 +184,7 @@ public enum AXSnapshotQuality: Equatable, Sendable {
     case complete
     case partial([AXWindowReadError])
     case permissionDenied(String)
+    case unavailable(String)
 }
 
 public struct AXWindowReadError: Equatable, Sendable {

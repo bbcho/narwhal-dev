@@ -67,7 +67,7 @@ public func reconcileEnvironment(_ snapshot: EnvironmentSnapshot, in world: Worl
     switch snapshot.axSnapshot.quality {
     case .complete:
         return reconcileCompleteEnvironment(snapshot, in: world)
-    case .partial, .permissionDenied:
+    case .partial, .permissionDenied, .unavailable:
         return World(
             displays: snapshot.displays,
             activeSpace: snapshot.activeSpace,
