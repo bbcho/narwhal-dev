@@ -183,7 +183,14 @@ private func layoutApplyClampSummary(_ clamps: [LayoutApplyClamp]) -> String {
 }
 
 private func windowConstraintsDebugDescription(_ constraints: WindowConstraints) -> String {
-    "minWidth=\(constraints.minWidth.map { String($0) } ?? "nil") minHeight=\(constraints.minHeight.map { String($0) } ?? "nil")"
+    [
+        "minWidth=\(constraints.minWidth.map { String($0) } ?? "nil")",
+        "minHeight=\(constraints.minHeight.map { String($0) } ?? "nil")",
+        "maxWidth=\(constraints.maxWidth.map { String($0) } ?? "nil")",
+        "maxHeight=\(constraints.maxHeight.map { String($0) } ?? "nil")",
+        "widthAnchor=\(constraints.widthAnchor?.rawValue ?? "nil")",
+        "heightAnchor=\(constraints.heightAnchor?.rawValue ?? "nil")"
+    ].joined(separator: " ")
 }
 
 public func recordLayoutFrameWrite(

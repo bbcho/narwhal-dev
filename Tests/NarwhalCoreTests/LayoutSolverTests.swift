@@ -134,6 +134,50 @@ struct LayoutSolverTests {
         ) == nil)
     }
 
+    @Test("Smaller edge-anchored frame is inferred as a maximum constraint")
+    func inferMaximumHeightClamp() {
+        let target = CGRect(x: 0, y: 30, width: 1504, height: 1562)
+        let actual = CGRect(x: 0, y: 132, width: 1504, height: 1455)
+
+        #expect(inferObservedConstraints(
+            target: target,
+            actual: actual,
+            tolerance: 4
+        ) == WindowConstraints(maxHeight: 1455, heightAnchor: .max))
+    }
+
+    @Test("Maximum constraints cap a leaf inside its allocated cell")
+    func maximumConstraintCapsLeafFrame() {
+        let display = DisplayID(raw: 1)
+        let window = WindowID(raw: 1)
+        let frame = CGRect(x: 0, y: 30, width: 1504, height: 1562)
+        let space = spaceState(display: display, tree: .leaf(window))
+
+        let result = solveLayout(
+            spaceState: space,
+            displayID: display,
+            frame: frame,
+            gaps: noGaps,
+            constraints: [window: WindowConstraints(maxHeight: 1455, heightAnchor: .max)]
+        )
+
+        #expect(result == .solved(
+            layout: Layout(
+                tiled: [window: CGRect(x: 0, y: 137, width: 1504, height: 1455)],
+                floatingZOrder: [],
+                hidden: []
+            ),
+            status: .adjusted([
+                LayoutAdjustment(
+                    windowID: window,
+                    requested: frame,
+                    adjusted: CGRect(x: 0, y: 137, width: 1504, height: 1455),
+                    reason: .maximumHeight(1455)
+                )
+            ])
+        ))
+    }
+
     @Test("Browser chrome adjusted frames settle without becoming hard failures")
     func browserChromeAdjustedFramesSettle() {
         let firefoxTarget = CGRect(x: 166, y: 33, width: 1346, height: 873)
@@ -236,6 +280,16 @@ struct LayoutSolverTests {
         ).get()
 
         #expect(commandNext.windowConstraints[window] == WindowConstraints(minWidth: 525, minHeight: 350))
+    }
+
+    @Test("Maximum observations merge to the stricter bound and preserve its anchor")
+    func maximumConstraintsMergeByMinimum() {
+        let existing = WindowConstraints(maxHeight: 1455, heightAnchor: .max)
+        let looser = WindowConstraints(maxHeight: 1500, heightAnchor: .min)
+        let stricter = WindowConstraints(maxHeight: 1400, heightAnchor: .center)
+
+        #expect(existing.merged(with: looser) == existing)
+        #expect(existing.merged(with: stricter) == stricter)
     }
 
     private var noGaps: Gaps {

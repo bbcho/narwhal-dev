@@ -1,27 +1,70 @@
 import CoreGraphics
 
+public enum WindowConstraintAnchor: String, Equatable, Codable, Sendable {
+    case min
+    case center
+    case max
+}
+
 public struct WindowConstraints: Equatable, Codable, Sendable {
     public let minWidth: Double?
     public let minHeight: Double?
+    public let maxWidth: Double?
+    public let maxHeight: Double?
+    public let widthAnchor: WindowConstraintAnchor?
+    public let heightAnchor: WindowConstraintAnchor?
 
-    public init(minWidth: Double? = nil, minHeight: Double? = nil) {
-        self.minWidth = WindowConstraints.validMinimum(minWidth)
-        self.minHeight = WindowConstraints.validMinimum(minHeight)
+    public init(
+        minWidth: Double? = nil,
+        minHeight: Double? = nil,
+        maxWidth: Double? = nil,
+        maxHeight: Double? = nil,
+        widthAnchor: WindowConstraintAnchor? = nil,
+        heightAnchor: WindowConstraintAnchor? = nil
+    ) {
+        let validMinWidth = WindowConstraints.validLength(minWidth)
+        let validMinHeight = WindowConstraints.validLength(minHeight)
+        let validMaxWidth = WindowConstraints.validMaximum(maxWidth, minimum: validMinWidth)
+        let validMaxHeight = WindowConstraints.validMaximum(maxHeight, minimum: validMinHeight)
+        self.minWidth = validMinWidth
+        self.minHeight = validMinHeight
+        self.maxWidth = validMaxWidth
+        self.maxHeight = validMaxHeight
+        self.widthAnchor = validMaxWidth == nil ? nil : widthAnchor ?? .center
+        self.heightAnchor = validMaxHeight == nil ? nil : heightAnchor ?? .center
     }
 
     public var isEmpty: Bool {
-        minWidth == nil && minHeight == nil
+        minWidth == nil && minHeight == nil && maxWidth == nil && maxHeight == nil
     }
 
     public func merged(with other: WindowConstraints) -> WindowConstraints {
-        WindowConstraints(
+        let widthMaximum = stricterMaximum(
+            lhs: (maxWidth, widthAnchor),
+            rhs: (other.maxWidth, other.widthAnchor)
+        )
+        let heightMaximum = stricterMaximum(
+            lhs: (maxHeight, heightAnchor),
+            rhs: (other.maxHeight, other.heightAnchor)
+        )
+        return WindowConstraints(
             minWidth: maxOptional(minWidth, other.minWidth),
-            minHeight: maxOptional(minHeight, other.minHeight)
+            minHeight: maxOptional(minHeight, other.minHeight),
+            maxWidth: widthMaximum.value,
+            maxHeight: heightMaximum.value,
+            widthAnchor: widthMaximum.anchor,
+            heightAnchor: heightMaximum.anchor
         )
     }
 
-    private static func validMinimum(_ value: Double?) -> Double? {
+    private static func validLength(_ value: Double?) -> Double? {
         guard let value, value.isFinite, value > 0 else { return nil }
+        return value
+    }
+
+    private static func validMaximum(_ value: Double?, minimum: Double?) -> Double? {
+        guard let value = validLength(value) else { return nil }
+        guard minimum.map({ value >= $0 }) ?? true else { return nil }
         return value
     }
 }
@@ -29,6 +72,8 @@ public struct WindowConstraints: Equatable, Codable, Sendable {
 public enum LayoutAdjustmentReason: Equatable, Sendable {
     case minimumWidth(Double)
     case minimumHeight(Double)
+    case maximumWidth(Double)
+    case maximumHeight(Double)
 }
 
 public struct LayoutAdjustment: Equatable, Sendable {
@@ -110,10 +155,36 @@ public func inferObservedConstraints(
     actual: CGRect,
     tolerance: Double
 ) -> WindowConstraints? {
+    guard target.narwhalIsFinitePositive, actual.narwhalIsFinitePositive else { return nil }
     let effectiveTolerance = max(0, tolerance)
     let minWidth = actual.width > target.width + effectiveTolerance ? Double(actual.width) : nil
     let minHeight = actual.height > target.height + effectiveTolerance ? Double(actual.height) : nil
-    let constraints = WindowConstraints(minWidth: minWidth, minHeight: minHeight)
+    let widthMaximum = inferredMaximum(
+        targetMin: target.minX,
+        targetMax: target.maxX,
+        targetLength: target.width,
+        actualMin: actual.minX,
+        actualMax: actual.maxX,
+        actualLength: actual.width,
+        tolerance: effectiveTolerance
+    )
+    let heightMaximum = inferredMaximum(
+        targetMin: target.minY,
+        targetMax: target.maxY,
+        targetLength: target.height,
+        actualMin: actual.minY,
+        actualMax: actual.maxY,
+        actualLength: actual.height,
+        tolerance: effectiveTolerance
+    )
+    let constraints = WindowConstraints(
+        minWidth: minWidth,
+        minHeight: minHeight,
+        maxWidth: widthMaximum?.value,
+        maxHeight: heightMaximum?.value,
+        widthAnchor: widthMaximum?.anchor,
+        heightAnchor: heightMaximum?.anchor
+    )
     return constraints.isEmpty ? nil : constraints
 }
 
@@ -152,7 +223,7 @@ private func solvedFrames(
         ) {
             return .failure(unsatisfiable)
         }
-        return .success([id: target])
+        return .success([id: applyingMaximums(constraints[id], to: target)])
     case .split(let split):
         let minimums = split.cells.map { minimumSize(of: $0.node, innerGap: innerGap, constraints: constraints) }
         if let unsatisfiable = unsatisfiableSplit(
@@ -293,6 +364,44 @@ private func unsatisfiableLeaf(
     return nil
 }
 
+private func applyingMaximums(_ constraints: WindowConstraints?, to frame: CGRect) -> CGRect {
+    guard let constraints else { return frame }
+    let width = min(frame.width, constraints.maxWidth.map { CGFloat($0) } ?? frame.width)
+    let height = min(frame.height, constraints.maxHeight.map { CGFloat($0) } ?? frame.height)
+    return CGRect(
+        x: anchoredOrigin(
+            minimum: frame.minX,
+            maximum: frame.maxX,
+            length: width,
+            anchor: constraints.widthAnchor
+        ),
+        y: anchoredOrigin(
+            minimum: frame.minY,
+            maximum: frame.maxY,
+            length: height,
+            anchor: constraints.heightAnchor
+        ),
+        width: width,
+        height: height
+    ).standardized
+}
+
+private func anchoredOrigin(
+    minimum: CGFloat,
+    maximum: CGFloat,
+    length: CGFloat,
+    anchor: WindowConstraintAnchor?
+) -> CGFloat {
+    switch anchor ?? .center {
+    case .min:
+        return minimum
+    case .center:
+        return minimum + (maximum - minimum - length) / 2
+    case .max:
+        return maximum - length
+    }
+}
+
 private struct LengthAllocationState {
     let result: [Double]
     let remaining: Set<Int>
@@ -405,7 +514,68 @@ private func adjustments(
                 reason: .minimumHeight(minHeight)
             )
         }
+        if let maxWidth = constraint.maxWidth, adjustedFrame.width != requestedFrame.width {
+            return LayoutAdjustment(
+                windowID: id,
+                requested: requestedFrame,
+                adjusted: adjustedFrame,
+                reason: .maximumWidth(maxWidth)
+            )
+        }
+        if let maxHeight = constraint.maxHeight, adjustedFrame.height != requestedFrame.height {
+            return LayoutAdjustment(
+                windowID: id,
+                requested: requestedFrame,
+                adjusted: adjustedFrame,
+                reason: .maximumHeight(maxHeight)
+            )
+        }
         return nil
+    }
+}
+
+private struct MaximumConstraint {
+    let value: Double
+    let anchor: WindowConstraintAnchor
+}
+
+private func inferredMaximum(
+    targetMin: CGFloat,
+    targetMax: CGFloat,
+    targetLength: CGFloat,
+    actualMin: CGFloat,
+    actualMax: CGFloat,
+    actualLength: CGFloat,
+    tolerance: Double
+) -> MaximumConstraint? {
+    guard Double(actualLength) + tolerance < Double(targetLength) else { return nil }
+    let edgeTolerance = max(CGFloat(tolerance), 16)
+    let candidates: [(WindowConstraintAnchor, CGFloat)] = [
+        (.min, abs(actualMin - targetMin)),
+        (.center, abs((actualMin + actualMax) / 2 - (targetMin + targetMax) / 2)),
+        (.max, abs(actualMax - targetMax))
+    ]
+    guard let closest = candidates.min(by: { $0.1 < $1.1 }), closest.1 <= edgeTolerance else {
+        return nil
+    }
+    return MaximumConstraint(value: Double(actualLength), anchor: closest.0)
+}
+
+private func stricterMaximum(
+    lhs: (value: Double?, anchor: WindowConstraintAnchor?),
+    rhs: (value: Double?, anchor: WindowConstraintAnchor?)
+) -> (value: Double?, anchor: WindowConstraintAnchor?) {
+    switch (lhs.value, rhs.value) {
+    case (.some(let left), .some(let right)) where right < left:
+        return (right, rhs.anchor)
+    case (.some(let left), .some):
+        return (left, lhs.anchor)
+    case (.some(let left), .none):
+        return (left, lhs.anchor)
+    case (.none, .some(let right)):
+        return (right, rhs.anchor)
+    case (.none, .none):
+        return (nil, nil)
     }
 }
 

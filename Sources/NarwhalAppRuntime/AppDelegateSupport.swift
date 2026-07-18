@@ -3,7 +3,14 @@ import NarwhalCore
 
 extension WindowConstraints {
     var appDebugDescription: String {
-        "minWidth=\(minWidth.map { String($0) } ?? "nil") minHeight=\(minHeight.map { String($0) } ?? "nil")"
+        [
+            "minWidth=\(minWidth.map { String($0) } ?? "nil")",
+            "minHeight=\(minHeight.map { String($0) } ?? "nil")",
+            "maxWidth=\(maxWidth.map { String($0) } ?? "nil")",
+            "maxHeight=\(maxHeight.map { String($0) } ?? "nil")",
+            "widthAnchor=\(widthAnchor?.rawValue ?? "nil")",
+            "heightAnchor=\(heightAnchor?.rawValue ?? "nil")"
+        ].joined(separator: " ")
     }
 }
 
