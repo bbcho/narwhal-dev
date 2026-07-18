@@ -365,6 +365,9 @@ public enum DefaultConfigLua {
         guard value.isFinite else {
             preconditionFailure("Default config contains non-finite number")
         }
-        return value.rounded() == value ? String(Int(value)) : String(value)
+        if value.rounded() == value, let integer = Int(exactly: value) {
+            return String(integer)
+        }
+        return String(value)
     }
 }

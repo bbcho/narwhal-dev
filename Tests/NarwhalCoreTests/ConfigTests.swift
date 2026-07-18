@@ -296,6 +296,80 @@ struct ConfigTests {
         #expect(HUDConfig.clampedDurationMillis(Int.max) == HUDConfig.maximumDurationMillis)
     }
 
+    @Test("Lua config parser caps gap and border geometry")
+    func luaConfigParserCapsGapAndBorderGeometry() throws {
+        var maximumRoot = defaultLuaRoot()
+        maximumRoot["gaps"] = .table([
+            "inner": .number(Gaps.maximumLength),
+            "outer": .table([
+                "top": .number(Gaps.maximumLength),
+                "left": .number(Gaps.maximumLength),
+                "bottom": .number(Gaps.maximumLength),
+                "right": .number(Gaps.maximumLength)
+            ])
+        ])
+        maximumRoot["border"] = .table([
+            "width": .number(BorderConfig.maximumWidth),
+            "color": .string("#4DA3FF")
+        ])
+        let maximumConfig = try parseConfig(LuaConfigData(root: maximumRoot)).get()
+        #expect(maximumConfig.gaps.inner == Gaps.maximumLength)
+        #expect(maximumConfig.border.width == BorderConfig.maximumWidth)
+
+        var innerRoot = defaultLuaRoot()
+        innerRoot["gaps"] = .table([
+            "inner": .number(Gaps.maximumLength + 1),
+            "outer": .table(["top": .number(0), "left": .number(0), "bottom": .number(0), "right": .number(0)])
+        ])
+        #expect(parseConfig(LuaConfigData(root: innerRoot)) == .failure(.invalidValue(
+            key: "gaps.inner",
+            reason: "number must be <= \(Gaps.maximumLength)"
+        )))
+
+        var outerRoot = defaultLuaRoot()
+        outerRoot["gaps"] = .table([
+            "inner": .number(0),
+            "outer": .table([
+                "top": .number(Gaps.maximumLength + 1),
+                "left": .number(0),
+                "bottom": .number(0),
+                "right": .number(0)
+            ])
+        ])
+        #expect(parseConfig(LuaConfigData(root: outerRoot)) == .failure(.invalidValue(
+            key: "gaps.outer.top",
+            reason: "number must be <= \(Gaps.maximumLength)"
+        )))
+
+        var borderRoot = defaultLuaRoot()
+        borderRoot["border"] = .table([
+            "width": .number(BorderConfig.maximumWidth + 1),
+            "color": .string("#4DA3FF")
+        ])
+        #expect(parseConfig(LuaConfigData(root: borderRoot)) == .failure(.invalidValue(
+            key: "border.width",
+            reason: "number must be <= \(BorderConfig.maximumWidth)"
+        )))
+    }
+
+    @Test("Lua renderer does not trap on large finite numbers")
+    func luaRendererHandlesLargeFiniteNumbers() {
+        let config = Config(
+            keymap: [],
+            rules: [],
+            zones: [],
+            gaps: Gaps(
+                inner: Double.greatestFiniteMagnitude,
+                outer: Insets(top: 0, left: 0, bottom: 0, right: 0)
+            ),
+            border: .default,
+            hud: .default,
+            dragModifier: []
+        )
+
+        #expect(DefaultConfigLua.render(config).contains(String(Double.greatestFiniteMagnitude)))
+    }
+
     @Test("Lua config parser rejects duplicate hotkeys")
     func luaConfigParserRejectsDuplicateHotkeys() {
         var root = defaultLuaRoot()

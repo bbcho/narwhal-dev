@@ -243,12 +243,17 @@ private struct ConfigParser {
         let gapTable = try table(value, key: "gaps")
         let outer = try table(required("outer", in: gapTable, path: "gaps"), key: "gaps.outer")
         return Gaps(
-            inner: try nonNegativeNumber(required("inner", in: gapTable, path: "gaps"), key: "gaps.inner"),
+            inner: try boundedNumber(
+                required("inner", in: gapTable, path: "gaps"),
+                key: "gaps.inner",
+                min: 0,
+                max: Gaps.maximumLength
+            ),
             outer: Insets(
-                top: try nonNegativeNumber(required("top", in: outer, path: "gaps.outer"), key: "gaps.outer.top"),
-                left: try nonNegativeNumber(required("left", in: outer, path: "gaps.outer"), key: "gaps.outer.left"),
-                bottom: try nonNegativeNumber(required("bottom", in: outer, path: "gaps.outer"), key: "gaps.outer.bottom"),
-                right: try nonNegativeNumber(required("right", in: outer, path: "gaps.outer"), key: "gaps.outer.right")
+                top: try gapLength(required("top", in: outer, path: "gaps.outer"), key: "gaps.outer.top"),
+                left: try gapLength(required("left", in: outer, path: "gaps.outer"), key: "gaps.outer.left"),
+                bottom: try gapLength(required("bottom", in: outer, path: "gaps.outer"), key: "gaps.outer.bottom"),
+                right: try gapLength(required("right", in: outer, path: "gaps.outer"), key: "gaps.outer.right")
             )
         )
     }
@@ -260,7 +265,12 @@ private struct ConfigParser {
             throw ConfigError.invalidValue(key: "border.color", reason: "expected #RRGGBB")
         }
         return BorderConfig(
-            width: try nonNegativeNumber(required("width", in: table, path: "border"), key: "border.width"),
+            width: try boundedNumber(
+                required("width", in: table, path: "border"),
+                key: "border.width",
+                min: 0,
+                max: BorderConfig.maximumWidth
+            ),
             colorHex: color
         )
     }
@@ -393,8 +403,8 @@ private struct ConfigParser {
         return bool
     }
 
-    private func nonNegativeNumber(_ value: LuaValue, key: String) throws -> Double {
-        try boundedNumber(value, key: key, min: 0, max: nil)
+    private func gapLength(_ value: LuaValue, key: String) throws -> Double {
+        try boundedNumber(value, key: key, min: 0, max: Gaps.maximumLength)
     }
 
     private func finiteNumber(_ value: LuaValue, key: String) throws -> Double {

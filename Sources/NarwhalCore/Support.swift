@@ -15,6 +15,8 @@ public struct Insets: Equatable, Codable, Sendable {
 }
 
 public struct Gaps: Equatable, Codable, Sendable {
+    public static let maximumLength = 512.0
+
     public let inner: Double
     public let outer: Insets
 
@@ -48,6 +50,8 @@ public struct KeySpec: Equatable, Codable, Sendable {
 }
 
 public struct BorderConfig: Equatable, Codable, Sendable {
+    public static let maximumWidth = 32.0
+
     public let width: Double
     public let colorHex: String
 
