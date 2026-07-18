@@ -5,7 +5,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 tmp_root="/private/tmp/narwhal-hot-reload-smoke"
 config="$tmp_root/init.lua"
-log_path="/tmp/narwhal.log"
+log_path="$tmp_root/narwhal.log"
+export NARWHAL_LOG_PATH="$log_path"
 app_pid=""
 
 cleanup() {
