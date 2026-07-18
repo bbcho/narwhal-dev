@@ -45,36 +45,21 @@ struct RealAppWindowVerificationTests {
         try expectPassed(await RealAppWindowVerification.verifyRealAppCommandWorkflows())
     }
 
-    @Test(
-        "Chrome and Firefox complete real manual tile resize",
-        .enabled("requires landscape display at least 1800x900") {
-            await RealAppWindowVerification.hasManualResizeVerificationDisplay()
-        }
-    )
+    @Test("Chrome and Firefox complete real manual tile resize")
     func chromeAndFirefoxCompleteRealManualTileResize() async throws {
         _ = NSApplication.shared
         VerifierAppDelegate.installIfNeeded()
         try expectPassed(await RealAppWindowVerification.verifyChromeFirefoxManualTileResize())
     }
 
-    @Test(
-        "Three Firefox windows stack vertically",
-        .enabled("requires landscape display at least 1800x900") {
-            await RealAppWindowVerification.hasManualResizeVerificationDisplay()
-        }
-    )
+    @Test("Three Firefox windows stack vertically")
     func threeFirefoxWindowsStackVertically() async throws {
         _ = NSApplication.shared
         VerifierAppDelegate.installIfNeeded()
         try expectPassed(await RealAppWindowVerification.verifyThreeFirefoxVerticalStack())
     }
 
-    @Test(
-        "Three Chrome windows stack vertically",
-        .enabled("requires landscape display at least 1800x900") {
-            await RealAppWindowVerification.hasManualResizeVerificationDisplay()
-        }
-    )
+    @Test("Three Chrome windows stack vertically")
     func threeChromeWindowsStackVertically() async throws {
         _ = NSApplication.shared
         VerifierAppDelegate.installIfNeeded()
@@ -106,10 +91,6 @@ enum RealAppWindowVerification {
 
     static func verifySystemSettings() -> (passed: Bool, message: String) {
         verifyApp(systemSettingsSpec())
-    }
-
-    static func hasManualResizeVerificationDisplay() -> Bool {
-        (try? manualResizeVerificationDisplay(DisplayClient().currentDisplays())) != nil
     }
 
     static func verifyRealAppCommandWorkflows() async -> (passed: Bool, message: String) {
@@ -274,7 +255,7 @@ enum RealAppWindowVerification {
     private static func launchChromeVerificationWindow(token: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        let url = "https://example.com/?narwhal-real-app=chrome-\(token)"
+        let url = browserVerificationURL(browser: "Chrome", token: token)
         process.arguments = [
             "-n",
             "-a", "Google Chrome",
@@ -288,6 +269,27 @@ enum RealAppWindowVerification {
             throw RealAppWindowVerifierFailure("Google Chrome new-window launch failed with status \(process.terminationStatus)")
         }
         RunLoop.current.run(until: Date().addingTimeInterval(0.45))
+    }
+
+    private static func launchFirefoxVerificationWindow(token: String) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/Applications/Firefox.app/Contents/MacOS/firefox")
+        process.arguments = [
+            "--new-window",
+            browserVerificationURL(browser: "Firefox", token: token)
+        ]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw RealAppWindowVerifierFailure("Firefox new-window launch failed with status \(process.terminationStatus)")
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.45))
+    }
+
+    private static func browserVerificationURL(browser: String, token: String) -> String {
+        let title = "Narwhal \(browser) Verifier \(token)-\(UUID().uuidString)"
+        let html = "<!doctype html><meta charset=utf-8><title>\(title)</title><main>\(title)</main>"
+        return "data:text/html;base64,\(Data(html.utf8).base64EncodedString())"
     }
 
     private static func verifyApp(_ spec: RealAppSpec) -> (passed: Bool, message: String) {
@@ -1197,6 +1199,11 @@ enum RealAppWindowVerification {
         if let exact = candidates.first(where: { $0.id == original.metadata.id }) {
             return exact
         }
+        if original.createdByVerifier {
+            throw RealAppWindowVerifierFailure(
+                "\(original.spec.name) verifier-created window \(original.metadata.id.description) disappeared from the AX snapshot"
+            )
+        }
         if let preferred = candidates.first(where: { candidate in
             original.spec.preferredTitleSubstrings.contains { token in
                 candidate.title.localizedCaseInsensitiveContains(token)
@@ -1389,6 +1396,10 @@ enum RealAppWindowVerification {
             try launchChromeVerificationWindow(token: token)
             return
         }
+        if spec.name == "Firefox" {
+            try launchFirefoxVerificationWindow(token: token)
+            return
+        }
         let process = Process()
         if let launchExecutablePath = spec.launchExecutablePath {
             process.executableURL = URL(fileURLWithPath: launchExecutablePath)
@@ -1425,6 +1436,9 @@ enum RealAppWindowVerification {
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             throw RealAppWindowVerifierFailure("Terminal verification window launch failed with status \(process.terminationStatus)")
+        }
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal") {
+            app.activate(options: [.activateAllWindows])
         }
         RunLoop.current.run(until: Date().addingTimeInterval(0.45))
     }
@@ -1791,7 +1805,7 @@ private func chromeSpec() -> RealAppSpec {
         required: false,
         pattern: .browser,
         workflowDirections: [.up, .down],
-        preferredTitleSubstrings: ["Example Domain"]
+        preferredTitleSubstrings: ["Narwhal Chrome Verifier"]
     )
 }
 
@@ -1806,7 +1820,7 @@ private func firefoxSpec() -> RealAppSpec {
         required: false,
         pattern: .browser,
         workflowDirections: Direction.allCases,
-        preferredTitleSubstrings: ["Example Domain"]
+        preferredTitleSubstrings: ["Narwhal Firefox Verifier"]
     )
 }
 

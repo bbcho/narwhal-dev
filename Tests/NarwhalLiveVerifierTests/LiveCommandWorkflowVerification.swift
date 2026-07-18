@@ -46,7 +46,7 @@ enum LiveCommandWorkflowVerification {
         run: () throws -> String
     ) -> (passed: Bool, message: String) {
         if isSystemLocked() {
-            return (true, "skipped: system locked / loginwindow frontmost")
+            return (false, "live command workflow verification requires an unlocked user session")
         }
         do {
             _ = NSApplication.shared
@@ -1553,6 +1553,7 @@ private struct LiveCommandWorkflowCoverage {
             "maximizeReset",
             "undoLayout",
             "manual tile resize",
+            "move display",
             "tiled borders",
             "focus border"
         ])

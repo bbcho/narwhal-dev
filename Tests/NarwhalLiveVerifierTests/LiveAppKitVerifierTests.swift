@@ -55,13 +55,7 @@ struct LiveAppKitVerifierTests {
 
     @Test("Live multi-display workflow")
     func liveMultiDisplayWorkflow() throws {
-        let result = LiveMultiDisplayVerification.verifyDisplayScopedPushAndCycle()
-        if !result.passed,
-           result.message.contains("requires at least two displays")
-            || result.message.contains("requires two usable displays") {
-            return
-        }
-        try expectPassed(result)
+        try expectPassed(LiveMultiDisplayVerification.verifyDisplayScopedPushAndCycle())
     }
 
     @Test("Focused-unavailable polling")
@@ -115,8 +109,8 @@ struct LiveAppKitVerifierTests {
 /// user windows to AX (locked screen, screen saver, fast user switch). The
 /// live verifier tests query AX state and create NSWindows that AX must be
 /// able to see, so they have no chance of succeeding in this state. The
-/// verifiers call this and gracefully skip when true rather than fail with
-/// the cryptic "focused AX window could not be matched to a CGWindowID".
+/// verifiers call this and fail with a prerequisite message rather than the
+/// cryptic "focused AX window could not be matched to a CGWindowID".
 @MainActor
 func isSystemLocked() -> Bool {
     guard let frontmost = NSWorkspace.shared.frontmostApplication else { return true }

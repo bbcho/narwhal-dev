@@ -10,7 +10,7 @@ import NarwhalCore
 enum LiveSpaceSwitchFocusBorderVerification {
     static func verifyFocusBorderMovesAcrossRealSpaceSwitch() -> (passed: Bool, message: String) {
         if isSystemLocked() {
-            return (true, "skipped: system locked / loginwindow frontmost")
+            return (false, "live Space-switch focus border verification requires an unlocked user session")
         }
         let spaceClient = SpaceClient()
         do {

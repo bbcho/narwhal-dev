@@ -40,7 +40,7 @@ final class VerifierAppDelegate: NSObject, NSApplicationDelegate {
 enum LiveFocusWorkflowVerification {
     static func verifyCycleMouseAndBorderWorkflow() -> (passed: Bool, message: String) {
         if isSystemLocked() {
-            return (true, "skipped: system locked / loginwindow frontmost")
+            return (false, "live focus workflow verification requires an unlocked user session")
         }
         do {
             let displays = DisplayClient().currentDisplays()
@@ -401,6 +401,19 @@ enum LiveFocusWorkflowVerification {
         activateVerifierApplication()
         window.window.makeKeyAndOrderFront(nil)
         window.window.orderFrontRegardless()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.18))
+        if (try? focusedSnapshot(using: axClient, expected: window, context: context)) != nil {
+            return
+        }
+
+        switch axClient.focusWindow(window.metadata) {
+        case .success:
+            break
+        case .failure(let error):
+            throw LiveFocusWorkflowFailure(
+                "\(context) could not focus verifier window \(window.id.description): \(error.description)"
+            )
+        }
         RunLoop.current.run(until: Date().addingTimeInterval(0.18))
         _ = try focusedSnapshot(using: axClient, expected: window, context: context)
     }

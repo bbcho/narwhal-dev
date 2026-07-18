@@ -386,7 +386,7 @@ enum LiveMultiDisplayVerification {
             window: window,
             metadata: WindowMetadata(
                 id: id,
-                bundleID: BundleID(raw: "dev.narwhal.live-multi-display-verifier"),
+                bundleID: BundleID(raw: "dev.narwhal.live-multi-display-verifier.\(id.raw)"),
                 title: title,
                 role: "AXWindow",
                 pid: getpid(),
