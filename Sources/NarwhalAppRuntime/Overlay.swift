@@ -764,6 +764,9 @@ private final class CommandOverlayView: NSView {
         layer?.backgroundColor = NSColor.black.withAlphaComponent(0.78).cgColor
         layer?.cornerRadius = 16
         layer?.masksToBounds = true
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(CommandOverlayLayout.titleText)
         build(columns: columns, keyColumnWidth: keyColumnWidth, commandColumnWidth: commandColumnWidth)
     }
 
@@ -823,7 +826,8 @@ private final class CommandOverlayView: NSView {
             documentBounds: rowsDocumentView.bounds,
             columnsBounds: columnsView.bounds,
             columnFrames: columnsView.debugColumnFrames(in: columnsView.bounds),
-            separatorFrame: columnsView.debugSeparatorFrame(in: columnsView.bounds)
+            separatorFrame: columnsView.debugSeparatorFrame(in: columnsView.bounds),
+            rowSnapshots: columnsView.debugRowSnapshots()
         )
     }
 #endif
@@ -880,7 +884,7 @@ private final class CommandOverlayView: NSView {
         let stack = NSStackView(views: [title, subtitle, rowsFrame, scrollHint])
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
-        stack.alignment = .width
+        stack.alignment = .leading
         stack.spacing = CommandOverlayLayout.stackSpacing
         addSubview(stack)
 
@@ -889,7 +893,10 @@ private final class CommandOverlayView: NSView {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -CommandOverlayLayout.horizontalPadding),
             stack.topAnchor.constraint(equalTo: topAnchor, constant: CommandOverlayLayout.topPadding),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -CommandOverlayLayout.bottomPadding),
+            title.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            subtitle.widthAnchor.constraint(equalTo: stack.widthAnchor),
             rowsFrame.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            scrollHint.widthAnchor.constraint(equalTo: stack.widthAnchor),
             scrollBarView.widthAnchor.constraint(equalToConstant: CommandOverlayLayout.scrollBarWidth)
         ]
         NSLayoutConstraint.activate(constraints)
@@ -953,6 +960,18 @@ private struct CommandOverlayDebugLayoutSnapshot {
     let columnsBounds: CGRect
     let columnFrames: [CGRect]
     let separatorFrame: CGRect?
+    let rowSnapshots: [CommandOverlayDebugRowSnapshot]
+}
+
+private struct CommandOverlayDebugRowSnapshot {
+    let key: String
+    let command: String
+    let detail: String
+    let bounds: CGRect
+    let keyFrame: CGRect
+    let commandFrame: CGRect
+    let detailFrame: CGRect
+    let accessibilityLabel: String?
 }
 #endif
 
@@ -1017,7 +1036,18 @@ private final class CommandOverlayScrollBarView: NSView {
 
 @MainActor
 private final class CommandSectionView: NSView {
+    private let rowViews: [CommandRowView]
+
     init(section: CommandOverlaySection, keyColumnWidth: CGFloat, commandColumnWidth: CGFloat) {
+        rowViews = section.rows.map { row in
+            CommandRowView(
+                key: row.key,
+                command: row.command,
+                detail: row.detail,
+                keyColumnWidth: keyColumnWidth,
+                commandColumnWidth: commandColumnWidth
+            )
+        }
         super.init(frame: .zero)
 
         let header = NSTextField(labelWithString: section.title)
@@ -1036,25 +1066,16 @@ private final class CommandSectionView: NSView {
         headerStack.alignment = .leading
         headerStack.spacing = 2
 
-        let rows = section.rows.map { row in
-            CommandRowView(
-                key: row.key,
-                command: row.command,
-                detail: row.detail,
-                keyColumnWidth: keyColumnWidth,
-                commandColumnWidth: commandColumnWidth
-            )
-        }
-        let rowStack = NSStackView(views: rows)
+        let rowStack = NSStackView(views: rowViews)
         rowStack.translatesAutoresizingMaskIntoConstraints = false
         rowStack.orientation = .vertical
-        rowStack.alignment = .width
+        rowStack.alignment = .leading
         rowStack.spacing = CommandOverlayLayout.rowSpacing
 
         let stack = NSStackView(views: [headerStack, rowStack])
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
-        stack.alignment = .width
+        stack.alignment = .leading
         stack.spacing = CommandOverlayLayout.sectionHeaderSpacing
         addSubview(stack)
 
@@ -1063,10 +1084,14 @@ private final class CommandSectionView: NSView {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            header.widthAnchor.constraint(lessThanOrEqualTo: headerStack.widthAnchor),
+            purpose.widthAnchor.constraint(equalTo: headerStack.widthAnchor),
             headerStack.leadingAnchor.constraint(equalTo: leadingAnchor),
             headerStack.trailingAnchor.constraint(equalTo: trailingAnchor),
             rowStack.leadingAnchor.constraint(equalTo: leadingAnchor),
             rowStack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.widthAnchor.constraint(equalTo: widthAnchor),
+            rowStack.widthAnchor.constraint(equalTo: widthAnchor),
             heightAnchor.constraint(equalToConstant: CommandOverlayLayout.sectionHeight(rowCount: section.rows.count))
         ])
     }
@@ -1074,37 +1099,54 @@ private final class CommandSectionView: NSView {
     required init?(coder: NSCoder) {
         nil
     }
+
+#if NARWHAL_ENABLE_VERIFIERS
+    func debugRowSnapshots() -> [CommandOverlayDebugRowSnapshot] {
+        rowViews.map { $0.debugSnapshot() }
+    }
+#endif
 }
 
 @MainActor
 private final class CommandRowView: NSView {
+    private let keyLabel: NSTextField
+    private let commandLabel: NSTextField
+    private let detailLabel: NSTextField
+
     init(key: String, command: String, detail: String, keyColumnWidth: CGFloat, commandColumnWidth: CGFloat) {
+        keyLabel = NSTextField(labelWithString: key)
+        commandLabel = NSTextField(labelWithString: command)
+        detailLabel = NSTextField(labelWithString: detail)
         super.init(frame: .zero)
 
-        let keyLabel = NSTextField(labelWithString: key)
         keyLabel.font = CommandOverlayLayout.keyFont
         keyLabel.textColor = .white
         keyLabel.alignment = .left
         keyLabel.lineBreakMode = .byTruncatingMiddle
         keyLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let commandLabel = NSTextField(labelWithString: command)
         commandLabel.font = CommandOverlayLayout.commandFont
         commandLabel.textColor = NSColor.white.withAlphaComponent(0.90)
         commandLabel.lineBreakMode = .byTruncatingTail
         commandLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
-        let detailLabel = NSTextField(labelWithString: detail)
         detailLabel.font = CommandOverlayLayout.detailFont
         detailLabel.textColor = NSColor.white.withAlphaComponent(0.68)
         detailLabel.lineBreakMode = .byTruncatingTail
         detailLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         detailLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        keyLabel.setAccessibilityElement(false)
+        commandLabel.setAccessibilityElement(false)
+        detailLabel.setAccessibilityElement(false)
+
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(spokenAccessibilityText("\(key): \(command). \(detail)"))
 
         let meaningStack = NSStackView(views: [commandLabel, detailLabel])
         meaningStack.translatesAutoresizingMaskIntoConstraints = false
         meaningStack.orientation = .vertical
-        meaningStack.alignment = .width
+        meaningStack.alignment = .leading
         meaningStack.spacing = 2
 
         let stack = NSStackView(views: [keyLabel, meaningStack])
@@ -1117,6 +1159,8 @@ private final class CommandRowView: NSView {
         NSLayoutConstraint.activate([
             keyLabel.widthAnchor.constraint(equalToConstant: keyColumnWidth),
             meaningStack.widthAnchor.constraint(equalToConstant: commandColumnWidth),
+            commandLabel.widthAnchor.constraint(equalTo: meaningStack.widthAnchor),
+            detailLabel.widthAnchor.constraint(equalTo: meaningStack.widthAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
@@ -1128,6 +1172,22 @@ private final class CommandRowView: NSView {
     required init?(coder: NSCoder) {
         nil
     }
+
+#if NARWHAL_ENABLE_VERIFIERS
+    func debugSnapshot() -> CommandOverlayDebugRowSnapshot {
+        layoutSubtreeIfNeeded()
+        return CommandOverlayDebugRowSnapshot(
+            key: keyLabel.stringValue,
+            command: commandLabel.stringValue,
+            detail: detailLabel.stringValue,
+            bounds: bounds,
+            keyFrame: convert(keyLabel.bounds, from: keyLabel),
+            commandFrame: convert(commandLabel.bounds, from: commandLabel),
+            detailFrame: convert(detailLabel.bounds, from: detailLabel),
+            accessibilityLabel: accessibilityLabel()
+        )
+    }
+#endif
 }
 
 @MainActor
@@ -1191,6 +1251,10 @@ private final class CommandColumnsView: NSView {
     func debugSeparatorFrame(in bounds: CGRect) -> CGRect? {
         CommandOverlayLayout.columnFrames(in: bounds, columnCount: columns.count).separator
     }
+
+    func debugRowSnapshots() -> [CommandOverlayDebugRowSnapshot] {
+        columnViews.flatMap { $0.debugRowSnapshots() }
+    }
 #endif
 }
 
@@ -1227,6 +1291,12 @@ private final class CommandColumnView: NSView {
             y += height + CommandOverlayLayout.sectionSpacing
         }
     }
+
+#if NARWHAL_ENABLE_VERIFIERS
+    func debugRowSnapshots() -> [CommandOverlayDebugRowSnapshot] {
+        sectionViews.flatMap { $0.debugRowSnapshots() }
+    }
+#endif
 }
 
 private struct CommandOverlayMetrics {
@@ -1365,7 +1435,7 @@ private enum CommandOverlayLayout {
     static let rowHeight: CGFloat = 42
     static let sectionHeaderHeight: CGFloat = 34
     static let minimumColumnWidth: CGFloat = 430
-    static let minimumKeyColumnWidth: CGFloat = 120
+    static let minimumKeyColumnWidth: CGFloat = 96
     static let maximumKeyColumnWidth: CGFloat = 220
     static let minimumCommandColumnWidth: CGFloat = 260
     static let maximumCommandColumnWidth: CGFloat = 580
@@ -1635,6 +1705,9 @@ enum CommandOverlayVerification {
                 "command overlay scrollbar is not visible on first layout: hidden=\(snapshot.scrollBarHidden) scrollable=\(snapshot.scrollBarScrollable) frame=\(snapshot.scrollBarFrame.debugDescription) rowsHeight=\(metrics.rowsHeight) viewHeight=\(viewSize.height) viewport=\(snapshot.viewportBounds.debugDescription) document=\(snapshot.documentBounds.debugDescription)"
             )
         }
+        if let failure = rowLayoutFailure(snapshot.rowSnapshots, expectedCount: rows.count) {
+            return (false, "regular command overlay row layout failed: \(failure)")
+        }
 
         let compactAvailableSize = CGSize(width: 760, height: 760)
         let regularWidthOnCompactScreen = CommandOverlayLayout.windowWidth(
@@ -1688,11 +1761,52 @@ enum CommandOverlayVerification {
                 "compact command overlay scrollbar is missing or overlapping: hidden=\(compactSnapshot.scrollBarHidden) scrollable=\(compactSnapshot.scrollBarScrollable) scrollView=\(compactSnapshot.scrollViewFrame.debugDescription) scrollBar=\(compactSnapshot.scrollBarFrame.debugDescription)"
             )
         }
+        if let failure = rowLayoutFailure(compactSnapshot.rowSnapshots, expectedCount: rows.count) {
+            return (false, "compact command overlay row layout failed: \(failure)")
+        }
 
         return (
             true,
             "command overlay regular and compact layouts verified: regularViewport=\(snapshot.viewportBounds.debugDescription) compactViewport=\(compactSnapshot.viewportBounds.debugDescription) compactColumn=\(compactColumn.debugDescription)"
         )
+    }
+
+    private static func rowLayoutFailure(
+        _ snapshots: [CommandOverlayDebugRowSnapshot],
+        expectedCount: Int
+    ) -> String? {
+        guard snapshots.count == expectedCount else {
+            return "expected \(expectedCount) rows, got \(snapshots.count)"
+        }
+        for row in snapshots {
+            let keyWidth = CommandOverlayLayout.measure(row.key, font: CommandOverlayLayout.keyFont).width
+            let commandWidth = CommandOverlayLayout.measure(row.command, font: CommandOverlayLayout.commandFont).width
+            let detailWidth = CommandOverlayLayout.measure(row.detail, font: CommandOverlayLayout.detailFont).width
+            if row.keyFrame.width + 1 < keyWidth {
+                return "key text clips for \(row.key): frame=\(row.keyFrame.debugDescription) required=\(keyWidth)"
+            }
+            if row.commandFrame.width + 1 < commandWidth {
+                return "command text clips for \(row.command): frame=\(row.commandFrame.debugDescription) required=\(commandWidth)"
+            }
+            if row.detailFrame.width + 1 < detailWidth {
+                return "detail text clips for \(row.command): frame=\(row.detailFrame.debugDescription) required=\(detailWidth)"
+            }
+            let visibleFrames = [row.keyFrame, row.commandFrame, row.detailFrame]
+            let fieldDrawingInsetTolerance: CGFloat = 2.5
+            if visibleFrames.contains(where: {
+                $0.minX < row.bounds.minX - fieldDrawingInsetTolerance
+                    || $0.maxX > row.bounds.maxX + fieldDrawingInsetTolerance
+                    || $0.minY < row.bounds.minY - fieldDrawingInsetTolerance
+                    || $0.maxY > row.bounds.maxY + fieldDrawingInsetTolerance
+            }) {
+                return "row content escapes bounds for \(row.command): bounds=\(row.bounds.debugDescription) frames=\(visibleFrames.map(\.debugDescription))"
+            }
+            let expectedAccessibilityLabel = spokenAccessibilityText("\(row.key): \(row.command). \(row.detail)")
+            if row.accessibilityLabel != expectedAccessibilityLabel {
+                return "row accessibility label mismatch for \(row.command): \(String(describing: row.accessibilityLabel))"
+            }
+        }
+        return nil
     }
 
     private static func debugSnapshot(
@@ -1772,6 +1886,9 @@ enum VisualArtifactVerification {
             guard hudArtifacts.allSatisfy({ $0.isNonBlank && $0.hasReadableRange }) else {
                 return (false, "HUD artifacts failed pixel rules: \(hudArtifacts.map(\.description).joined(separator: "; "))")
             }
+            if let failure = hudAccessibilityOrContrastFailure() {
+                return (false, "HUD accessibility or contrast failed: \(failure)")
+            }
 
             return (
                 true,
@@ -1780,6 +1897,32 @@ enum VisualArtifactVerification {
         } catch {
             return (false, "visual artifact verification failed: \(String(describing: error))")
         }
+    }
+
+    private static func hudAccessibilityOrContrastFailure() -> String? {
+        let cases: [(String, OverlayTone)] = [
+            ("Command completed", .info),
+            ("Layout saved", .success),
+            ("Window minimum reached", .warning),
+            ("Frame write failed", .error)
+        ]
+        for (message, tone) in cases {
+            let view = HUDView(message: message, tone: tone)
+            view.frame = CGRect(x: 0, y: 0, width: 360, height: HUDView.height)
+            view.layoutSubtreeIfNeeded()
+            let snapshot = view.debugSnapshot()
+            guard snapshot.accessibilityLabel == message else {
+                return "\(tone) accessibility label was \(String(describing: snapshot.accessibilityLabel))"
+            }
+            guard snapshot.contrastRatio >= 4.5 else {
+                return "\(tone) contrast was \(String(format: "%.2f", snapshot.contrastRatio)):1"
+            }
+            let requiredWidth = CommandOverlayLayout.measure(message, font: HUDView.font).width
+            guard snapshot.messageFrame.width + 1 >= requiredWidth else {
+                return "\(tone) message clipped: frame=\(snapshot.messageFrame.debugDescription) required=\(requiredWidth)"
+            }
+        }
+        return nil
     }
 
     private static func renderCommandOverlayArtifact(
@@ -2617,22 +2760,31 @@ enum FocusBorderVerification {
 
 private func describe(_ key: KeySpec) -> String {
     let modifiers = [
-        key.modifiers.contains(.control) ? "control" : nil,
-        key.modifiers.contains(.option) ? "option" : nil,
-        key.modifiers.contains(.shift) ? "shift" : nil,
-        key.modifiers.contains(.command) ? "command" : nil
+        key.modifiers.contains(.control) ? "⌃" : nil,
+        key.modifiers.contains(.option) ? "⌥" : nil,
+        key.modifiers.contains(.shift) ? "⇧" : nil,
+        key.modifiers.contains(.command) ? "⌘" : nil
     ].compactMap { $0 }
-    return (modifiers + [key.key.uppercased()]).joined(separator: "-")
+    return modifiers.joined() + key.key.uppercased()
 }
 
 private func describe(_ modifiers: ModifierSet) -> String {
     let values = [
-        modifiers.contains(.control) ? "control" : nil,
-        modifiers.contains(.option) ? "option" : nil,
-        modifiers.contains(.shift) ? "shift" : nil,
-        modifiers.contains(.command) ? "command" : nil
+        modifiers.contains(.control) ? "⌃" : nil,
+        modifiers.contains(.option) ? "⌥" : nil,
+        modifiers.contains(.shift) ? "⇧" : nil,
+        modifiers.contains(.command) ? "⌘" : nil
     ].compactMap { $0 }
-    return values.isEmpty ? "drag" : values.joined(separator: "-")
+    return values.isEmpty ? "" : values.joined()
+}
+
+private func spokenAccessibilityText(_ text: String) -> String {
+    text
+        .replacingOccurrences(of: "⌃", with: "control ")
+        .replacingOccurrences(of: "⌥", with: "option ")
+        .replacingOccurrences(of: "⇧", with: "shift ")
+        .replacingOccurrences(of: "⌘", with: "command ")
+        .replacingOccurrences(of: "  ", with: " ")
 }
 
 private func describe(_ action: HotkeyAction) -> String {
@@ -2743,7 +2895,7 @@ private func commandOverlaySections(
 
 private func commandOverlayDragSection(modifier: ModifierSet, zones: [Zone]) -> CommandOverlaySection? {
     guard !zones.isEmpty else { return nil }
-    let gesture = modifier.isEmpty ? "drag" : "\(describe(modifier))-drag"
+    let gesture = modifier.isEmpty ? "drag" : "\(describe(modifier)) drag"
     let startDetail = modifier.isEmpty
         ? "Drag a focused window title bar, then release on a highlighted zone"
         : "Hold \(describe(modifier)) before mouse-down, drag the focused window, then release on a highlighted zone"
@@ -2769,12 +2921,12 @@ private func commandOverlayControlSection() -> CommandOverlaySection {
         purpose: CommandOverlayCategory.overlay.purpose,
         rows: [
             CommandOverlayRow(
-                key: "control-option-J",
+                key: "⌃⌥J",
                 command: "Scroll down",
                 detail: "Scroll this overlay down without moving window focus"
             ),
             CommandOverlayRow(
-                key: "control-option-K",
+                key: "⌃⌥K",
                 command: "Scroll up",
                 detail: "Scroll this overlay up without moving window focus"
             )

@@ -5,8 +5,10 @@ final class HUDView: NSView {
     static let font = NSFont.systemFont(ofSize: 13, weight: .medium)
     static let horizontalPadding: CGFloat = 18
     static let height: CGFloat = 38
+    private let messageLabel: NSTextField
 
     init(message: String, tone: OverlayTone) {
+        messageLabel = NSTextField(labelWithString: message)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = tone.background.cgColor
@@ -15,12 +17,17 @@ final class HUDView: NSView {
         layer?.cornerRadius = 8
         layer?.masksToBounds = true
 
-        let label = NSTextField(labelWithString: message)
+        let label = messageLabel
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = Self.font
         label.textColor = .white
         label.lineBreakMode = .byTruncatingTail
+        label.setAccessibilityElement(false)
         addSubview(label)
+
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel(message)
 
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.horizontalPadding),
@@ -32,7 +39,51 @@ final class HUDView: NSView {
     required init?(coder: NSCoder) {
         nil
     }
+
+#if NARWHAL_ENABLE_VERIFIERS
+    func debugSnapshot() -> HUDDebugSnapshot {
+        layoutSubtreeIfNeeded()
+        return HUDDebugSnapshot(
+            message: messageLabel.stringValue,
+            messageFrame: convert(messageLabel.bounds, from: messageLabel),
+            accessibilityLabel: accessibilityLabel(),
+            contrastRatio: Self.contrastRatio(foreground: .white, background: layerBackgroundColor)
+        )
+    }
+
+    private var layerBackgroundColor: NSColor {
+        guard let color = layer?.backgroundColor else { return .clear }
+        return NSColor(cgColor: color) ?? .clear
+    }
+#endif
+
+    private static func contrastRatio(foreground: NSColor, background: NSColor) -> Double {
+        let foregroundLuminance = relativeLuminance(foreground)
+        let backgroundLuminance = relativeLuminance(background)
+        return (max(foregroundLuminance, backgroundLuminance) + 0.05)
+            / (min(foregroundLuminance, backgroundLuminance) + 0.05)
+    }
+
+    private static func relativeLuminance(_ color: NSColor) -> Double {
+        guard let rgb = color.usingColorSpace(.sRGB) else { return 0 }
+        return 0.2126 * linearComponent(Double(rgb.redComponent))
+            + 0.7152 * linearComponent(Double(rgb.greenComponent))
+            + 0.0722 * linearComponent(Double(rgb.blueComponent))
+    }
+
+    private static func linearComponent(_ value: Double) -> Double {
+        value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+    }
 }
+
+#if NARWHAL_ENABLE_VERIFIERS
+struct HUDDebugSnapshot {
+    let message: String
+    let messageFrame: CGRect
+    let accessibilityLabel: String?
+    let contrastRatio: Double
+}
+#endif
 
 @MainActor
 final class DragPreviewView: NSView {
@@ -77,26 +128,26 @@ private extension OverlayTone {
     var background: NSColor {
         switch self {
         case .info:
-            return NSColor.black.withAlphaComponent(0.82)
+            return NSColor(srgbRed: 0.12, green: 0.13, blue: 0.15, alpha: 1)
         case .success:
-            return NSColor.systemGreen.withAlphaComponent(0.88)
+            return NSColor(srgbRed: 0.08, green: 0.33, blue: 0.18, alpha: 1)
         case .warning:
-            return NSColor.systemOrange.withAlphaComponent(0.90)
+            return NSColor(srgbRed: 0.42, green: 0.23, blue: 0.00, alpha: 1)
         case .error:
-            return NSColor.systemRed.withAlphaComponent(0.92)
+            return NSColor(srgbRed: 0.50, green: 0.11, blue: 0.11, alpha: 1)
         }
     }
 
     var border: NSColor {
         switch self {
         case .info:
-            return NSColor.white.withAlphaComponent(0.18)
+            return NSColor(srgbRed: 0.42, green: 0.45, blue: 0.50, alpha: 1)
         case .success:
-            return NSColor.white.withAlphaComponent(0.28)
+            return NSColor(srgbRed: 0.29, green: 0.87, blue: 0.50, alpha: 1)
         case .warning:
-            return NSColor.white.withAlphaComponent(0.30)
+            return NSColor(srgbRed: 0.98, green: 0.75, blue: 0.14, alpha: 1)
         case .error:
-            return NSColor.white.withAlphaComponent(0.34)
+            return NSColor(srgbRed: 0.97, green: 0.44, blue: 0.44, alpha: 1)
         }
     }
 }
