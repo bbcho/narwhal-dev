@@ -96,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeSpaceFocusRecoveryDeadline: Date?
     private var pendingHotkeys: [HotkeyAction] = []
     private var isDrainingHotkeys = false
+    private let commandExecutionGate = MainActorCommandExecutionGate()
     private var isHandlingExternalGeometry = false
     private var pendingExternalGeometryEvents =
         ExternalGeometryEventQueue<PendingExternalGeometryEvent>()
@@ -740,7 +741,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             drop: { [weak self] location in
                 Task { @MainActor in
-                    await self?.performDragDrop(at: location)
+                    guard let self else { return }
+                    await self.commandExecutionGate.perform {
+                        await self.performDragDrop(at: location)
+                    }
                 }
             }
         )
@@ -773,7 +777,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func drainHotkeyQueue() async {
         while !pendingHotkeys.isEmpty {
             let action = pendingHotkeys.removeFirst()
-            await performHotkey(action)
+            await commandExecutionGate.perform {
+                await self.performHotkey(action)
+            }
         }
         isDrainingHotkeys = false
     }
@@ -1121,7 +1127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reason: String,
         suppressFailureFeedback: Bool = false
     ) async -> Bool {
-        switch axClient.focusWindow(result.window) {
+        switch await axClient.focusWindow(result.window) {
         case .success:
             echoSuppressor.expectFocus(windowID: result.window.id)
             await worldActor.recordExternalFocus(result.window.id)
@@ -1595,7 +1601,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let focused: FocusedLayoutContext
-        if let snapshot = focusedWindowSnapshotForLayoutOperation(operation) {
+        if let snapshot = await focusedWindowSnapshotForLayoutOperation(operation) {
             focused = FocusedLayoutContext(metadata: snapshot.metadata, displays: displayClient.currentDisplays())
         } else {
             let error = focusedWindowReadError()
@@ -1632,14 +1638,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func focusedWindowSnapshotForLayoutOperation(_ operation: String) -> FocusedWindowSnapshot? {
+    private func focusedWindowSnapshotForLayoutOperation(_ operation: String) async -> FocusedWindowSnapshot? {
         for attempt in 0..<4 {
             if case .success(let snapshot) = axClient.focusedWindowSnapshot() {
                 activeSpaceFocusRecoveryDeadline = nil
                 return snapshot
             }
             if attempt < 3 {
-                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.03))
+                try? await Task.sleep(nanoseconds: 30_000_000)
             }
         }
         return nil
@@ -2006,7 +2012,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showFocusBorder: Bool = true,
         replanAfterClamp: () async -> Result<CommandPlanResult, CommandError>
     ) async -> Bool {
-        let applyResult = LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
+        let applyResult = await LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
         switch plannedLayoutApplyDecision(plan: result, applyResult: applyResult, retryOnClamp: retryOnClamp) {
         case .commit(let appliedFrames, let focusUpdate):
             await worldActor.commit(result, appliedFrames: appliedFrames)
@@ -2099,7 +2105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .success(nil):
             reporter.info("Startup restore convergence skipped: no restored tiled windows")
         case .success(let result?):
-            let applyResult = LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
+            let applyResult = await LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
             if applyResult.succeeded {
                 await worldActor.commit(result, appliedFrames: applyResult.applied)
                 reporter.info("Startup restore convergence completed")
@@ -2218,7 +2224,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isHandlingExternalGeometry = true
         var current: PendingExternalGeometryEvent? = incoming
         while let currentEvent = current {
-            await processExternalGeometryEvent(currentEvent.event, snapshot: currentEvent.snapshot)
+            await commandExecutionGate.perform {
+                await self.processExternalGeometryEvent(currentEvent.event, snapshot: currentEvent.snapshot)
+            }
             current = pendingExternalGeometryEvents.dequeue()
         }
         isHandlingExternalGeometry = false
@@ -2455,6 +2463,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func handleIPCCommand(_ command: IPCCommandDTO) async -> IPCReplyDTO {
+        await commandExecutionGate.perform {
+            await self.handleSerializedIPCCommand(command)
+        }
+    }
+
+    @MainActor
+    private func handleSerializedIPCCommand(_ command: IPCCommandDTO) async -> IPCReplyDTO {
         let commandID = CommandID(raw: "ipc-\(UUID().uuidString)")
         switch command {
         case .resetLayout:

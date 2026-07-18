@@ -337,7 +337,7 @@ enum LiveFocusWorkflowVerification {
         using axClient: AXClient,
         context: String
     ) throws {
-        switch axClient.focusWindow(window.metadata) {
+        switch awaitLiveVerifierOperation({ await axClient.focusWindow(window.metadata) }) {
         case .success:
             RunLoop.current.run(until: Date().addingTimeInterval(0.16))
         case .failure(let error):
@@ -406,7 +406,7 @@ enum LiveFocusWorkflowVerification {
             return
         }
 
-        switch axClient.focusWindow(window.metadata) {
+        switch awaitLiveVerifierOperation({ await axClient.focusWindow(window.metadata) }) {
         case .success:
             break
         case .failure(let error):

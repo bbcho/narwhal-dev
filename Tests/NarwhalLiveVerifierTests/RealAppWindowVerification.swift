@@ -352,7 +352,7 @@ enum RealAppWindowVerification {
             }
         }
 
-        switch axClient.focusWindow(original.metadata) {
+        switch awaitLiveVerifierOperation({ await axClient.focusWindow(original.metadata) }) {
         case .success:
             break
         case .failure(let error):
@@ -786,7 +786,7 @@ enum RealAppWindowVerification {
         ).standardized
 
         let manualChromeFrame: CGRect
-        switch axClient.setFrame(chromeAfterReserve, to: requestedChromeFrame) {
+        switch await axClient.setFrame(chromeAfterReserve, to: requestedChromeFrame) {
         case .converged(let frame):
             manualChromeFrame = frame
         case .clamped(let frame, let observed):
@@ -1068,7 +1068,7 @@ enum RealAppWindowVerification {
             await worldActor.commit(first, appliedFrames: [:])
             return first.desiredLayout.layout.tiled
         }
-        let firstResult = applier.apply(first)
+        let firstResult = await applier.apply(first)
         switch plannedLayoutApplyDecision(plan: first, applyResult: firstResult, retryOnClamp: true) {
         case .commit(let appliedFrames, _):
             await worldActor.commit(first, appliedFrames: appliedFrames)
@@ -1085,7 +1085,7 @@ enum RealAppWindowVerification {
                 throw RealAppWindowVerifierFailure("\(name) clamped without retry: \(summary)")
             }
             let retry = try await requireWorkflowPlan("\(name) retry after clamp", plan(), allowNoMove: allowNoMove)
-            let retryResult = applier.apply(retry)
+            let retryResult = await applier.apply(retry)
             switch plannedLayoutApplyDecision(plan: retry, applyResult: retryResult, retryOnClamp: false) {
             case .commit(let retryAppliedFrames, _):
                 await worldActor.commit(retry, appliedFrames: retryAppliedFrames)
@@ -1121,7 +1121,7 @@ enum RealAppWindowVerification {
             throw RealAppWindowVerifierFailure("\(name) plan failed: \(error.message)")
         }
 
-        let firstResult = applier.apply(first)
+        let firstResult = await applier.apply(first)
         switch plannedLayoutApplyDecision(plan: first, applyResult: firstResult, retryOnClamp: true) {
         case .commit(let appliedFrames, _):
             await worldActor.commit(first, appliedFrames: appliedFrames)
@@ -1144,7 +1144,7 @@ enum RealAppWindowVerification {
             case .failure(let error):
                 throw RealAppWindowVerifierFailure("\(name) retry after clamp failed: \(error.message)")
             }
-            let retryResult = applier.apply(retry)
+            let retryResult = await applier.apply(retry)
             switch plannedLayoutApplyDecision(plan: retry, applyResult: retryResult, retryOnClamp: false) {
             case .commit(let retryAppliedFrames, _):
                 await worldActor.commit(retry, appliedFrames: retryAppliedFrames)
@@ -1299,7 +1299,7 @@ enum RealAppWindowVerification {
         appName: String,
         using axClient: AXClient
     ) async throws {
-        switch axClient.focusWindow(metadata) {
+        switch await axClient.focusWindow(metadata) {
         case .success:
             try? await Task.sleep(nanoseconds: 120_000_000)
         case .failure(let error):
@@ -1524,7 +1524,7 @@ enum RealAppWindowVerification {
         using axClient: AXClient
     ) throws -> CGRect {
         let actual: CGRect
-        switch axClient.setFrame(metadata, to: target) {
+        switch awaitLiveVerifierOperation({ await axClient.setFrame(metadata, to: target) }) {
         case .converged(let frame):
             actual = frame
         case .clamped(let frame, let observed):
@@ -1575,7 +1575,7 @@ enum RealAppWindowVerification {
             return
         }
 
-        switch axClient.closeWindow(original.metadata) {
+        switch awaitLiveVerifierOperation({ await axClient.closeWindow(original.metadata) }) {
         case .success:
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
             return
@@ -1614,7 +1614,7 @@ enum RealAppWindowVerification {
         using axClient: AXClient
     ) throws {
         var failures: [String] = []
-        switch axClient.setFrame(original, to: frame) {
+        switch awaitLiveVerifierOperation({ await axClient.setFrame(original, to: frame) }) {
         case .converged, .clamped:
             return
         case .failed(let error):
@@ -1629,7 +1629,7 @@ enum RealAppWindowVerification {
                 return $0.frame.area > $1.frame.area
             }
         for candidate in candidates {
-            switch axClient.setFrame(candidate, to: frame) {
+            switch awaitLiveVerifierOperation({ await axClient.setFrame(candidate, to: frame) }) {
             case .converged, .clamped:
                 return
             case .failed(let error):

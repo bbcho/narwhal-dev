@@ -906,7 +906,7 @@ enum LiveCommandWorkflowVerification {
             context: "focusCycle AX raise precondition"
         )
 
-        switch AXClient(processID: -1).focusWindow(target.window) {
+        switch awaitLiveVerifierOperation({ await AXClient(processID: -1).focusWindow(target.window) }) {
         case .success:
             break
         case .failure(let error):

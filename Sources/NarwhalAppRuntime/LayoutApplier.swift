@@ -14,7 +14,7 @@ struct LayoutApplier {
         self.echoSuppressor = echoSuppressor
     }
 
-    func apply(_ result: CommandPlanResult) -> LayoutApplyResult {
+    func apply(_ result: CommandPlanResult) async -> LayoutApplyResult {
         var applyResult = LayoutApplyResult.empty
         reporter.info("Applying layout generation=\(result.desiredLayout.generation.raw) tiledCount=\(result.desiredLayout.layout.tiled.count)")
 
@@ -33,7 +33,7 @@ struct LayoutApplier {
             case .write(let windowID, let metadata, let frame):
                 let writeResult: AXFrameWriteOutcome
                 echoSuppressor?.expectFrame(windowID: windowID, targetFrame: frame)
-                writeResult = axClient.setFrame(metadata, to: frame)
+                writeResult = await axClient.setFrame(metadata, to: frame)
 
                 switch writeResult {
                 case .converged(let actual):

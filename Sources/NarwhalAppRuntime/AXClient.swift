@@ -281,26 +281,26 @@ struct AXClient {
         }
     }
 
-    func setFocusedWindowFrame(_ frame: CGRect) -> AXFrameWriteOutcome {
+    func setFocusedWindowFrame(_ frame: CGRect) async -> AXFrameWriteOutcome {
         switch focusedWindowElement() {
         case .success(let window):
-            return setFrame(window, to: frame)
+            return await setFrame(window, to: frame)
         case .failure(let error):
             return .failed(error)
         }
     }
 
-    func setFrame(_ window: WindowMetadata, to frame: CGRect) -> AXFrameWriteOutcome {
-        switch windowElement(matching: window) {
+    func setFrame(_ window: WindowMetadata, to frame: CGRect) async -> AXFrameWriteOutcome {
+        switch await windowElement(matching: window) {
         case .success(let element):
-            return setFrame(element, to: frame)
+            return await setFrame(element, to: frame)
         case .failure(let error):
             return .failed(error)
         }
     }
 
-    func frame(of window: WindowMetadata) -> Result<CGRect, AXClientError> {
-        switch windowElement(matching: window) {
+    func frame(of window: WindowMetadata) async -> Result<CGRect, AXClientError> {
+        switch await windowElement(matching: window) {
         case .success(let element):
             return focusedWindowFrame(element)
         case .failure(let error):
@@ -308,8 +308,8 @@ struct AXClient {
         }
     }
 
-    func closeWindow(_ window: WindowMetadata) -> Result<Void, AXClientError> {
-        switch windowElement(matching: window) {
+    func closeWindow(_ window: WindowMetadata) async -> Result<Void, AXClientError> {
+        switch await windowElement(matching: window) {
         case .success(let element):
             var closeButtonValue: CFTypeRef?
             let copyError = AXUIElementCopyAttributeValue(
@@ -335,13 +335,13 @@ struct AXClient {
         }
     }
 
-    func focusWindow(_ window: WindowMetadata) -> Result<Void, AXClientError> {
-        guard activateApplication(processID: window.pid) else {
+    func focusWindow(_ window: WindowMetadata) async -> Result<Void, AXClientError> {
+        guard await activateApplication(processID: window.pid) else {
             return .failure(.applicationActivateFailed(window.pid))
         }
 
         let element: AXUIElement
-        switch windowElement(matching: window) {
+        switch await windowElement(matching: window) {
         case .success(let value):
             element = value
         case .failure(let error):
@@ -373,12 +373,7 @@ struct AXClient {
                 continue
             }
 
-            // Service the run loop for 40ms so AppKit can propagate the raise.
-            // KNOWN HAZARD: reentrancy — main-queue work (hotkeys, IPC, drag) can
-            // interleave during this wait. Async conversion would close this hole
-            // but cascades into ~55 RunLoop.run sites across the live verifier tests.
-            // Tracked as follow-up; see plan §What This Plan Does NOT Touch.
-            RunLoop.current.run(until: Date().addingTimeInterval(0.04))
+            await settle(for: 0.04)
             switch raisedVisibilityDecision(for: window.id) {
             case .success(.visible):
                 return .success(())
@@ -404,11 +399,11 @@ struct AXClient {
         return .failure(.windowNotRaised(window.id, blocker: nil))
     }
 
-    private func activateApplication(processID: pid_t) -> Bool {
+    @MainActor
+    private func activateApplication(processID: pid_t) async -> Bool {
         if processID == getpid() {
             NSApp.activate(ignoringOtherApps: true)
-            // See focusWindow comment re: reentrancy/test-infra tradeoff.
-            RunLoop.current.run(until: Date().addingTimeInterval(0.04))
+            await settle(for: 0.04)
             return true
         }
         return NSRunningApplication(processIdentifier: processID)?.activate(options: []) == true
@@ -569,7 +564,7 @@ struct AXClient {
         return nil
     }
 
-    private func setFrame(_ window: AXUIElement, to frame: CGRect) -> AXFrameWriteOutcome {
+    private func setFrame(_ window: AXUIElement, to frame: CGRect) async -> AXFrameWriteOutcome {
         var lastFrame = CGRect.null
 
         for _ in 0..<3 {
@@ -588,7 +583,7 @@ struct AXClient {
             if positionFirst {
                 switch setPosition(frame.origin, on: window) {
                 case .success:
-                    RunLoop.current.run(until: Date().addingTimeInterval(Self.frameWriteSettleInterval))
+                    await settle(for: Self.frameWriteSettleInterval)
                 case .failure(let error):
                     return .failed(error)
                 }
@@ -596,14 +591,14 @@ struct AXClient {
 
             switch setSize(frame.size, on: window) {
             case .success:
-                RunLoop.current.run(until: Date().addingTimeInterval(Self.frameWriteSettleInterval))
+                await settle(for: Self.frameWriteSettleInterval)
             case .failure(let error):
                 return .failed(error)
             }
 
             switch setPosition(frame.origin, on: window) {
             case .success:
-                RunLoop.current.run(until: Date().addingTimeInterval(Self.frameWriteSettleInterval))
+                await settle(for: Self.frameWriteSettleInterval)
             case .failure(let error):
                 return .failed(error)
             }
@@ -684,7 +679,7 @@ struct AXClient {
         return .success(())
     }
 
-    private func windowElement(matching metadata: WindowMetadata) -> Result<AXUIElement, AXClientError> {
+    private func windowElement(matching metadata: WindowMetadata) async -> Result<AXUIElement, AXClientError> {
         var expectedTitle = metadata.title
         var expectedFrame = metadata.frame
 
@@ -704,13 +699,18 @@ struct AXClient {
             case .success(let element):
                 return .success(element)
             case .failure where attempt < 4:
-                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                await settle(for: 0.05)
             case .failure(let error):
                 return .failure(error)
             }
         }
 
         return .failure(.windowElementNotFound(metadata.id))
+    }
+
+    private func settle(for interval: TimeInterval) async {
+        let nanoseconds = UInt64(max(0, interval) * 1_000_000_000)
+        try? await Task.sleep(nanoseconds: nanoseconds)
     }
 
     private func isResizable(
