@@ -2131,7 +2131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func reloadConfig(reason: String) async {
         let loaded: StartupConfigLoad
-        switch startupConfigLoad() {
+        switch await backgroundStartupConfigLoad() {
         case .success(let value):
             loaded = value
         case .failure(let error):
@@ -2159,6 +2159,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar.updateConfigStatus(.loaded)
         reporter.info("Config reload completed (\(reason))")
         showOperatorFeedback("Config reloaded", tone: .success)
+    }
+
+    private func backgroundStartupConfigLoad() async -> Result<StartupConfigLoad, StartupConfigError> {
+        let request = startupArguments.startupConfigRequest
+        return await Task.detached(priority: .userInitiated) {
+            switch request {
+            case .success(let request):
+                return StartupConfigLoader(
+                    configURL: request.url,
+                    missingFilePolicy: request.missingFilePolicy
+                ).load()
+            case .failure(let error):
+                return .failure(error)
+            }
+        }.value
     }
 
     @MainActor

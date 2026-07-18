@@ -22,6 +22,47 @@ enum MissingConfigFilePolicy: Equatable {
     case fail
 }
 
+enum LuaConfigResourceLimit: Equatable {
+    case sourceBytes(Int)
+    case memoryBytes(Int)
+    case instructions(Int)
+    case decodedValues(Int)
+
+    var description: String {
+        switch self {
+        case .sourceBytes(let bytes):
+            return "source size limit of \(bytes) bytes"
+        case .memoryBytes(let bytes):
+            return "memory limit of \(bytes) bytes"
+        case .instructions(let instructions):
+            return "instruction limit of \(instructions)"
+        case .decodedValues(let values):
+            return "decoded value limit of \(values)"
+        }
+    }
+}
+
+struct LuaConfigLimits: Equatable {
+    static let `default` = LuaConfigLimits(
+        sourceBytes: 1_048_576,
+        memoryBytes: 16_777_216,
+        instructions: 1_000_000,
+        decodedValues: 10_000
+    )
+
+    let sourceBytes: Int
+    let memoryBytes: Int
+    let instructions: Int
+    let decodedValues: Int
+
+    init(sourceBytes: Int, memoryBytes: Int, instructions: Int, decodedValues: Int) {
+        self.sourceBytes = max(1, sourceBytes)
+        self.memoryBytes = max(1, memoryBytes)
+        self.instructions = max(1, instructions)
+        self.decodedValues = max(1, decodedValues)
+    }
+}
+
 enum StartupConfigError: Error, CustomStringConvertible {
     case missingConfigPathArgument
     case configFileNotFound(String)
@@ -29,6 +70,7 @@ enum StartupConfigError: Error, CustomStringConvertible {
     case luaLoadFailed(path: String, message: String)
     case luaRuntimeFailed(path: String, message: String)
     case luaDecodeFailed(path: String, message: String)
+    case luaResourceLimitExceeded(path: String, limit: LuaConfigResourceLimit)
     case configInvalid(path: String, error: ConfigError)
 
     var description: String {
@@ -45,6 +87,8 @@ enum StartupConfigError: Error, CustomStringConvertible {
             return "Lua runtime failed for \(path): \(message)"
         case .luaDecodeFailed(let path, let message):
             return "Lua decode failed for \(path): \(message)"
+        case .luaResourceLimitExceeded(let path, let limit):
+            return "Lua config at \(path) exceeded its \(limit.description)"
         case .configInvalid(let path, let error):
             return "Config validation failed for \(path): \(error.description)"
         }
@@ -61,15 +105,18 @@ struct StartupConfigLoader {
     let configURL: URL
     let missingFilePolicy: MissingConfigFilePolicy
     let fileManager: FileManager
+    let limits: LuaConfigLimits
 
     init(
         configURL: URL = StartupConfigLoader.defaultUserConfigURL,
         missingFilePolicy: MissingConfigFilePolicy = .useBuiltInDefault,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        limits: LuaConfigLimits = .default
     ) {
         self.configURL = configURL
         self.missingFilePolicy = missingFilePolicy
         self.fileManager = fileManager
+        self.limits = limits
     }
 
     func load() -> Result<StartupConfigLoad, StartupConfigError> {
@@ -81,7 +128,15 @@ struct StartupConfigLoader {
         }
 
         do {
-            let data = try LuaConfigDecoder(url: configURL).decode()
+            let attributes = try fileManager.attributesOfItem(atPath: configURL.path)
+            if let sourceBytes = attributes[.size] as? NSNumber,
+               sourceBytes.int64Value > Int64(limits.sourceBytes) {
+                return .failure(.luaResourceLimitExceeded(
+                    path: configURL.path,
+                    limit: .sourceBytes(limits.sourceBytes)
+                ))
+            }
+            let data = try LuaConfigDecoder(url: configURL, limits: limits).decode()
             switch parseConfig(data) {
             case .success(let config):
                 return .success(StartupConfigLoad(config: config, source: .userFile(configURL)))
@@ -100,37 +155,76 @@ private final class LuaConfigDecoder {
     private static let maxDecodeDepth = 64
 
     let url: URL
+    let limits: LuaConfigLimits
 
-    init(url: URL) {
+    init(url: URL, limits: LuaConfigLimits) {
         self.url = url
+        self.limits = limits
     }
 
     func decode() throws -> LuaConfigData {
-        guard let state = narwhal_lua_newstate() else {
+        guard let state = narwhal_lua_newstate(limits.memoryBytes) else {
             throw StartupConfigError.luaStateUnavailable
         }
         defer { narwhal_lua_close(state) }
 
-        narwhal_lua_openlibs(state)
+        let libraryStatus = narwhal_lua_open_config_libraries(state)
+        guard libraryStatus == 0 else {
+            try throwLuaFailure(state, path: url.path, phase: "library initialization")
+        }
+        narwhal_lua_set_instruction_limit(state, UInt64(limits.instructions))
 
         let loadStatus = url.path.withCString { path in
             narwhal_lua_loadfile(state, path)
         }
         guard loadStatus == 0 else {
+            if narwhal_lua_memory_limit_exceeded(state) != 0 {
+                throw StartupConfigError.luaResourceLimitExceeded(
+                    path: url.path,
+                    limit: .memoryBytes(limits.memoryBytes)
+                )
+            }
             throw StartupConfigError.luaLoadFailed(path: url.path, message: stackString(state, index: -1) ?? "unknown load error")
         }
 
         let runtimeStatus = narwhal_lua_pcall(state, 0, 1, 0)
         guard runtimeStatus == 0 else {
-            throw StartupConfigError.luaRuntimeFailed(path: url.path, message: stackString(state, index: -1) ?? "unknown runtime error")
+            try throwLuaFailure(state, path: url.path, phase: "runtime")
         }
 
         var activeTables = Set<UInt>()
-        let value = try decodeValue(state, index: -1, path: "return", depth: 0, activeTables: &activeTables)
+        var remainingValues = limits.decodedValues
+        let value = try decodeValue(
+            state,
+            index: -1,
+            path: "return",
+            depth: 0,
+            remainingValues: &remainingValues,
+            activeTables: &activeTables
+        )
         guard case .table(let root) = value else {
             throw StartupConfigError.luaDecodeFailed(path: url.path, message: "config must return a table")
         }
         return LuaConfigData(root: root)
+    }
+
+    private func throwLuaFailure(_ state: OpaquePointer, path: String, phase: String) throws -> Never {
+        if narwhal_lua_memory_limit_exceeded(state) != 0 {
+            throw StartupConfigError.luaResourceLimitExceeded(
+                path: path,
+                limit: .memoryBytes(limits.memoryBytes)
+            )
+        }
+        if narwhal_lua_instruction_limit_exceeded(state) != 0 {
+            throw StartupConfigError.luaResourceLimitExceeded(
+                path: path,
+                limit: .instructions(limits.instructions)
+            )
+        }
+        throw StartupConfigError.luaRuntimeFailed(
+            path: path,
+            message: stackString(state, index: -1) ?? "unknown \(phase) error"
+        )
     }
 
     private func decodeValue(
@@ -138,8 +232,16 @@ private final class LuaConfigDecoder {
         index: CInt,
         path: String,
         depth: Int,
+        remainingValues: inout Int,
         activeTables: inout Set<UInt>
     ) throws -> LuaValue {
+        guard remainingValues > 0 else {
+            throw StartupConfigError.luaResourceLimitExceeded(
+                path: url.path,
+                limit: .decodedValues(limits.decodedValues)
+            )
+        }
+        remainingValues -= 1
         let absolute = narwhal_lua_absindex(state, index)
         let type = narwhal_lua_type(state, absolute)
 
@@ -161,7 +263,14 @@ private final class LuaConfigDecoder {
             }
             return .string(string)
         case narwhal_lua_type_table():
-            return try decodeTable(state, index: absolute, path: path, depth: depth, activeTables: &activeTables)
+            return try decodeTable(
+                state,
+                index: absolute,
+                path: path,
+                depth: depth,
+                remainingValues: &remainingValues,
+                activeTables: &activeTables
+            )
         default:
             throw StartupConfigError.luaDecodeFailed(path: url.path, message: "\(path) has unsupported Lua type \(type)")
         }
@@ -172,6 +281,7 @@ private final class LuaConfigDecoder {
         index: CInt,
         path: String,
         depth: Int,
+        remainingValues: inout Int,
         activeTables: inout Set<UInt>
     ) throws -> LuaValue {
         guard depth < Self.maxDecodeDepth else {
@@ -203,6 +313,7 @@ private final class LuaConfigDecoder {
                 index: -1,
                 path: entryPath,
                 depth: depth + 1,
+                remainingValues: &remainingValues,
                 activeTables: &activeTables
             )
             switch key {

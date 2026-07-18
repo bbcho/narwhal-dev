@@ -4,17 +4,140 @@
 #include <lua.h>
 #include <lauxlib.h>
 #include <lualib.h>
+#include <stdint.h>
+#include <stdlib.h>
 
-static inline lua_State *narwhal_lua_newstate(void) {
-    return luaL_newstate();
+typedef struct {
+    size_t used_bytes;
+    size_t maximum_bytes;
+    uint64_t remaining_instructions;
+    int hook_interval;
+    int memory_limit_exceeded;
+    int instruction_limit_exceeded;
+} narwhal_lua_limits;
+
+typedef struct {
+    size_t size;
+} narwhal_lua_allocation;
+
+static inline void *narwhal_lua_allocate(void *user_data, void *pointer, size_t old_size, size_t new_size) {
+    (void)old_size;
+    narwhal_lua_limits *limits = (narwhal_lua_limits *)user_data;
+
+    if (new_size == 0) {
+        if (pointer != NULL) {
+            narwhal_lua_allocation *allocation = ((narwhal_lua_allocation *)pointer) - 1;
+            limits->used_bytes -= allocation->size;
+            free(allocation);
+        }
+        return NULL;
+    }
+
+    size_t prior_size = 0;
+    narwhal_lua_allocation *prior_allocation = NULL;
+    if (pointer != NULL) {
+        prior_allocation = ((narwhal_lua_allocation *)pointer) - 1;
+        prior_size = prior_allocation->size;
+    }
+
+    const size_t retained_bytes = limits->used_bytes - prior_size;
+    if (new_size > limits->maximum_bytes - retained_bytes ||
+        new_size > SIZE_MAX - sizeof(narwhal_lua_allocation)) {
+        limits->memory_limit_exceeded = 1;
+        return NULL;
+    }
+
+    narwhal_lua_allocation *allocation = (narwhal_lua_allocation *)realloc(
+        prior_allocation,
+        sizeof(narwhal_lua_allocation) + new_size
+    );
+    if (allocation == NULL) {
+        return NULL;
+    }
+    allocation->size = new_size;
+    limits->used_bytes = retained_bytes + new_size;
+    return allocation + 1;
 }
 
-static inline void narwhal_lua_openlibs(lua_State *state) {
-    luaL_openlibs(state);
+static inline lua_State *narwhal_lua_newstate(size_t maximum_bytes) {
+    narwhal_lua_limits *limits = (narwhal_lua_limits *)calloc(1, sizeof(narwhal_lua_limits));
+    if (limits == NULL) {
+        return NULL;
+    }
+    limits->maximum_bytes = maximum_bytes;
+    lua_State *state = lua_newstate(narwhal_lua_allocate, limits, arc4random());
+    if (state == NULL) {
+        free(limits);
+    }
+    return state;
+}
+
+static inline int narwhal_lua_open_config_libraries_function(lua_State *state) {
+    const luaL_Reg libraries[] = {
+        {LUA_GNAME, luaopen_base},
+        {LUA_TABLIBNAME, luaopen_table},
+        {LUA_STRLIBNAME, luaopen_string},
+        {LUA_MATHLIBNAME, luaopen_math},
+        {LUA_UTF8LIBNAME, luaopen_utf8},
+        {NULL, NULL}
+    };
+    const luaL_Reg *library = libraries;
+    for (; library->func != NULL; library++) {
+        luaL_requiref(state, library->name, library->func, 1);
+        lua_pop(state, 1);
+    }
+
+    lua_pushnil(state);
+    lua_setglobal(state, "dofile");
+    lua_pushnil(state);
+    lua_setglobal(state, "loadfile");
+    return 0;
+}
+
+static inline int narwhal_lua_open_config_libraries(lua_State *state) {
+    lua_pushcfunction(state, narwhal_lua_open_config_libraries_function);
+    return lua_pcall(state, 0, 0, 0);
+}
+
+static inline void narwhal_lua_instruction_hook(lua_State *state, lua_Debug *debug) {
+    (void)debug;
+    void *user_data = NULL;
+    lua_getallocf(state, &user_data);
+    narwhal_lua_limits *limits = (narwhal_lua_limits *)user_data;
+    if (limits->remaining_instructions <= (uint64_t)limits->hook_interval) {
+        limits->instruction_limit_exceeded = 1;
+        luaL_error(state, "configuration instruction limit exceeded");
+        return;
+    }
+    limits->remaining_instructions -= (uint64_t)limits->hook_interval;
+}
+
+static inline void narwhal_lua_set_instruction_limit(lua_State *state, uint64_t maximum_instructions) {
+    void *user_data = NULL;
+    lua_getallocf(state, &user_data);
+    narwhal_lua_limits *limits = (narwhal_lua_limits *)user_data;
+    limits->remaining_instructions = maximum_instructions;
+    limits->hook_interval = maximum_instructions < 1000 ? (int)maximum_instructions : 1000;
+    lua_sethook(state, narwhal_lua_instruction_hook, LUA_MASKCOUNT, limits->hook_interval);
+}
+
+static inline int narwhal_lua_memory_limit_exceeded(lua_State *state) {
+    void *user_data = NULL;
+    lua_getallocf(state, &user_data);
+    return ((narwhal_lua_limits *)user_data)->memory_limit_exceeded;
+}
+
+static inline int narwhal_lua_instruction_limit_exceeded(lua_State *state) {
+    void *user_data = NULL;
+    lua_getallocf(state, &user_data);
+    return ((narwhal_lua_limits *)user_data)->instruction_limit_exceeded;
 }
 
 static inline void narwhal_lua_close(lua_State *state) {
+    void *user_data = NULL;
+    lua_getallocf(state, &user_data);
     lua_close(state);
+    free(user_data);
 }
 
 static inline int narwhal_lua_loadfile(lua_State *state, const char *path) {
