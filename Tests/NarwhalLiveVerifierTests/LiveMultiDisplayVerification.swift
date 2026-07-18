@@ -9,6 +9,9 @@ import NarwhalCore
 @MainActor
 enum LiveMultiDisplayVerification {
     static func verifyDisplayScopedPushAndCycle() -> (passed: Bool, message: String) {
+        guard !isSystemLocked() else {
+            return (false, "live multi-display verification requires an unlocked user session")
+        }
         let displayClient = DisplayClient()
         let displays = displayClient.currentDisplays()
         let orderedDisplays = displays.values.sorted {
@@ -191,6 +194,9 @@ enum LiveMultiDisplayVerification {
         }
         overlay.render(OverlayModel.empty.settingTiledBorders(sourceTargets))
         RunLoop.current.run(until: Date().addingTimeInterval(0.08))
+        guard !isSystemLocked() else {
+            return (false, "live multi-display verification lost the unlocked user session before border validation")
+        }
         guard Set(overlay.debugTiledBorderWindowIDs()) == expectedMoveIDs,
               overlay.debugVisibleTiledBorderCount() == expectedMoveIDs.count
         else {
