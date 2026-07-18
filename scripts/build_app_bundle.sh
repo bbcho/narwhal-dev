@@ -154,8 +154,20 @@ cp "$repo_root/Packaging/Assets/NarwhalToolbarIconDark@2x.png" "$resources/Narwh
 cp "$lua_dylib" "$frameworks/liblua.dylib"
 chmod 755 "$app_executable" "$ctl_executable" "$frameworks/liblua.dylib"
 
+lua_linked_path="$(otool -L "$app_executable" | awk '
+  $1 ~ /\/liblua(\.[0-9]+)*\.dylib$/ { print $1; exit }
+')"
+if [ -z "$lua_linked_path" ]; then
+  echo "Could not determine NarwhalApp Lua dependency install name" >&2
+  exit 1
+fi
+
 install_name_tool -id "@rpath/liblua.dylib" "$frameworks/liblua.dylib"
-install_name_tool -change "$lua_dylib" "@executable_path/../Frameworks/liblua.dylib" "$app_executable"
+install_name_tool -change "$lua_linked_path" "@executable_path/../Frameworks/liblua.dylib" "$app_executable"
+if ! otool -L "$app_executable" | awk '$1 == "@executable_path/../Frameworks/liblua.dylib" { found = 1 } END { exit !found }'; then
+  echo "NarwhalApp still references an external Lua dylib after packaging" >&2
+  exit 1
+fi
 
 cp "$repo_root/Packaging/com.ben.narwhal.plist" "$launch_agent"
 plutil -insert ProgramArguments.0 -string "$app_executable" "$launch_agent"
