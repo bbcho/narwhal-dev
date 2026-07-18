@@ -16,8 +16,8 @@ struct RestoreManagerTests {
         #expect(loaded == nil)
     }
 
-    @Test("Unsupported schema version loads as nil")
-    func unsupportedSchemaVersionLoadsAsNil() throws {
+    @Test("Unsupported schema version fails without modifying the restore file")
+    func unsupportedSchemaVersionFailsWithoutModifyingRestoreFile() throws {
         let paths = temporaryRestorePath()
         defer { removeTemporaryRestoreRoot(paths.root) }
         let stored = StoredWorld(
@@ -27,9 +27,16 @@ struct RestoreManagerTests {
         )
         try writeStoredWorld(stored, to: paths.file)
 
-        let loaded = try RestoreManager(url: paths.file).load()
+        let original = try Data(contentsOf: paths.file)
+        let error = try requireRestoreManagerError {
+            try RestoreManager(url: paths.file).load()
+        }
 
-        #expect(loaded == nil)
+        #expect(error == .unsupportedSchemaVersion(
+            found: StoredWorld.currentSchemaVersion + 1,
+            supported: StoredWorld.currentSchemaVersion
+        ))
+        #expect(try Data(contentsOf: paths.file) == original)
     }
 
     @Test("Corrupt JSON throws decode failure")
@@ -105,7 +112,12 @@ struct RestoreManagerTests {
             activeSpace: nil,
             pendingRules: []
         )
-        #expect(try decodeStoredWorldRestoreData(try encodeStoredWorldRestoreData(unsupported)).get() == nil)
+        #expect(decodeStoredWorldRestoreData(try encodeStoredWorldRestoreData(unsupported)) == .failure(
+            .unsupportedSchemaVersion(
+                found: StoredWorld.currentSchemaVersion + 1,
+                supported: StoredWorld.currentSchemaVersion
+            )
+        ))
         switch decodeStoredWorldRestoreData(Data("not-json".utf8)) {
         case .failure(let error):
             #expect(error.description.hasPrefix("restore JSON decode failed:"))

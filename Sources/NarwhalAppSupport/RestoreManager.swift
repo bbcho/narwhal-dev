@@ -4,6 +4,7 @@ import NarwhalCore
 public enum RestoreManagerError: Error, CustomStringConvertible, Equatable {
     case decodeFailed(String)
     case invalidStoredWorld(String)
+    case unsupportedSchemaVersion(found: Int, supported: Int)
 
     public var description: String {
         switch self {
@@ -11,6 +12,8 @@ public enum RestoreManagerError: Error, CustomStringConvertible, Equatable {
             return "restore JSON decode failed: \(message)"
         case .invalidStoredWorld(let message):
             return "restore JSON invalid: \(message)"
+        case .unsupportedSchemaVersion(let found, let supported):
+            return "restore JSON schema version \(found) is unsupported; this build supports version \(supported)"
         }
     }
 }
@@ -53,7 +56,10 @@ func decodeStoredWorldRestoreData(_ data: Data) -> Result<StoredWorld?, RestoreM
     }
 
     guard stored.schemaVersion == StoredWorld.currentSchemaVersion else {
-        return .success(nil)
+        return .failure(.unsupportedSchemaVersion(
+            found: stored.schemaVersion,
+            supported: StoredWorld.currentSchemaVersion
+        ))
     }
     switch validateStoredWorld(stored) {
     case .success(let validated):
