@@ -385,49 +385,86 @@ private struct RestoreWindowKey: Hashable {
     let role: String
 }
 
+private struct RestoreApplicationRoleKey: Hashable {
+    let bundleID: BundleID
+    let role: String
+}
+
 private struct RestoreMatcher {
     private let candidatesByKey: [RestoreWindowKey: [WindowMetadata]]
+    private let candidatesByApplicationRole: [RestoreApplicationRoleKey: [WindowMetadata]]
     private let consumed: Set<WindowID>
 
     init(liveWindows: [WindowMetadata]) {
         self.init(
             candidatesByKey: Dictionary(grouping: liveWindows, by: \.restoreKey).mapValues(stableWindowOrder),
+            candidatesByApplicationRole: Dictionary(
+                grouping: liveWindows,
+                by: \.restoreApplicationRoleKey
+            ).mapValues(stableWindowOrder),
             consumed: []
         )
     }
 
-    private init(candidatesByKey: [RestoreWindowKey: [WindowMetadata]], consumed: Set<WindowID>) {
+    private init(
+        candidatesByKey: [RestoreWindowKey: [WindowMetadata]],
+        candidatesByApplicationRole: [RestoreApplicationRoleKey: [WindowMetadata]],
+        consumed: Set<WindowID>
+    ) {
         self.candidatesByKey = candidatesByKey
+        self.candidatesByApplicationRole = candidatesByApplicationRole
         self.consumed = consumed
     }
 
     func taking(_ ref: StoredWindowRef) -> RestoreMatch {
-        guard let metadata = bestCandidate(
-            for: ref,
-            in: candidatesByKey[ref.restoreKey, default: []],
-            excluding: consumed
-        ) else { return RestoreMatch(matcher: self, windowID: nil) }
+        guard let metadata = bestCandidate(for: ref, excluding: consumed) else {
+            return RestoreMatch(matcher: self, windowID: nil)
+        }
         return RestoreMatch(
-            matcher: RestoreMatcher(candidatesByKey: candidatesByKey, consumed: consumed.union([metadata.id])),
+            matcher: RestoreMatcher(
+                candidatesByKey: candidatesByKey,
+                candidatesByApplicationRole: candidatesByApplicationRole,
+                consumed: consumed.union([metadata.id])
+            ),
             windowID: metadata.id
         )
     }
 
     func lookup(_ ref: StoredWindowRef) -> WindowID? {
-        bestCandidate(for: ref, in: candidatesByKey[ref.restoreKey, default: []], excluding: [])?.id
+        bestCandidate(for: ref, excluding: [])?.id
     }
 
-    private func bestCandidate(
-        for ref: StoredWindowRef,
+    private func bestCandidate(for ref: StoredWindowRef, excluding consumed: Set<WindowID>) -> WindowMetadata? {
+        let exactCandidates = candidatesByKey[ref.restoreKey, default: []]
+        if exactCandidates.indices.contains(ref.occurrence) {
+            let candidate = exactCandidates[ref.occurrence]
+            return consumed.contains(candidate.id) ? nil : candidate
+        }
+
+        if !exactCandidates.isEmpty {
+            return nearestCandidate(
+                to: ref.lastKnownFrame,
+                in: exactCandidates,
+                excluding: consumed
+            )
+        }
+
+        guard ref.lastKnownFrame != nil else { return nil }
+        return nearestCandidate(
+            to: ref.lastKnownFrame,
+            in: candidatesByApplicationRole[ref.restoreApplicationRoleKey, default: []]
+                .filter { titlesLikelyReferToSameWindow(ref.title, $0.title) },
+            excluding: consumed
+        )
+    }
+
+    private func nearestCandidate(
+        to frame: CGRect?,
         in candidates: [WindowMetadata],
         excluding consumed: Set<WindowID>
     ) -> WindowMetadata? {
-        if candidates.indices.contains(ref.occurrence) {
-            let candidate = candidates[ref.occurrence]
-            return consumed.contains(candidate.id) ? nil : candidate
-        }
-        guard let frame = ref.lastKnownFrame else { return nil }
-        let ranked = candidates.filter { !consumed.contains($0.id) }
+        guard let frame else { return nil }
+        return candidates.filter { !consumed.contains($0.id) }
             .map { ($0, frameDistanceSquared($0.frame, frame)) }
             .sorted { lhs, rhs in
                 if lhs.1 == rhs.1 {
@@ -435,8 +472,34 @@ private struct RestoreMatcher {
                 }
                 return lhs.1 < rhs.1
             }
-        return ranked.first?.0
+            .first?.0
     }
+}
+
+private func titlesLikelyReferToSameWindow(_ stored: String, _ live: String) -> Bool {
+    let storedCharacters = Array(stored.lowercased().prefix(256))
+    let liveCharacters = Array(live.lowercased().prefix(256))
+    guard !storedCharacters.isEmpty, !liveCharacters.isEmpty else { return false }
+    let longestLength = max(storedCharacters.count, liveCharacters.count)
+    let distance = editDistance(storedCharacters, liveCharacters)
+    return Double(longestLength - distance) / Double(longestLength) >= 0.5
+}
+
+private func editDistance(_ lhs: [Character], _ rhs: [Character]) -> Int {
+    var previous = Array(0...rhs.count)
+    for (leftIndex, left) in lhs.enumerated() {
+        var current = [leftIndex + 1]
+        current.reserveCapacity(rhs.count + 1)
+        for (rightIndex, right) in rhs.enumerated() {
+            current.append(min(
+                current[rightIndex] + 1,
+                previous[rightIndex + 1] + 1,
+                previous[rightIndex] + (left == right ? 0 : 1)
+            ))
+        }
+        previous = current
+    }
+    return previous[rhs.count]
 }
 
 private struct RestoreMatch {
@@ -805,7 +868,9 @@ private func stableWindowOrder(_ windows: [WindowMetadata]) -> [WindowMetadata] 
 private func frameDistanceSquared(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
     let dx = lhs.midX - rhs.midX
     let dy = lhs.midY - rhs.midY
-    return dx * dx + dy * dy
+    let dw = lhs.width - rhs.width
+    let dh = lhs.height - rhs.height
+    return dx * dx + dy * dy + dw * dw + dh * dh
 }
 
 private func makeStoredCell(weight: Double, node: StoredNode) -> StoredCell {
@@ -849,6 +914,10 @@ private extension WindowMetadata {
         RestoreWindowKey(bundleID: bundleID, title: title, role: role)
     }
 
+    var restoreApplicationRoleKey: RestoreApplicationRoleKey {
+        RestoreApplicationRoleKey(bundleID: bundleID, role: role)
+    }
+
     var restoreSortKey: StoredWindowSortKey {
         StoredWindowSortKey(
             minY: frame.minY,
@@ -864,6 +933,10 @@ private extension WindowMetadata {
 private extension StoredWindowRef {
     var restoreKey: RestoreWindowKey {
         RestoreWindowKey(bundleID: bundleID, title: title, role: role)
+    }
+
+    var restoreApplicationRoleKey: RestoreApplicationRoleKey {
+        RestoreApplicationRoleKey(bundleID: bundleID, role: role)
     }
 
     var sortKey: StoredWindowRefSortKey {
