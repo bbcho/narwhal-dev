@@ -55,7 +55,7 @@ positions through Accessibility APIs.
 4. Check logs:
 
 ```sh
-tail -n 80 /tmp/narwhal.log
+tail -n 80 "$HOME/Library/Logs/Narwhal/narwhal.log"
 ```
 
 A healthy startup logs Accessibility trust, hotkey registration, observers, IPC
@@ -308,7 +308,7 @@ NarwhalApp --check-environment
 Read logs:
 
 ```sh
-tail -n 100 /tmp/narwhal.log
+tail -n 100 "$HOME/Library/Logs/Narwhal/narwhal.log"
 ```
 
 Common failures:

@@ -14,7 +14,7 @@ edge.
 | `NarwhalAppSupport` | Shell-support code that is testable without AppKit app startup: service lifecycle and restore persistence scheduler. |
 | `NarwhalIPC` | Unix socket client/server transport. |
 | `NarwhalCtl` | CLI wrapper around IPC DTOs. |
-| `CLua` | Minimal C shim around Lua 5.4 APIs used by the Swift loader. |
+| `CLua` | Minimal C shim around Lua 5.5 APIs used by the Swift loader. |
 
 ## Boundary Diagram
 
@@ -206,6 +206,11 @@ The shell converts errors to logs or IPC replies at the boundary.
 
 - AppKit-facing code runs on `@MainActor`.
 - `WorldActor` serializes domain state mutation.
+- Hotkey, IPC, drag/drop, and manual-resize command workflows pass through one
+  FIFO main-actor gate, so AX settling can suspend without overlapping another
+  layout mutation.
+- AX focus and frame writes use async settling delays; production code does not
+  spin a nested run loop while an operation is in progress.
 - Timers schedule back onto `@MainActor`.
 - IPC uses detached tasks around blocking Unix socket calls, with explicit socket
   cleanup on shutdown.

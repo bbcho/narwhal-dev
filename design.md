@@ -10,14 +10,14 @@ This is the pre-implementation gate for the fp-architect skill, adapted to Swift
 
 | Decision | Choice |
 |---|---|
-| Stack | Swift 5.9 / Swift Concurrency, AppKit, macOS 14+, Swift Testing |
+| Stack | Swift 5.9 / Swift Concurrency, AppKit, macOS 26+, Swift Testing |
 | Tiling model | Manual persistent zone-tree BSP, n-ary cells. Float by default. Push-to-tile only. `.void` leaves are intentional empty zones, like FancyZones cells. |
 | Push semantics | Persistent FancyZones-style edge insertion. `H/L` use recursive edge lanes; `K/J` use top/bottom row realms that split horizontally. First push = half-screen + void. |
 | Minimum sizes | Pure min-size-aware solver respects observed per-window constraints. Shell infers constraints from AX clamp feedback; unsatisfiable layouts are rejected or handled by explicit fallback policy, never silently committed. |
 | Center anchor | Hotkey establishes 3-column root `[1, 2, 1]` weights. Center cell pushes split center vertically (TB stack). |
 | Workspaces | Native macOS Spaces. `CGSGetActiveSpace` via `dlsym` (read-only, 1 symbol). One active Space identity is tracked globally; per-display Space identity is deferred because it requires broader private API use. No programmatic Space moves. |
 | Restore | Fuzzy match on stable window descriptors `(bundleID, title, role)`. Restore JSON stores descriptors, not raw OS window/display IDs. Native Space pinning is deferred until a stable Space-slot mapping exists. |
-| Config | Lua 5.4 embedded via C interop. `~/.config/narwhal/init.lua`. FSEvent hot reload, last-good fallback. |
+| Config | Lua 5.5 via system-library C interop. `~/.config/narwhal/init.lua`. FSEvent hot reload, last-good fallback. |
 | Input | Carbon hotkeys + `CGEventTap` shift-drag + Unix-socket IPC + `narwhalctl` CLI. |
 | Default key families | `ctrl-option-H/J/K/L` tiled focus, `ctrl-option-U/I` non-tiled cycle, `ctrl-option-P` previous focus, `ctrl-option-shift-H/J/K/L` swap, `ctrl-option-command-H/J/K/L` push, `ctrl-option-command-N` next display, `ctrl-option-shift-command-H/J/K/L` resize split, `ctrl-option-command-return` balance, `ctrl-option-Z` undo, `ctrl-option-space` pause, `ctrl-option-/` overlay, `ctrl-option-delete` reset. |
 | Visuals | Focus border overlay, Space HUD on switch, gaps, NSStatusItem menubar. No animations. |
@@ -491,7 +491,7 @@ narwhal/
 │   │   ├── HotkeyManager.swift         (Carbon RegisterEventHotKey)
 │   │   ├── EventTapClient.swift        (CGEventTap shift-drag)
 │   │   ├── IPCServer.swift             (Unix domain socket)
-│   │   ├── LuaEngine.swift             (embed Lua 5.4)
+│   │   ├── LuaConfigLoader.swift       (Lua 5.5 system-library interop)
 │   │   ├── ConfigLoader.swift          (FSEvent + parse + validate)
 │   │   ├── LayoutApplier.swift         (desired layout generation → AX dispatch)
 │   │   ├── WorldActor.swift            (state holder)
@@ -500,8 +500,8 @@ narwhal/
 │   │   ├── RestoreManager.swift        (fuzzy match)
 │   │   ├── Logger.swift                (os.Logger wrapper)
 │   │   └── App.swift                   (entry point, DI wiring)
-│   ├── CLua/                  ← Vanilla Lua 5.4 sources as C target
-│   │   ├── lua.c, lauxlib.c, ...       (vendored)
+│   ├── CLua/                  ← Minimal shim over Homebrew Lua 5.5
+│   │   ├── shim.h
 │   │   └── module.modulemap
 │   └── narwhalctl/             ← CLI binary
 │       └── main.swift                  (swift-argument-parser → socket)
@@ -2024,7 +2024,7 @@ Per design step, the Hickey check:
 |---|---|---|
 | Pure `apply(Command, World)` over an OO `World.applyCommand()` method | Simple | Pure function has one role: state transition. Not braided with identity, lifecycle, observation. |
 | Swift `actor` for WorldActor | Simple | One concurrency primitive, one purpose (serialization). Built-in language feature, not a runtime library. |
-| Vanilla Lua over LuaJIT | Simple AND easy | LuaJIT is "fast but complex" (arm64 packaging, fork maintenance). Lua 5.4 is "slower but simple". For config eval, vanilla is plenty. Saves us a recurring port burden. |
+| Vanilla Lua over LuaJIT | Simple AND easy | LuaJIT is "fast but complex" (arm64 packaging, fork maintenance). Lua 5.5 is "slower but simple". For config eval, vanilla is plenty. Saves us a recurring port burden. |
 | Hand-rolled property harness over SwiftCheck | Simple | One file, ~80 lines, no external dep, no XCTest binding, plays with Swift Testing. SwiftCheck would be "easy" (familiar) but adds a maintained dep we don't control. |
 | N-ary `cells: [Cell]` over nested binary `Split` | Simple | One concept (a split of N parts) instead of two (binary split + composition rules for ternary via nesting). Center-anchor is a 3-cell split, not a contortion of binary. |
 | Native Mac Spaces over virtual workspaces | Easy over Simple — deliberate | "Use what's there" wins despite the limitation (no programmatic Space moves). Cost: active-Space-only restore in MVP and no rule action that moves windows across Spaces. Acceptable. |

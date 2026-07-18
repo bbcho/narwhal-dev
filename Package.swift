@@ -14,7 +14,11 @@ let package = Package(
         .executable(name: "NarwhalCtl", targets: ["NarwhalCtl"])
     ],
     dependencies: [
-        .package(url: "https://github.com/swiftlang/swift-testing.git", branch: "release/6.2")
+        // Immutable revision for the upstream swift-6.2.4-RELEASE tag.
+        .package(
+            url: "https://github.com/swiftlang/swift-testing.git",
+            revision: "5ee435b15ad40ec1f644b5eb9d247f263ccd2170"
+        )
     ],
     targets: [
         .systemLibrary(

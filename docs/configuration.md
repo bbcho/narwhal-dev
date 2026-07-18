@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Narwhal configuration is a Lua 5.4 file that returns one table.
+Narwhal configuration is a Lua 5.5 file that returns one table.
 
 Default user path:
 

@@ -125,14 +125,17 @@ launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.narwhal.p
 Primary log:
 
 ```text
-/tmp/narwhal.log
+~/Library/Logs/Narwhal/narwhal.log
 ```
 
 Follow logs:
 
 ```sh
-tail -f /tmp/narwhal.log
+tail -f "$HOME/Library/Logs/Narwhal/narwhal.log"
 ```
+
+`NARWHAL_LOG_PATH` overrides this path for isolated smoke-test runs. Normal user
+launches should use the default private log directory.
 
 Expected healthy startup sequence:
 
@@ -152,7 +155,7 @@ Expected healthy startup sequence:
 
 | Artifact | Path |
 |---|---|
-| Log | `/tmp/narwhal.log` |
+| Log | `~/Library/Logs/Narwhal/narwhal.log` |
 | IPC socket | `/tmp/narwhal-$(id -u).sock` |
 | User config | `~/.config/narwhal/init.lua` |
 | Restore state | `~/Library/Application Support/narwhal/state.json` |
@@ -277,7 +280,7 @@ launchctl print "gui/$(id -u)/com.ben.narwhal"
 Read logs:
 
 ```sh
-tail -n 100 /tmp/narwhal.log
+tail -n 100 "$HOME/Library/Logs/Narwhal/narwhal.log"
 ```
 
 If a stale socket remains after a crash:
@@ -297,7 +300,7 @@ Check:
 
 ```sh
 NarwhalApp --check-environment
-tail -n 80 /tmp/narwhal.log
+tail -n 80 "$HOME/Library/Logs/Narwhal/narwhal.log"
 ```
 
 ### Config Reload Failed
@@ -305,7 +308,7 @@ tail -n 80 /tmp/narwhal.log
 Logs show the exact parse or Lua error:
 
 ```sh
-tail -n 80 /tmp/narwhal.log
+tail -n 80 "$HOME/Library/Logs/Narwhal/narwhal.log"
 ```
 
 The previous valid config remains active. Fix the Lua file and save it again.
@@ -316,7 +319,7 @@ Check:
 
 - Accessibility is trusted.
 - The app is running.
-- The hotkey is registered in `/tmp/narwhal.log`.
+- The hotkey is registered in `~/Library/Logs/Narwhal/narwhal.log`.
 - No other app has captured the same global hotkey.
 - The key is supported by `HotkeyManager`.
 

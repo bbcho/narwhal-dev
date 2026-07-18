@@ -9,7 +9,7 @@ Requirements:
 - macOS 26 or newer.
 - Xcode Command Line Tools or compatible Xcode.
 - Swift package manager.
-- Homebrew Lua 5.4:
+- Homebrew Lua 5.5:
 
 ```sh
 brew install lua
@@ -239,6 +239,6 @@ For a local release candidate:
 5. Verify `launchctl print`.
 6. Run `narwhalctl reset`.
 7. Run manual tiling/focus/swap/reset smoke.
-8. Check `/tmp/narwhal.log`.
+8. Check `~/Library/Logs/Narwhal/narwhal.log`.
 
 See [Sprint gates](sprint-gates.md) for detailed acceptance criteria.

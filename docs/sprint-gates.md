@@ -110,7 +110,7 @@ scripts/install_local.sh --replace --configuration debug
 plutil -p "$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
 launchctl print "gui/$(id -u)/com.ben.narwhal"
 "$HOME/Applications/Narwhal.app/Contents/MacOS/narwhalctl" reset
-tail -n 40 /tmp/narwhal.log
+tail -n 40 "$HOME/Library/Logs/Narwhal/narwhal.log"
 ```
 
 Pass criteria:
@@ -124,7 +124,7 @@ Pass criteria:
   $HOME/Applications/Narwhal.app/Contents/MacOS/NarwhalApp`.
 - Installed `narwhalctl reset` exits with status 0 and prints `ok` followed by an
   IPC request ID.
-- `/tmp/narwhal.log` records `IPC reset layout memory`.
+- `~/Library/Logs/Narwhal/narwhal.log` records `IPC reset layout memory`.
 - Startup logs show Accessibility trusted, hotkey registration, IPC server,
   display observer, and drag zones ready.
 
@@ -134,7 +134,7 @@ Prerequisites:
 
 - Accessibility permission is granted for the executable being tested.
 - Any old `NarwhalApp` process is stopped before starting the candidate build.
-- `/tmp/narwhal.log` is readable while the candidate build runs.
+- `~/Library/Logs/Narwhal/narwhal.log` is readable while the candidate build runs.
 
 Start one of:
 

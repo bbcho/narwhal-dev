@@ -36,9 +36,9 @@ The program is built as:
 
 Prerequisites:
 
-- macOS 14 or newer.
+- macOS 26 or newer.
 - Swift toolchain compatible with the installed macOS SDK.
-- Homebrew Lua 5.4 at `/opt/homebrew/opt/lua/lib/liblua.dylib`.
+- Homebrew Lua 5.5 at `/opt/homebrew/opt/lua/lib/liblua.dylib`.
 - Accessibility permission for the executable you run.
 
 Build and test:
@@ -115,7 +115,7 @@ Config, state, logs, and IPC:
 - User config: `~/.config/narwhal/init.lua`. If this file is missing, Narwhal
   uses its built-in defaults.
 - Restore state: `~/Library/Application Support/narwhal/state.json`.
-- Log file: `/tmp/narwhal.log`.
+- Log file: `~/Library/Logs/Narwhal/narwhal.log`.
 - IPC socket: `/tmp/narwhal-$(id -u).sock`.
 
 ## Known Limitations
@@ -135,8 +135,8 @@ Config, state, logs, and IPC:
   from focus-cycle candidates for the rest of the session. The window
   remains tileable and usable; it just won't appear in the `control-
   option-I/U` rotation.
-- **Accessibility trust is revoked on every rebuild.** Each `swift build`
-  produces a new ad-hoc signature, which macOS treats as a new identity.
-  After `scripts/install_local.sh` you may need to toggle Narwhal off and
-  back on in System Settings → Privacy & Security → Accessibility. The
-  installed binary keeps trust across reboots once granted.
+- **Accessibility trust may be invalidated by rebuilds.** An ad-hoc rebuild can
+  change the code identity macOS associates with Accessibility approval. After
+  `scripts/install_local.sh` you may need to toggle Narwhal off and back on in
+  System Settings → Privacy & Security → Accessibility. A stable signing
+  identity avoids that churn.
