@@ -776,16 +776,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func drainHotkeyQueue() async {
         while !pendingHotkeys.isEmpty {
-            let action = pendingHotkeys.removeFirst()
+            guard let batch = nextHotkeyExecutionBatch(in: pendingHotkeys) else { break }
+            pendingHotkeys.removeFirst(batch.consumedCount)
             await commandExecutionGate.perform {
-                await self.performHotkey(action)
+                await self.performHotkey(batch.action, resizeDeltas: batch.resizeDeltas)
             }
         }
         isDrainingHotkeys = false
     }
 
     @MainActor
-    private func performHotkey(_ action: HotkeyAction) async {
+    private func performHotkey(_ action: HotkeyAction, resizeDeltas: [Double] = []) async {
         if routeCommandOverlayHotkey(action) {
             return
         }
@@ -822,7 +823,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .command(.swap(let direction)):
             await performSwap(direction)
         case .command(.resizeSplit(let direction, let delta)):
-            await performResize(direction, delta: delta)
+            await performResize(direction, deltas: resizeDeltas.isEmpty ? [delta] : resizeDeltas)
         case .command(.focusDirection(let direction)):
             await performFocusDirection(direction)
         case .command(.focusCycle(let direction)):
@@ -1345,19 +1346,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     @discardableResult
     private func performResize(_ direction: Direction, delta: Double) async -> Bool {
-        let operation = "Resize \(direction.rawValue) \(delta)"
+        await performResize(direction, deltas: [delta])
+    }
+
+    @MainActor
+    @discardableResult
+    private func performResize(_ direction: Direction, deltas: [Double]) async -> Bool {
+        let operation = "Resize \(direction.rawValue) \(deltas)"
         guard let context = await focusedLayoutContext(operation: operation),
               let displayID = displayForFocusedWindow(context, operation: operation),
               await prepareLayoutWorld(context, displayID: displayID, operation: operation, refreshReason: "pre-resize \(direction.rawValue)")
         else { return false }
 
-        switch await worldActor.planResize(context.id, direction: direction, delta: delta) {
+        switch await worldActor.planResizeSequence(context.id, direction: direction, deltas: deltas) {
         case .success(let result):
             return await applyPlannedResize(
                 result,
                 windowID: context.id,
                 direction: direction,
-                delta: delta,
+                deltas: deltas,
                 retryOnClamp: true
             )
         case .failure(let error):
@@ -1850,17 +1857,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ result: CommandPlanResult,
         windowID: WindowID,
         direction: Direction,
-        delta: Double,
+        deltas: [Double],
         retryOnClamp: Bool
     ) async -> Bool {
         await applyPlannedLayout(
             result,
-            operation: "Resize \(direction.rawValue) \(delta)",
-            persistReason: "resize \(direction.rawValue) \(delta)",
+            operation: "Resize \(direction.rawValue) \(deltas)",
+            persistReason: "resize \(direction.rawValue) \(deltas)",
             retryOnClamp: retryOnClamp,
             writeStrategy: .coordinated
         ) {
-            await self.worldActor.planResize(windowID, direction: direction, delta: delta)
+            await self.worldActor.planResizeSequence(windowID, direction: direction, deltas: deltas)
         }
     }
 
@@ -2787,7 +2794,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     result,
                     windowID: windowID,
                     direction: direction,
-                    delta: delta,
+                    deltas: [delta],
                     retryOnClamp: true
                 )
             }

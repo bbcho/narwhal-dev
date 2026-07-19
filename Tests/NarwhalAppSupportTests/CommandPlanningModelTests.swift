@@ -123,6 +123,69 @@ struct CommandPlanningModelTests {
         #expect(plan == nil)
     }
 
+    @Test("Resize sequence planning applies ordered deltas in one plan")
+    func resizeSequencePlanningAppliesOrderedDeltasInOnePlan() throws {
+        let left = windowFixture(1)
+        let right = windowFixture(2)
+        let original = worldFixture(
+            windows: [left, right],
+            tree: try horizontalSplit(left.id, right.id),
+            floating: [],
+            focused: left.id
+        )
+        let afterFirst = try apply(.resizeSplit(left.id, .right, delta: 0.1), to: original).get()
+        let expected = try apply(.resizeSplit(left.id, .right, delta: 0.2), to: afterFirst).get()
+
+        let plan = try resizeSequenceCommandPlan(
+            in: original,
+            windowID: left.id,
+            direction: .right,
+            deltas: [0.1, 0.2],
+            generation: LayoutGeneration(raw: 45)
+        ).get()
+
+        #expect(plan.plannedWorld == expected)
+        #expect(plan.undoWorld == original)
+        #expect(plan.desiredLayout.generation.raw == 45)
+    }
+
+    @Test("Resize sequence planning keeps the valid prefix at a split limit")
+    func resizeSequencePlanningKeepsValidPrefix() throws {
+        let left = windowFixture(1)
+        let right = windowFixture(2)
+        let original = worldFixture(
+            windows: [left, right],
+            tree: try horizontalSplit(left.id, right.id),
+            floating: [],
+            focused: left.id
+        )
+        let expected = try apply(.resizeSplit(left.id, .right, delta: 0.5), to: original).get()
+
+        let plan = try resizeSequenceCommandPlan(
+            in: original,
+            windowID: left.id,
+            direction: .right,
+            deltas: [0.5, 0.75],
+            generation: LayoutGeneration(raw: 46)
+        ).get()
+
+        #expect(plan.plannedWorld == expected)
+    }
+
+    @Test("Resize sequence planning rejects an empty sequence")
+    func resizeSequencePlanningRejectsEmptySequence() {
+        let window = windowFixture(1)
+        let world = worldFixture(windows: [window], tree: .leaf(window.id), floating: [])
+
+        #expect(resizeSequenceCommandPlan(
+            in: world,
+            windowID: window.id,
+            direction: .right,
+            deltas: [],
+            generation: LayoutGeneration(raw: 47)
+        ) == .failure(.invalidResizeDelta))
+    }
+
     @Test("Focus direction plan uses active floating geometry as fallback")
     func focusDirectionPlanUsesActiveFloatingGeometryAsFallback() throws {
         let left = windowFixture(1, frame: CGRect(x: 0, y: 0, width: 400, height: 600))
@@ -332,5 +395,12 @@ struct CommandPlanningModelTests {
             isResizable: true,
             isMinimized: false
         )
+    }
+
+    private func horizontalSplit(_ left: WindowID, _ right: WindowID) throws -> Node {
+        let cells = try [left, right].map { windowID in
+            try Cell.create(weight: 1, node: .leaf(windowID)).get()
+        }
+        return .split(try Split.create(axis: .horizontal, cells: cells).get())
     }
 }

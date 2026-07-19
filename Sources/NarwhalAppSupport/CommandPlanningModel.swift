@@ -64,6 +64,48 @@ public func commandPlan(
         .mapError(CommandError.layoutUnsatisfiable)
 }
 
+public func resizeSequenceCommandPlan(
+    in world: World,
+    windowID: WindowID,
+    direction: Direction,
+    deltas: [Double],
+    generation: LayoutGeneration
+) -> Result<CommandPlanResult, CommandError> {
+    guard !deltas.isEmpty else { return .failure(.invalidResizeDelta) }
+
+    func plan(to candidate: World) -> Result<CommandPlanResult, CommandError> {
+        commandPlan(
+            from: world,
+            to: candidate,
+            focusedWindowID: windowID,
+            undoWorld: world,
+            generation: generation,
+            scope: commandPlanScope(focusedWindowID: windowID, oldWorld: world, newWorld: candidate)
+        )
+    }
+
+    var latestValidWorld = world
+    var appliedCount = 0
+    for delta in deltas {
+        let candidate: World
+        switch apply(.resizeSplit(windowID, direction, delta: delta), to: latestValidWorld) {
+        case .success(let next):
+            candidate = next
+        case .failure(let error):
+            return appliedCount == 0 ? .failure(error) : plan(to: latestValidWorld)
+        }
+
+        switch plan(to: candidate) {
+        case .success:
+            latestValidWorld = candidate
+            appliedCount += 1
+        case .failure(let error):
+            return appliedCount == 0 ? .failure(error) : plan(to: latestValidWorld)
+        }
+    }
+    return plan(to: latestValidWorld)
+}
+
 public func customLayoutCommandPlan(
     from oldWorld: World,
     to newWorld: World,

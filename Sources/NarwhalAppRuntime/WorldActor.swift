@@ -167,7 +167,21 @@ actor WorldActor {
         direction: Direction,
         delta: Double
     ) -> Result<CommandPlanResult, CommandError> {
-        planLayoutCommand(.resizeSplit(windowID, direction, delta: delta), focusedWindowID: windowID)
+        planResizeSequence(windowID, direction: direction, deltas: [delta])
+    }
+
+    func planResizeSequence(
+        _ windowID: WindowID,
+        direction: Direction,
+        deltas: [Double]
+    ) -> Result<CommandPlanResult, CommandError> {
+        advanceLayoutGeneration(onSuccess: resizeSequenceCommandPlan(
+            in: world,
+            windowID: windowID,
+            direction: direction,
+            deltas: deltas,
+            generation: LayoutGeneration(raw: nextGeneration)
+        ))
     }
 
     func planBalanceActiveSpace() -> Result<CommandPlanResult, CommandError> {
