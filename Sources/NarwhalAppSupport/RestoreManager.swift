@@ -158,6 +158,7 @@ public struct RestoreManager: Sendable {
             .deletingLastPathComponent()
             .appendingPathComponent("\(fileURL.lastPathComponent).corrupt-\(id)")
         try FileManager.default.moveItem(at: fileURL, to: destination)
+        try restrictPermissions(of: destination)
         return destination
     }
 

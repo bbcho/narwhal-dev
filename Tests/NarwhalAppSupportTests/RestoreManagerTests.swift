@@ -194,7 +194,9 @@ struct RestoreManagerTests {
         #expect(recovery.backupError == nil)
         #expect(recovery.quarantinedFilenames == ["state.json.corrupt-test"])
         #expect(try manager.load() == backup)
-        #expect(try String(contentsOf: quarantinedURL(named: "state.json.corrupt-test", paths: paths), encoding: .utf8) == "not-json")
+        let quarantined = quarantinedURL(named: "state.json.corrupt-test", paths: paths)
+        #expect(try String(contentsOf: quarantined, encoding: .utf8) == "not-json")
+        #expect(posixPermissions(at: quarantined) == 0o600)
     }
 
     @Test("Corrupt primary and backup are both quarantined before empty recovery")
@@ -218,8 +220,12 @@ struct RestoreManagerTests {
         ])
         #expect(FileManager.default.fileExists(atPath: paths.file.path) == false)
         #expect(FileManager.default.fileExists(atPath: manager.backupURL.path) == false)
-        #expect(try String(contentsOf: quarantinedURL(named: "state.json.corrupt-both", paths: paths), encoding: .utf8) == "bad-primary")
-        #expect(try String(contentsOf: quarantinedURL(named: "state.json.previous.corrupt-both", paths: paths), encoding: .utf8) == "bad-backup")
+        let quarantinedPrimary = quarantinedURL(named: "state.json.corrupt-both", paths: paths)
+        let quarantinedBackup = quarantinedURL(named: "state.json.previous.corrupt-both", paths: paths)
+        #expect(try String(contentsOf: quarantinedPrimary, encoding: .utf8) == "bad-primary")
+        #expect(try String(contentsOf: quarantinedBackup, encoding: .utf8) == "bad-backup")
+        #expect(posixPermissions(at: quarantinedPrimary) == 0o600)
+        #expect(posixPermissions(at: quarantinedBackup) == 0o600)
     }
 
     @Test("Future schema remains untouched for recovery by a newer app")
