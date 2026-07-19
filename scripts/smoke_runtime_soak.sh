@@ -43,6 +43,7 @@ tmp_root="/private/tmp/narwhal-runtime-soak"
 config="$tmp_root/config/init.lua"
 state_path="$tmp_root/state/state.json"
 log_path="$tmp_root/log/narwhal.log"
+console_path="$tmp_root/log/console.log"
 socket_path="/tmp/narwhal-$(id -u).sock"
 export NARWHAL_LOG_PATH="$log_path"
 app_pid=""
@@ -64,6 +65,9 @@ fail() {
   echo "smoke_runtime_soak failed: $*" >&2
   if [ -f "$log_path" ]; then
     tail -n 160 "$log_path" >&2 || true
+  fi
+  if [ -f "$console_path" ]; then
+    tail -n 80 "$console_path" >&2 || true
   fi
   exit 1
 }
@@ -111,7 +115,7 @@ bin_path="$(swift build --disable-sandbox --show-bin-path)"
 app="$bin_path/NarwhalApp"
 ctl="$bin_path/NarwhalCtl"
 
-"$app" --config "$config" --restore-state "$state_path" &
+"$app" --config "$config" --restore-state "$state_path" >"$console_path" 2>&1 &
 app_pid="$!"
 wait_for_log "Layout command loop ready" 30
 
