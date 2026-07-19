@@ -28,7 +28,9 @@ enum FocusedUnavailablePollingVerification {
         )
 
         service.start()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.62))
+        service.pollFocusedWindowNow()
+        service.pollFocusedWindowNow()
+        service.pollFocusedWindowNow()
         service.stop()
 
         guard emitted.isEmpty else {

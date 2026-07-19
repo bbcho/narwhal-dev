@@ -4,7 +4,8 @@ import NarwhalCore
 
 @MainActor
 final class AXObserverService {
-    private static let pollInterval: TimeInterval = 0.15
+    private static let reconciliationInterval: TimeInterval = 1.0
+    private static let geometryThrottleInterval: TimeInterval = 1.0 / 30.0
     private static let frameTolerance: CGFloat = 1
 
     private let focusedWindowSnapshot: @MainActor () -> Result<FocusedWindowSnapshot, AXClientError>
@@ -14,9 +15,13 @@ final class AXObserverService {
     private let activeSpaceByDisplay: @MainActor ([WindowMetadata]) -> [DisplayID: SpaceID]
     private let emit: @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
     private let spaceChanged: @MainActor () -> Void
-    private var timer: Timer?
+    private let notificationFastPathEnabled: Bool
+    private var reconciliationTimer: Timer?
+    private var geometryThrottleTimer: Timer?
     private var settleTimers: [Timer] = []
     private var workspaceObserver: NSObjectProtocol?
+    private var notificationClient: AXNotificationClient?
+    private var geometryThrottleState = AXGeometryNotificationThrottleState.idle
     private var focusedObservationState = FocusedWindowObservationState.empty
     private var focusedAvailabilityLogState = FocusedWindowAvailabilityLogState.empty
     private var windowInventoryObservationState = WindowInventoryObservationState.empty
@@ -36,6 +41,7 @@ final class AXObserverService {
         self.activeSpaceByDisplay = activeSpaceByDisplay
         self.spaceChanged = spaceChanged
         self.emit = emit
+        self.notificationFastPathEnabled = true
     }
 
     init(
@@ -45,6 +51,7 @@ final class AXObserverService {
         reporter: StartupReporter,
         activeSpaceByDisplay: @escaping @MainActor ([WindowMetadata]) -> [DisplayID: SpaceID],
         spaceChanged: @escaping @MainActor () -> Void,
+        notificationFastPathEnabled: Bool = false,
         emit: @escaping @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
     ) {
         self.focusedWindowSnapshot = focusedWindowSnapshot
@@ -54,13 +61,14 @@ final class AXObserverService {
         self.activeSpaceByDisplay = activeSpaceByDisplay
         self.spaceChanged = spaceChanged
         self.emit = emit
+        self.notificationFastPathEnabled = notificationFastPathEnabled
     }
 
     func start() {
-        guard timer == nil else { return }
+        guard reconciliationTimer == nil else { return }
         pollFocusedWindow()
         syncWindowInventory()
-        timer = makeTimer(interval: Self.pollInterval, repeats: true) { [weak self] _ in
+        reconciliationTimer = makeTimer(interval: Self.reconciliationInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.pollFocusedWindow()
                 self?.pollVisibleWindowInventory()
@@ -75,12 +83,28 @@ final class AXObserverService {
                 self?.activeSpaceChanged()
             }
         }
-        reporter.info("AX focus observer ready")
+        if notificationFastPathEnabled {
+            let notificationClient = AXNotificationClient(reporter: reporter) { [weak self] event in
+                self?.handleNotificationEvent(event)
+            }
+            notificationClient.start()
+            self.notificationClient = notificationClient
+        }
+        let fastPath = notificationFastPathActive ? "active" : "unavailable; using reconciliation fallback"
+        reporter.info("AX observer ready; notification fast path \(fastPath)")
     }
 
     func stop() {
-        timer?.invalidate()
-        timer = nil
+        notificationClient?.stop()
+        notificationClient = nil
+        reconciliationTimer?.invalidate()
+        reconciliationTimer = nil
+        geometryThrottleTimer?.invalidate()
+        geometryThrottleTimer = nil
+        geometryThrottleState = reduceAXGeometryNotificationThrottle(
+            state: geometryThrottleState,
+            input: .cancelled
+        ).state
         settleTimers.forEach { $0.invalidate() }
         settleTimers.removeAll()
         focusedAvailabilityLogState = .empty
@@ -93,6 +117,64 @@ final class AXObserverService {
 
     func pollFocusedWindowNow() {
         pollFocusedWindow()
+    }
+
+    var notificationFastPathActive: Bool {
+        notificationClient?.isActive == true
+    }
+
+    private func handleNotificationEvent(_ event: AXNotificationEvent) {
+        switch event {
+        case .applicationActivated:
+            cancelGeometryThrottle()
+            pollFocusedWindow()
+            pollVisibleWindowInventory()
+        case .focusedWindowChanged:
+            cancelGeometryThrottle()
+            pollFocusedWindow()
+        case .focusedWindowGeometryChanged:
+            applyGeometryThrottleInput(.notificationReceived)
+        case .windowInventoryChanged:
+            pollVisibleWindowInventory()
+        }
+    }
+
+    private func cancelGeometryThrottle() {
+        geometryThrottleTimer?.invalidate()
+        geometryThrottleTimer = nil
+        geometryThrottleState = reduceAXGeometryNotificationThrottle(
+            state: geometryThrottleState,
+            input: .cancelled
+        ).state
+    }
+
+    private func applyGeometryThrottleInput(_ input: AXGeometryNotificationThrottleInput) {
+        let transition = reduceAXGeometryNotificationThrottle(
+            state: geometryThrottleState,
+            input: input
+        )
+        geometryThrottleState = transition.state
+        for effect in transition.effects {
+            switch effect {
+            case .pollFocusedWindow:
+                pollFocusedWindow()
+            case .scheduleTimer:
+                scheduleGeometryThrottleTimer()
+            }
+        }
+    }
+
+    private func scheduleGeometryThrottleTimer() {
+        geometryThrottleTimer?.invalidate()
+        geometryThrottleTimer = makeTimer(
+            interval: Self.geometryThrottleInterval,
+            repeats: false
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.geometryThrottleTimer = nil
+                self?.applyGeometryThrottleInput(.timerFired)
+            }
+        }
     }
 
     private func activeSpaceChanged() {
