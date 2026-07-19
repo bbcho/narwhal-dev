@@ -13,6 +13,13 @@ struct NarwhalCtl {
             case .ok(let commandID):
                 print("ok \(commandID.raw)")
                 Darwin.exit(0)
+            case .diagnostics(_, let diagnostics):
+                if invocation.jsonOutput {
+                    print(try diagnosticsJSON(diagnostics))
+                } else {
+                    print(humanReadableDiagnostics(diagnostics))
+                }
+                Darwin.exit(0)
             case .error(_, let code, let message):
                 fputs("error \(code): \(message)\n", stderr)
                 Darwin.exit(1)
@@ -33,6 +40,13 @@ struct NarwhalCtl {
 private struct Invocation {
     let socketPath: String
     let command: IPCCommandDTO
+    let jsonOutput: Bool
+
+    init(socketPath: String, command: IPCCommandDTO, jsonOutput: Bool = false) {
+        self.socketPath = socketPath
+        self.command = command
+        self.jsonOutput = jsonOutput
+    }
 }
 
 private enum NarwhalCtlError: Error, CustomStringConvertible {
@@ -78,6 +92,7 @@ private enum NarwhalCtlError: Error, CustomStringConvertible {
         usage:
           narwhalctl reset [--socket PATH]
           narwhalctl balance [--socket PATH]
+          narwhalctl status [--json] [--socket PATH]
           narwhalctl quit [--socket PATH]
           narwhalctl push <left|right|up|down> [--window WINDOW_ID] [--socket PATH]
           narwhalctl swap <left|right|up|down> [--window WINDOW_ID] [--socket PATH]
@@ -97,6 +112,7 @@ private func parseInvocation(_ arguments: [String]) throws -> Invocation {
     var positional: [String] = []
     var explicitWindowID: WindowID?
     var resizeDelta: Double?
+    var jsonOutput = false
     var index = 0
 
     while index < arguments.count {
@@ -117,6 +133,9 @@ private func parseInvocation(_ arguments: [String]) throws -> Invocation {
             guard arguments.indices.contains(valueIndex) else { throw NarwhalCtlError.missingDelta }
             resizeDelta = try parseResizeDelta(arguments[valueIndex])
             index += 2
+        case "--json":
+            jsonOutput = true
+            index += 1
         default:
             if argument.hasPrefix("--") {
                 throw NarwhalCtlError.unexpectedArgument(argument)
@@ -127,6 +146,9 @@ private func parseInvocation(_ arguments: [String]) throws -> Invocation {
     }
 
     guard let command = positional.first else { throw NarwhalCtlError.missingCommand }
+    guard !jsonOutput || command == "status" else {
+        throw NarwhalCtlError.unexpectedArgument("--json")
+    }
     switch command {
     case "reset", "reset-layout", "resetLayout":
         guard positional.count == 1 else { throw NarwhalCtlError.unexpectedArgument(positional[1]) }
@@ -137,6 +159,11 @@ private func parseInvocation(_ arguments: [String]) throws -> Invocation {
         guard explicitWindowID == nil else { throw NarwhalCtlError.unexpectedArgument("--window") }
         guard resizeDelta == nil else { throw NarwhalCtlError.unexpectedArgument("--delta") }
         return Invocation(socketPath: socketPath, command: .balance)
+    case "status":
+        guard positional.count == 1 else { throw NarwhalCtlError.unexpectedArgument(positional[1]) }
+        guard explicitWindowID == nil else { throw NarwhalCtlError.unexpectedArgument("--window") }
+        guard resizeDelta == nil else { throw NarwhalCtlError.unexpectedArgument("--delta") }
+        return Invocation(socketPath: socketPath, command: .status, jsonOutput: jsonOutput)
     case "quit":
         guard positional.count == 1 else { throw NarwhalCtlError.unexpectedArgument(positional[1]) }
         guard resizeDelta == nil else { throw NarwhalCtlError.unexpectedArgument("--delta") }
@@ -241,4 +268,46 @@ private func parseResizeDelta(_ raw: String) throws -> Double {
         throw NarwhalCtlError.invalidDelta(raw)
     }
     return value
+}
+
+private func diagnosticsJSON(_ diagnostics: RuntimeDiagnostics) throws -> String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+    return String(decoding: try encoder.encode(diagnostics), as: UTF8.self)
+}
+
+private func humanReadableDiagnostics(_ diagnostics: RuntimeDiagnostics) -> String {
+    var lines = [
+        "Narwhal \(diagnostics.appVersion) (\(diagnostics.buildVersion))",
+        "Generated: \(diagnostics.generatedAt)",
+        "Accessibility: \(diagnostics.accessibilityTrusted ? "trusted" : "not trusted")",
+        "AX notification fast path: \(diagnostics.notificationFastPathActive ? "active" : "inactive")",
+        "Config: \(diagnostics.configHealthy ? "healthy" : "failed")",
+        "State: \(diagnostics.paused ? "paused" : "running")",
+        "Active Space: \(diagnostics.activeSpaceID.map(String.init) ?? "unknown")",
+        "Displays: \(diagnostics.displayCount)",
+        "Windows: \(diagnostics.windowCount) (\(diagnostics.tiledWindowCount) tiled)",
+        "Snapshot: \(diagnostics.snapshotQuality.rawValue)",
+        "Focus: \(diagnostics.focusedWindowID.map { "w\($0)" } ?? "unknown")",
+        "Last command: \(diagnostics.lastCommand ?? "none")",
+        "Queues: \(diagnostics.pendingHotkeyCount) hotkey, \(diagnostics.pendingGeometryEventCount) geometry",
+        "Dropped log lines: \(diagnostics.droppedLogLineCount)"
+    ]
+    if !diagnostics.latency.isEmpty {
+        lines.append("Latency (milliseconds):")
+        for summary in diagnostics.latency {
+            lines.append(
+                "  \(summary.metric.rawValue): latest=\(formatMilliseconds(summary.latestMilliseconds)) "
+                    + "median=\(formatMilliseconds(summary.medianMilliseconds)) "
+                    + "p95=\(formatMilliseconds(summary.p95Milliseconds)) "
+                    + "max=\(formatMilliseconds(summary.maximumMilliseconds)) "
+                    + "samples=\(summary.sampleCount)"
+            )
+        }
+    }
+    return lines.joined(separator: "\n")
+}
+
+private func formatMilliseconds(_ value: Double) -> String {
+    String(format: "%.2f", value)
 }

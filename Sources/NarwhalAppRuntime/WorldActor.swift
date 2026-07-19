@@ -395,6 +395,15 @@ actor WorldActor {
         }
     }
 
+    func tiledWindowCount() -> Int {
+        guard let activeSpace = world.activeSpace,
+              let space = world.spaces[activeSpace]
+        else { return 0 }
+        return space.displays.values.reduce(0) { count, display in
+            count + occupiedWindows(in: display.tree).count
+        }
+    }
+
     func recordObservedConstraints(_ observations: [WindowID: WindowConstraints]) {
         world = worldByRecordingObservedConstraints(observations, in: world)
     }

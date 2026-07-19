@@ -338,6 +338,13 @@ Narwhal records observed minimum-size constraints when a frame is clamped and
 retries once. If the layout remains unsatisfiable, the planned layout is not
 committed.
 
+Capture the current runtime state without exposing window titles or user paths:
+
+```sh
+narwhalctl status
+narwhalctl status --json
+```
+
 ### Restore Looks Wrong After Monitor Changes
 
 Restore prefers display fingerprint and falls back to display slot. If a display

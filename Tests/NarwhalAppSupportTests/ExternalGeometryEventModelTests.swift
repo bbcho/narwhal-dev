@@ -183,6 +183,8 @@ struct ExternalGeometryEventModelTests {
         queue.enqueue(.windowMoved(first, firstNewFrame), for: first)
         queue.enqueue(.windowMoved(second, secondNewFrame), for: second)
 
+        #expect(queue.count == 2)
+
         let world = twoWindowWorld(
             display: display,
             space: space,
@@ -203,6 +205,7 @@ struct ExternalGeometryEventModelTests {
         #expect(next.windows[first]?.frame == firstNewFrame)
         #expect(next.windows[second]?.frame == secondNewFrame)
         #expect(queue.isEmpty)
+        #expect(queue.count == 0)
     }
 
     private func twoWindowWorld(

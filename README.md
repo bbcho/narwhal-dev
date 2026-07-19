@@ -68,6 +68,7 @@ Narwhal menu-bar icon rather than a Dock icon.
 Control the running app:
 
 ```sh
+$HOME/Applications/Narwhal.app/Contents/MacOS/narwhalctl status
 $HOME/Applications/Narwhal.app/Contents/MacOS/narwhalctl reset
 $HOME/Applications/Narwhal.app/Contents/MacOS/narwhalctl push left
 $HOME/Applications/Narwhal.app/Contents/MacOS/narwhalctl balance

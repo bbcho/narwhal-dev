@@ -128,6 +128,7 @@ public enum CommandOutcome: Equatable, Sendable {
 
 public enum IPCReplyDTO: Codable, Equatable, Sendable {
     case ok(commandID: CommandID)
+    case diagnostics(commandID: CommandID, value: RuntimeDiagnostics)
     case error(commandID: CommandID, code: String, message: String)
 
     private enum CodingKeys: String, CodingKey {
@@ -135,10 +136,12 @@ public enum IPCReplyDTO: Codable, Equatable, Sendable {
         case commandID
         case code
         case message
+        case diagnostics
     }
 
     private enum Status: String, Codable {
         case ok
+        case diagnostics
         case error
     }
 
@@ -158,6 +161,11 @@ public enum IPCReplyDTO: Codable, Equatable, Sendable {
         switch status {
         case .ok:
             self = .ok(commandID: commandID)
+        case .diagnostics:
+            self = .diagnostics(
+                commandID: commandID,
+                value: try container.decode(RuntimeDiagnostics.self, forKey: .diagnostics)
+            )
         case .error:
             self = .error(
                 commandID: commandID,
@@ -173,6 +181,10 @@ public enum IPCReplyDTO: Codable, Equatable, Sendable {
         case .ok(let commandID):
             try container.encode(Status.ok, forKey: .status)
             try container.encode(commandID.raw, forKey: .commandID)
+        case .diagnostics(let commandID, let value):
+            try container.encode(Status.diagnostics, forKey: .status)
+            try container.encode(commandID.raw, forKey: .commandID)
+            try container.encode(value, forKey: .diagnostics)
         case .error(let commandID, let code, let message):
             try container.encode(Status.error, forKey: .status)
             try container.encode(commandID.raw, forKey: .commandID)
@@ -201,6 +213,7 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
     case focus(windowID: WindowID)
     case toggleFloat(windowID: WindowID)
     case balance
+    case status
     case resetLayout
     case quit
 
@@ -222,6 +235,7 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
         case focus
         case toggleFloat
         case balance
+        case status
         case resetLayout
         case quit
     }
@@ -256,6 +270,8 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
         case .toggleFloat(let windowID):
             return .success(.toggleFloat(windowID))
         case .balance:
+            return .failure(.shellCommandOnly)
+        case .status:
             return .failure(.shellCommandOnly)
         case .resetLayout:
             return .success(.resetLayout)
@@ -303,6 +319,8 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             self = .toggleFloat(windowID: try Self.decodeWindowID(from: container))
         case .balance:
             self = .balance
+        case .status:
+            self = .status
         case .resetLayout:
             self = .resetLayout
         case .quit:
@@ -356,6 +374,8 @@ public enum IPCCommandDTO: Codable, Equatable, Sendable {
             try container.encode(windowID.raw, forKey: .windowID)
         case .balance:
             try container.encode(CommandName.balance, forKey: .command)
+        case .status:
+            try container.encode(CommandName.status, forKey: .command)
         case .resetLayout:
             try container.encode(CommandName.resetLayout, forKey: .command)
         case .quit:

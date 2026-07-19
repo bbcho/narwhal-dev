@@ -22,6 +22,7 @@ struct IPCDTOTests {
         #expect(try encode(.focusCycle(.next)) == #"{"command":"focusCycle","direction":"next"}"#)
         #expect(try encode(.focus(windowID: WindowID(raw: 237))) == #"{"command":"focus","windowID":237}"#)
         #expect(try encode(.balance) == #"{"command":"balance"}"#)
+        #expect(try encode(.status) == #"{"command":"status"}"#)
         #expect(try encode(.resetLayout) == #"{"command":"resetLayout"}"#)
         #expect(try encode(.quit) == #"{"command":"quit"}"#)
     }
@@ -41,6 +42,7 @@ struct IPCDTOTests {
         #expect(try decodeCommand(#"{"command":"toggleFloat","windowID":236}"#).toCommand() == .success(.toggleFloat(WindowID(raw: 236))))
         #expect(try decodeCommand(#"{"command":"focus","windowID":237}"#).toCommand() == .success(.focus(WindowID(raw: 237))))
         #expect(try decodeCommand(#"{"command":"balance"}"#).toCommand() == .failure(.shellCommandOnly))
+        #expect(try decodeCommand(#"{"command":"status"}"#).toCommand() == .failure(.shellCommandOnly))
         #expect(try decodeCommand(#"{"command":"swap","direction":"left"}"#).toCommand() == .failure(.focusedWindowRequired))
         #expect(try decodeCommand(#"{"command":"swap","direction":"left"}"#).toCommand(focusedWindowID: WindowID(raw: 567)) == .success(.swapInTree(WindowID(raw: 567), .left)))
         #expect(try decodeCommand(#"{"command":"swap","direction":"right","windowID":678}"#).toCommand() == .success(.swapInTree(WindowID(raw: 678), .right)))
@@ -65,15 +67,49 @@ struct IPCDTOTests {
             try encodeReply(.error(commandID: CommandID(raw: "ipc-2"), code: "invalid_json", message: "bad payload"))
                 == #"{"code":"invalid_json","commandID":"ipc-2","message":"bad payload","status":"error"}"#
         )
+        #expect(
+            try encodeReply(.diagnostics(commandID: CommandID(raw: "ipc-3"), value: diagnosticsFixture()))
+                .contains(#""status":"diagnostics""#)
+        )
     }
 
     @Test("Reply JSON round-trips exact values")
     func replyJSONRoundTripsExactValues() throws {
         let ok = try decodeReply(#"{"commandID":"ipc-1","status":"ok"}"#)
         let error = try decodeReply(#"{"code":"window_not_found","commandID":"ipc-2","message":"Window missing","status":"error"}"#)
+        let diagnostics = try decodeReply(try encodeReply(
+            .diagnostics(commandID: CommandID(raw: "ipc-3"), value: diagnosticsFixture())
+        ))
 
         #expect(ok == .ok(commandID: CommandID(raw: "ipc-1")))
         #expect(error == .error(commandID: CommandID(raw: "ipc-2"), code: "window_not_found", message: "Window missing"))
+        #expect(diagnostics == .diagnostics(
+            commandID: CommandID(raw: "ipc-3"),
+            value: diagnosticsFixture()
+        ))
+    }
+
+    private func diagnosticsFixture() -> RuntimeDiagnostics {
+        RuntimeDiagnostics(
+            generatedAt: "2026-07-19T18:00:00Z",
+            appVersion: "0.1.0",
+            buildVersion: "1",
+            accessibilityTrusted: true,
+            notificationFastPathActive: true,
+            configHealthy: true,
+            paused: false,
+            activeSpaceID: 4,
+            displayCount: 2,
+            windowCount: 5,
+            tiledWindowCount: 3,
+            snapshotQuality: .complete,
+            focusedWindowID: 42,
+            lastCommand: "Resize right",
+            pendingHotkeyCount: 0,
+            pendingGeometryEventCount: 0,
+            droppedLogLineCount: 0,
+            latency: []
+        )
     }
 
     private func encode(_ dto: IPCCommandDTO) throws -> String {

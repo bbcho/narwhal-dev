@@ -136,6 +136,18 @@ Refreshes the active environment, requires a complete AX snapshot, normalizes
 all split weights in the active Space, applies the solved layout, and persists
 restore state.
 
+### `status`
+
+```sh
+narwhalctl status
+narwhalctl status --json
+```
+
+Reports Accessibility trust, notification fast-path state, config and pause
+state, aggregate window counts, queue depth, dropped log lines, and recent
+latency summaries. The JSON form is intended for support bundles and scripts;
+it excludes window titles, application names, and user paths.
+
 ### `quit`
 
 ```sh
@@ -278,9 +290,13 @@ Command forms:
 {"command":"focusCycle","direction":"next"}
 {"command":"focus","windowID":12345}
 {"command":"balance"}
+{"command":"status"}
 {"command":"resetLayout"}
 {"command":"quit"}
 ```
+
+The `status` request returns `status: "diagnostics"` with a `diagnostics`
+object instead of the usual `ok` reply.
 
 Focused IPC forms such as `push` without `windowID` are resolved by the app
 shell after reading the currently focused window.

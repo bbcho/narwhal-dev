@@ -105,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var runningServices: RunningServices?
     private var servicesStarted = false
     private var isPaused = false
+    private var configHealthy = true
     // AX raise failures survive environment refreshes, so exclusions are session-scoped.
     private var axRaiseBlocklist: Set<WindowID> = []
 
@@ -2159,6 +2160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             loaded = value
         case .failure(let error):
             reporter.error("Config reload failed (\(reason)): \(error.description)")
+            configHealthy = false
             menubar.updateConfigStatus(.failed(error.description))
             showOperatorFeedback("Config reload failed", tone: .error)
             return
@@ -2169,12 +2171,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             let message = String(describing: error)
             reporter.error("Config reload failed rebinding hotkeys (\(reason)): \(message)")
+            configHealthy = false
             menubar.updateConfigStatus(.failed(message))
             showOperatorFeedback("Hotkey rebind failed", tone: .error)
             return
         }
 
         config = loaded.config
+        configHealthy = true
         await worldActor.reloadConfig(loaded.config)
         overlay.updateConfig(border: loaded.config.border, hud: loaded.config.hud)
         eventTapClient?.updateModifier(loaded.config.dragModifier)
@@ -2497,6 +2501,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleSerializedIPCCommand(_ command: IPCCommandDTO) async -> IPCReplyDTO {
         let commandID = CommandID(raw: "ipc-\(UUID().uuidString)")
         switch command {
+        case .status:
+            return .diagnostics(commandID: commandID, value: await runtimeDiagnostics())
         case .resetLayout:
             await performResetLayout(requiresConfirmation: false, logPrefix: "IPC reset", persistReason: "ipc reset")
             return .ok(commandID: commandID)
@@ -2816,6 +2822,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.terminate(nil)
     }
 
+    private func runtimeDiagnostics() async -> RuntimeDiagnostics {
+        let bundle = Bundle.main
+        return RuntimeDiagnostics(
+            generatedAt: ISO8601DateFormatter().string(from: Date()),
+            appVersion: bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development",
+            buildVersion: bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development",
+            accessibilityTrusted: operatingStatus.accessibilityTrusted == true,
+            notificationFastPathActive: axObserverService?.notificationFastPathActive == true,
+            configHealthy: configHealthy,
+            paused: isPaused,
+            activeSpaceID: operatingStatus.activeSpace?.raw,
+            displayCount: operatingStatus.displayCount ?? 0,
+            windowCount: operatingStatus.windowCount ?? 0,
+            tiledWindowCount: await worldActor.tiledWindowCount(),
+            snapshotQuality: runtimeSnapshotQuality(operatingStatus.snapshotQuality),
+            focusedWindowID: operatingStatus.focusedWindowID?.raw,
+            lastCommand: operatingStatus.lastCommand,
+            pendingHotkeyCount: pendingHotkeys.count,
+            pendingGeometryEventCount: pendingExternalGeometryEvents.count,
+            droppedLogLineCount: reporter.droppedLogLineCount,
+            latency: runtimeMetrics.summaries()
+        )
+    }
+
     private func exitAfterFlushing(_ status: Int32) -> Never {
         reporter.flush()
         Darwin.exit(status)
@@ -2834,5 +2864,20 @@ private func logRestoreSaveEvent(_ event: RestoreSaveEvent, reporter: StartupRep
         reporter.info("Restore state saved (\(result.reason)) to \(result.urlPath)")
     case .failed(let failure):
         reporter.error("Restore state save failed (\(failure.reason)): \(failure.message)")
+    }
+}
+
+private func runtimeSnapshotQuality(_ quality: AXSnapshotQuality?) -> RuntimeSnapshotQuality {
+    switch quality {
+    case .complete:
+        return .complete
+    case .partial:
+        return .partial
+    case .permissionDenied:
+        return .permissionDenied
+    case .unavailable:
+        return .unavailable
+    case nil:
+        return .unknown
     }
 }

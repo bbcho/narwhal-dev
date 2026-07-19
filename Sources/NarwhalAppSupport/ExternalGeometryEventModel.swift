@@ -26,6 +26,10 @@ public struct ExternalGeometryEventQueue<Event: Sendable>: Sendable {
         eventsByWindow.isEmpty
     }
 
+    public var count: Int {
+        eventsByWindow.count
+    }
+
     public mutating func enqueue(_ event: Event, for windowID: WindowID) {
         if eventsByWindow[windowID] == nil {
             windowOrder.append(windowID)

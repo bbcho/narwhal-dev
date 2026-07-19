@@ -241,6 +241,8 @@ $HOME/Applications/Narwhal.app/Contents/MacOS/narwhalctl
 Useful commands:
 
 ```sh
+narwhalctl status
+narwhalctl status --json
 narwhalctl reset
 narwhalctl push left
 narwhalctl push right --window 12345

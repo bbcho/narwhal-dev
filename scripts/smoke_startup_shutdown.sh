@@ -104,6 +104,17 @@ wait_for_log "IPC server ready at $socket_path" 20
 wait_for_log "Drag zones ready with modifier shift" 20
 wait_for_log "Layout command loop ready" 20
 
+status_output="$("$bin_path/NarwhalCtl" status)"
+printf '%s\n' "$status_output" | grep -Fq "AX notification fast path: active" \
+  || fail "narwhalctl status did not report the active notification fast path"
+
+status_json="$("$bin_path/NarwhalCtl" status --json)"
+printf '%s\n' "$status_json" | plutil -convert json -o /dev/null -- - \
+  || fail "narwhalctl status --json did not return valid JSON"
+printf '%s\n' "$status_json" \
+  | grep -Eq '"notificationFastPathActive"[[:space:]]*:[[:space:]]*true' \
+  || fail "narwhalctl status --json did not report the active notification fast path"
+
 "$bin_path/NarwhalCtl" balance | grep -Eq '^ok ipc-' || fail "narwhalctl balance did not return ok"
 wait_for_log "IPC balance completed" 10
 
