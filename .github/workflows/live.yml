@@ -1,0 +1,28 @@
+name: Live macOS Gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: narwhal-live-gate
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: [self-hosted, macOS, arm64, narwhal-live]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify trusted runner and real applications
+        run: scripts/live_verify_all.sh
+      - name: Verify startup and durable shutdown
+        run: scripts/smoke_startup_shutdown.sh
+      - name: Verify service rollback matrix
+        run: scripts/smoke_startup_failure_matrix.sh
+      - name: Verify config hot reload
+        run: scripts/smoke_config_hot_reload.sh
+      - name: Verify packaged application
+        run: scripts/smoke_packaged_app.sh

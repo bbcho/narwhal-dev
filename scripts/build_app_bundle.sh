@@ -4,15 +4,26 @@ set -euo pipefail
 configuration="release"
 output_root=""
 replace_existing="false"
+display_version=""
+build_number=""
+architecture=""
 
 usage() {
   cat <<'USAGE'
-usage: scripts/build_app_bundle.sh [--configuration debug|release] [--output DIR] [--replace]
+usage: scripts/build_app_bundle.sh [options]
 
 Builds NarwhalApp and NarwhalCtl, then assembles:
   DIR/Narwhal.app
 
 Default DIR is .build/narwhal-package.
+
+Options:
+  --configuration debug|release   Build configuration. Default: release.
+  --output DIR                    Package output directory.
+  --version MAJOR.MINOR.PATCH     Override CFBundleShortVersionString.
+  --build-number INTEGER          Override CFBundleVersion.
+  --architecture arm64|x86_64     Build and validate one explicit architecture.
+  --replace                       Replace an existing package output.
 USAGE
 }
 
@@ -32,6 +43,21 @@ while [ "$#" -gt 0 ]; do
       replace_existing="true"
       shift
       ;;
+    --version)
+      [ "$#" -ge 2 ] || { echo "--version requires MAJOR.MINOR.PATCH" >&2; exit 2; }
+      display_version="$2"
+      shift 2
+      ;;
+    --build-number)
+      [ "$#" -ge 2 ] || { echo "--build-number requires an integer" >&2; exit 2; }
+      build_number="$2"
+      shift 2
+      ;;
+    --architecture)
+      [ "$#" -ge 2 ] || { echo "--architecture requires arm64 or x86_64" >&2; exit 2; }
+      architecture="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -48,6 +74,26 @@ case "$configuration" in
   debug|release) ;;
   *)
     echo "--configuration must be debug or release" >&2
+    exit 2
+    ;;
+esac
+
+if [ -n "$display_version" ]; then
+  if [[ ! "$display_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    echo "--version must be a canonical MAJOR.MINOR.PATCH value" >&2
+    exit 2
+  fi
+fi
+if [ -n "$build_number" ]; then
+  if [[ ! "$build_number" =~ ^[1-9][0-9]*$ ]]; then
+    echo "--build-number must be a positive integer" >&2
+    exit 2
+  fi
+fi
+case "$architecture" in
+  ""|arm64|x86_64) ;;
+  *)
+    echo "--architecture must be arm64 or x86_64" >&2
     exit 2
     ;;
 esac
@@ -82,6 +128,10 @@ fi
 if [ ! -f "$lua_dylib" ]; then
   echo "Lua dylib not found at $lua_dylib" >&2
   echo "Install Lua with: brew install lua" >&2
+  exit 1
+fi
+if [ -n "$architecture" ] && ! lipo -archs "$lua_dylib" | tr ' ' '\n' | grep -Fxq "$architecture"; then
+  echo "Lua dylib does not contain requested architecture $architecture: $lua_dylib" >&2
   exit 1
 fi
 
@@ -132,6 +182,9 @@ swift_build_args=(
   --manifest-cache local
   --configuration "$configuration"
 )
+if [ -n "$architecture" ]; then
+  swift_build_args+=(--arch "$architecture")
+fi
 
 swift build "${swift_build_args[@]}" --product NarwhalApp
 swift build "${swift_build_args[@]}" --product NarwhalCtl
@@ -142,6 +195,12 @@ mkdir -p "$macos" "$resources/DefaultConfig" "$frameworks"
 cp "$bin_path/NarwhalApp" "$app_executable"
 cp "$bin_path/NarwhalCtl" "$ctl_executable"
 cp "$repo_root/Packaging/NarwhalInfo.plist" "$contents/Info.plist"
+if [ -n "$display_version" ]; then
+  plutil -replace CFBundleShortVersionString -string "$display_version" "$contents/Info.plist"
+fi
+if [ -n "$build_number" ]; then
+  plutil -replace CFBundleVersion -string "$build_number" "$contents/Info.plist"
+fi
 cp "$repo_root/DefaultConfig/init.lua" "$resources/DefaultConfig/init.lua"
 cp "$repo_root/Packaging/Assets/NarwhalIcon.icns" "$resources/NarwhalIcon.icns"
 cp "$repo_root/Packaging/Assets/NarwhalToolbarIcon.png" "$resources/NarwhalToolbarIcon.png"
@@ -150,6 +209,16 @@ cp "$repo_root/Packaging/Assets/NarwhalToolbarIconDark.png" "$resources/NarwhalT
 cp "$repo_root/Packaging/Assets/NarwhalToolbarIconDark@2x.png" "$resources/NarwhalToolbarIconDark@2x.png"
 cp "$lua_dylib" "$frameworks/liblua.dylib"
 chmod 755 "$app_executable" "$ctl_executable" "$frameworks/liblua.dylib"
+
+if [ -n "$architecture" ]; then
+  for binary in "$app_executable" "$ctl_executable" "$frameworks/liblua.dylib"; do
+    binary_arches="$(lipo -archs "$binary")"
+    if [ "$binary_arches" != "$architecture" ]; then
+      echo "unexpected architectures for $binary: $binary_arches (expected $architecture)" >&2
+      exit 1
+    fi
+  done
+fi
 
 lua_linked_path="$(otool -L "$app_executable" | awk '
   $1 ~ /\/liblua(\.[0-9]+)*\.dylib$/ { print $1; exit }
@@ -173,7 +242,8 @@ plutil -lint "$contents/Info.plist"
 #   "<self-signed common name>"     local cert in login keychain. Stable TCC grant across rebuilds.
 #   "Developer ID Application: ..." release. Adds hardened runtime, entitlements, timestamp.
 signing_identity="${NARWHAL_SIGNING_IDENTITY:--}"
-codesign_args=(--force --deep --identifier "com.ben.narwhal")
+codesign_nested_args=(--force)
+codesign_bundle_args=(--force --identifier "com.ben.narwhal")
 signing_mode="ad-hoc"
 
 case "$signing_identity" in
@@ -187,7 +257,8 @@ case "$signing_identity" in
       echo "missing entitlements file: $entitlements" >&2
       exit 1
     fi
-    codesign_args+=(--options runtime --timestamp --entitlements "$entitlements")
+    codesign_nested_args+=(--options runtime --timestamp)
+    codesign_bundle_args+=(--options runtime --timestamp --entitlements "$entitlements")
     ;;
   *)
     signing_mode="self-signed"
@@ -199,9 +270,13 @@ case "$signing_identity" in
     ;;
 esac
 
-codesign_args+=(--sign "$signing_identity")
+codesign_nested_args+=(--sign "$signing_identity")
+codesign_bundle_args+=(--sign "$signing_identity")
 echo "Signing: identity=$signing_identity mode=$signing_mode"
-codesign "${codesign_args[@]}" "$bundle"
+codesign "${codesign_nested_args[@]}" "$frameworks/liblua.dylib"
+codesign "${codesign_nested_args[@]}" "$ctl_executable"
+codesign "${codesign_bundle_args[@]}" "$bundle"
+codesign --verify --deep --strict --verbose=2 "$bundle"
 
 cat <<EOF
 Built $bundle

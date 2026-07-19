@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua
+        run: brew install lua
+      - name: Validate shell scripts
+        run: bash -n scripts/*.sh
+      - name: Resolve dependencies
+        run: swift package resolve
+      - name: Run unit and integration tests
+        run: swift test --disable-sandbox --scratch-path .build/ci-tests
+
+  sanitizer:
+    runs-on: macos-26
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, thread]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua
+        run: brew install lua
+      - name: Run ${{ matrix.sanitizer }} sanitizer
+        run: >-
+          swift test
+          --disable-sandbox
+          --sanitize=${{ matrix.sanitizer }}
+          --scratch-path .build/${{ matrix.sanitizer }}-sanitizer
+
+  package:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua
+        run: brew install lua
+      - name: Read package version
+        run: echo "NARWHAL_VERSION=$(plutil -extract CFBundleShortVersionString raw Packaging/NarwhalInfo.plist)" >> "$GITHUB_ENV"
+      - name: Build arm64 package
+        run: >-
+          scripts/build_app_bundle.sh
+          --configuration release
+          --output .build/ci-package
+          --version ${{ env.NARWHAL_VERSION }}
+          --build-number ${{ github.run_number }}
+          --architecture arm64
+          --replace
+      - name: Verify package
+        run: >-
+          scripts/verify_app_bundle.sh
+          --app .build/ci-package/Narwhal.app
+          --version ${{ env.NARWHAL_VERSION }}
+          --build-number ${{ github.run_number }}
+          --architecture arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Narwhal-unsigned-${{ github.sha }}
+          path: .build/ci-package/Narwhal.app
+          if-no-files-found: error

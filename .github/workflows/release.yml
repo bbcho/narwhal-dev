@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Lua
+        run: brew install lua
+      - name: Import Developer ID certificate
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          certificate_path="$RUNNER_TEMP/narwhal-release.p12"
+          keychain_path="$RUNNER_TEMP/narwhal-release.keychain-db"
+          printf '%s' "$CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+      - name: Configure notarization credentials
+        env:
+          NOTARY_KEY_BASE64: ${{ secrets.NOTARY_KEY_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          key_path="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$NOTARY_KEY_BASE64" | base64 --decode > "$key_path"
+          xcrun notarytool store-credentials narwhal-ci \
+            --key "$key_path" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID"
+      - name: Build, notarize, and verify release
+        env:
+          NARWHAL_SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+          NARWHAL_NOTARY_PROFILE: narwhal-ci
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          scripts/release.sh \
+            --version "$version" \
+            --build-number "${{ github.run_number }}" \
+            --output ".build/releases/$version-${{ github.run_number }}"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          release_dir=".build/releases/$version-${{ github.run_number }}"
+          gh release create "$GITHUB_REF_NAME" \
+            "$release_dir/Narwhal-$version-arm64.zip" \
+            "$release_dir/Narwhal-$version-arm64.dSYM.zip" \
+            "$release_dir/release.json" \
+            "$release_dir/SHA256SUMS" \
+            --verify-tag \
+            --generate-notes \
+            --title "Narwhal $version"
