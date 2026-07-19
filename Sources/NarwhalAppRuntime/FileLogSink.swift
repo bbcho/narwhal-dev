@@ -199,7 +199,6 @@ final class FileLogSink: @unchecked Sendable {
     }
 
     private static func openAppendOnlyLog(path: String) -> FileHandle? {
-
         let flags = O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW
         let descriptor = Darwin.open(path, flags, mode_t(S_IRUSR | S_IWUSR))
         guard descriptor >= 0 else { return nil }

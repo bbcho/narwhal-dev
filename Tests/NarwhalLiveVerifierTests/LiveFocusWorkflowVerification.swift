@@ -6,19 +6,14 @@ import Darwin
 import NarwhalAppSupport
 import NarwhalCore
 
-/// A do-nothing NSApplicationDelegate whose sole purpose is to return false from
-/// `applicationShouldTerminateAfterLastWindowClosed`. The live verifier creates
-/// and tears down its own NSWindows; without this guard, AppKit terminates the
-/// test process when our `defer { orderOut }` closes the last window, which
-/// silently aborts the rest of the test suite.
+/// Keeps verifier-owned windows from terminating the AppKit test host.
 @MainActor
 final class VerifierAppDelegate: NSObject, NSApplicationDelegate {
     private static var installed: VerifierAppDelegate?
 
     static func installIfNeeded() {
         if installed == nil {
-            // macOS may auto-terminate the testing helper when it goes idle
-            // between tests; disable both vectors.
+            // Keep the host alive between serialized verifier cases.
             ProcessInfo.processInfo.disableAutomaticTermination("NarwhalLiveVerifier")
             ProcessInfo.processInfo.disableSuddenTermination()
             let delegate = VerifierAppDelegate()
@@ -72,10 +67,7 @@ enum LiveFocusWorkflowVerification {
             defer {
                 observer?.stop()
                 overlay.stop()
-                // Alpha-hide rather than orderOut: orderOut'ing the last visible
-                // NSWindow at the end of a test has triggered process exit in
-                // this harness despite .accessory policy and a custom delegate
-                // returning .terminateCancel.
+                // Ordering out the final NSWindow can terminate the AppKit test host.
                 windows.all.forEach { $0.window.alphaValue = 0 }
             }
 
@@ -207,9 +199,7 @@ enum LiveFocusWorkflowVerification {
                 context: "mouse-focused floating over tiled border"
             )
 
-            // Regression: with focus on a *different* floating window (not the one over
-            // the tile), the unfocused floating window must still cover the tile border.
-            // See Overlay.orderTiledBorderWindow.
+            // An unfocused floating window must still obscure the border below it.
             windows.floatA.window.orderFrontRegardless()
             await settleLiveVerifier(for: 0.05)
             windows.floatB.window.orderFrontRegardless()

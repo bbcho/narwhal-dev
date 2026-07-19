@@ -220,8 +220,8 @@ public final class IPCServer: @unchecked Sendable {
                     if state.isRunning {
                         log("IPC accept transient errno=\(currentErrno) (\(String(cString: strerror(currentErrno)))); continuing")
                     }
-                    // EMFILE/ENFILE: back off to let descriptors free. Cancellation here just
-                    // skips the sleep; the next loop iteration checks Task.isCancelled.
+                    // Back off while file descriptors are exhausted. Cancellation
+                    // interrupts the sleep, and the next iteration exits.
                     if currentErrno == EMFILE || currentErrno == ENFILE {
                         try? await Task.sleep(nanoseconds: 50_000_000)
                     }

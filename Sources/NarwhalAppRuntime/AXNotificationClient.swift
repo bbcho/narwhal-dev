@@ -218,7 +218,7 @@ final class AXNotificationClient {
         return element
     }
 
-    // AX invokes this callback on the main run loop source installed in bindFrontmostApplication().
+    // The observer source is installed on the main run loop.
     private static let observerCallback: AXObserverCallback = { _, _, notification, refcon in
         guard let refcon else { return }
         let client = Unmanaged<AXNotificationClient>.fromOpaque(refcon).takeUnretainedValue()

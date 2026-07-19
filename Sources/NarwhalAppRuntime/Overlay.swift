@@ -3,17 +3,9 @@ import Darwin
 import NarwhalAppSupport
 import NarwhalCore
 
-// KNOWN LIMITATION (macOS 15+, unsigned/ad-hoc apps): the WindowServer silently
-// refuses cross-process window ordering for apps without Developer ID + specific
-// entitlements. `SLSOrderWindow` / `CGSOrderWindow` return success but do not
-// actually move our window across the boundary of another app's window. The
-// calls below are best-effort — they work when the foreign window is at a
-// compatible level, but in the general case tile borders may still appear above
-// unfocused floating windows that overlap the tiled window. This is the same
-// constraint that requires yabai/AeroSpace to disable SIP. Documented in README
-// under "Known limitations". For the symptom-free fix you'd need to (a) sign with
-// Developer ID and request entitlements, or (b) implement the
-// hide-when-obscured strategy in `renderTiledBorders`.
+// WindowServer can acknowledge cross-process ordering without applying it for
+// ad-hoc-signed apps. Ordering is best-effort; the visibility pass below hides a
+// tiled border whenever a foreign window obscures its target.
 private typealias CGSConnectionIDFunc = @convention(c) () -> Int32
 private typealias CGSOrderWindowFunc = @convention(c) (Int32, UInt32, Int32, UInt32) -> Int32
 
@@ -141,11 +133,7 @@ final class Overlay {
         return staleTargets
     }
 
-    /// After borders are rendered and (best-effort) ordered, walk the live CG
-    /// window list and hide any tile border whose target tile is currently
-    /// covered by some foreign (non-tile) window above it. This is the only
-    /// reliable way to keep tile borders from drawing over unrelated windows
-    /// when the WindowServer refuses to honor our re-order requests.
+    /// Hides tiled borders obscured by foreign windows in the live front-to-back list.
     private func enforceTiledBorderObscurationVisibility(targets: [FocusBorderTarget], entries: [OverlayWindowEntry]) {
         let tileIDs = Set(targets.map(\.windowID.raw))
         let overlayWindowNumbers = ownOverlayWindowNumbers()
@@ -155,7 +143,7 @@ final class Overlay {
             let tileFrame = appKitFrame(forAXFrame: target.frame)
             // Find the target tile's index in front-to-back order.
             guard let tileIndex = entries.firstIndex(where: { $0.cgID == target.windowID.raw }) else {
-                // Tile isn't on-screen; hide its border just in case.
+                // Tile isn't on-screen; hide its border.
                 if borderWindow.isVisible { borderWindow.orderOut(nil) }
                 continue
             }
@@ -171,11 +159,9 @@ final class Overlay {
                     break
                 }
             }
-            // Use alphaValue, not orderOut: orderOut releases the WindowServer
-            // window number, and a subsequent orderFront creates a new one at
-            // the top of the level — defeating the hide and leaving an orphan
-            // border in the CG window list. alphaValue=0 keeps the window in
-            // place, just transparent.
+            // Use alphaValue, not orderOut: ordering out releases the WindowServer
+            // number, and ordering front creates a new top-level window that can
+            // leave an orphan border in the CG list. Alpha preserves its identity.
             borderWindow.alphaValue = obscured ? 0.0 : 1.0
         }
     }

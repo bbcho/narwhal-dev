@@ -14,12 +14,12 @@ import Testing
     )
 )
 struct LiveAppKitVerifierTests {
+    init() {
+        _ = NSApplication.shared
+    }
+
     @Test("Command overlay layout")
     func commandOverlayLayout() throws {
-        // Force-init NSApp here (it's the first @Test alphabetically and by
-        // source order) so subsequent heavy AppKit tests don't crash on the
-        // `NSApp.setActivationPolicy` IUO unwrap.
-        _ = NSApplication.shared
         try expectPassed(CommandOverlayVerification.verifyDefaultTwoColumnLayout())
     }
 
@@ -83,16 +83,10 @@ struct LiveAppKitVerifierTests {
         try expectPassed(DisplayChangeFocusBorderVerification.verifyDisplayChangePreservesVisibleFocusBorder())
     }
 
-    // Bundle the two heavy AppKit tests into a single @Test. Swift Testing's
-    // main-actor drain prematurely exits the process if these run as separate
-    // serialized tests at the tail of the suite (the framework calls exit()
-    // from `main` after `swift_task_asyncMainDrainQueue` returns, before the
-    // next test is scheduled). Running both verifications inside one Task
-    // sidesteps that scheduler interaction — both run, both contribute to the
-    // single test's pass/fail.
+    // Keep these workflows in one case because the main-actor test host can
+    // terminate between separate serialized cases at the end of the suite.
     @Test("Live focus + command workflows")
     func liveFocusAndCommandWorkflows() async throws {
-        _ = NSApplication.shared
         let focusResult = await LiveFocusWorkflowVerification.verifyCycleMouseAndBorderWorkflow()
         let commandResult = await LiveCommandWorkflowVerification.verifyCommandWorkflows()
         guard focusResult.passed else {
@@ -110,12 +104,7 @@ struct LiveAppKitVerifierTests {
     }
 }
 
-/// Returns true when macOS is at the login window or otherwise can't expose
-/// user windows to AX (locked screen, screen saver, fast user switch). The
-/// live verifier tests query AX state and create NSWindows that AX must be
-/// able to see, so they have no chance of succeeding in this state. The
-/// verifiers call this and fail with a prerequisite message rather than the
-/// cryptic "focused AX window could not be matched to a CGWindowID".
+/// Returns true when the current session cannot expose user windows to AX.
 @MainActor
 func isSystemLocked() -> Bool {
     guard let frontmost = NSWorkspace.shared.frontmostApplication else { return true }
