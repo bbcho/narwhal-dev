@@ -6,8 +6,10 @@ actor WorldActor {
     private var world: World
     private var nextGeneration: UInt64 = 1
     private var runtimeState = WorldRuntimeState.empty
+    private let runtimeMetrics: RuntimeMetrics?
 
-    init(config: Config = .default) {
+    init(config: Config = .default, runtimeMetrics: RuntimeMetrics? = nil) {
+        self.runtimeMetrics = runtimeMetrics
         self.world = World(
             displays: [:],
             activeSpace: nil,
@@ -175,13 +177,15 @@ actor WorldActor {
         direction: Direction,
         deltas: [Double]
     ) -> Result<CommandPlanResult, CommandError> {
-        advanceLayoutGeneration(onSuccess: resizeSequenceCommandPlan(
-            in: world,
-            windowID: windowID,
-            direction: direction,
-            deltas: deltas,
-            generation: LayoutGeneration(raw: nextGeneration)
-        ))
+        measureLayoutPlan {
+            advanceLayoutGeneration(onSuccess: resizeSequenceCommandPlan(
+                in: world,
+                windowID: windowID,
+                direction: direction,
+                deltas: deltas,
+                generation: LayoutGeneration(raw: nextGeneration)
+            ))
+        }
     }
 
     func planBalanceActiveSpace() -> Result<CommandPlanResult, CommandError> {
@@ -307,19 +311,21 @@ actor WorldActor {
         undoWorld: World?,
         scope explicitScope: CommandPlanScope? = nil
     ) -> Result<CommandPlanResult, CommandError> {
-        let scope = explicitScope ?? commandPlanScope(
-            focusedWindowID: focusedWindowID,
-            oldWorld: oldWorld,
-            newWorld: newWorld
-        )
-        return advanceLayoutGeneration(onSuccess: commandPlan(
-            from: oldWorld,
-            to: newWorld,
-            focusedWindowID: focusedWindowID,
-            undoWorld: undoWorld,
-            generation: LayoutGeneration(raw: nextGeneration),
-            scope: scope
-        ))
+        measureLayoutPlan {
+            let scope = explicitScope ?? commandPlanScope(
+                focusedWindowID: focusedWindowID,
+                oldWorld: oldWorld,
+                newWorld: newWorld
+            )
+            return advanceLayoutGeneration(onSuccess: commandPlan(
+                from: oldWorld,
+                to: newWorld,
+                focusedWindowID: focusedWindowID,
+                undoWorld: undoWorld,
+                generation: LayoutGeneration(raw: nextGeneration),
+                scope: scope
+            ))
+        }
     }
 
     private func makeCustomLayoutPlan(
@@ -329,22 +335,32 @@ actor WorldActor {
         focusedWindowID: WindowID?,
         undoWorld: World?
     ) -> Result<CommandPlanResult, CommandError> {
-        advanceLayoutGeneration(onSuccess: customLayoutCommandPlan(
-            from: oldWorld,
-            to: newWorld,
-            layout: newLayout,
-            focusedWindowID: focusedWindowID,
-            undoWorld: undoWorld,
-            generation: LayoutGeneration(raw: nextGeneration)
-        ))
+        measureLayoutPlan {
+            advanceLayoutGeneration(onSuccess: customLayoutCommandPlan(
+                from: oldWorld,
+                to: newWorld,
+                layout: newLayout,
+                focusedWindowID: focusedWindowID,
+                undoWorld: undoWorld,
+                generation: LayoutGeneration(raw: nextGeneration)
+            ))
+        }
     }
 
     func planCurrentLayout() -> Result<CommandPlanResult?, CommandError> {
-        let result = currentLayoutCommandPlan(in: world, generation: LayoutGeneration(raw: nextGeneration))
-        if case .success(.some) = result {
-            nextGeneration += 1
+        measureLayoutPlan {
+            let result = currentLayoutCommandPlan(in: world, generation: LayoutGeneration(raw: nextGeneration))
+            if case .success(.some) = result {
+                nextGeneration += 1
+            }
+            return result
         }
-        return result
+    }
+
+    private func measureLayoutPlan<Result>(_ operation: () -> Result) -> Result {
+        let metricInterval = runtimeMetrics?.begin(.layoutPlan)
+        defer { runtimeMetrics?.end(metricInterval) }
+        return operation()
     }
 
     func planFocusDirection(from focusedWindowID: WindowID, direction: Direction) -> Result<FocusPlanResult, CommandError> {

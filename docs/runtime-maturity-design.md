@@ -99,8 +99,9 @@ log lines      ─> bounded serial writer          ─> rotated narwhal.log
 - `WorldActor` remains the only owner of mutable world state.
 - `AXObserverService` remains `@MainActor`; its timers, active AX observer, and
   notification throttle are UI-run-loop state.
-- `RuntimeMetrics` is `@MainActor` because every initial measurement point is
-  in the AppKit/AX shell. It stores immutable `RuntimeMetricsState` values.
+- `RuntimeMetrics` stores immutable `RuntimeMetricsState` values behind a small
+  lock so `WorldActor` can record completed planning work without hopping onto
+  the main actor. The lock never covers AX, planning, or filesystem work.
 - Restore I/O uses one actor. Main-actor scheduling remains a pure state machine,
   while an explicit task tail preserves disk-write order and supports awaited
   shutdown flushing.

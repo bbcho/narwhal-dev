@@ -66,7 +66,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let displaySettledRefreshDelay: TimeInterval = 6.0
     private static let restoreSaveDebounceInterval: TimeInterval = 0.25
 
-    private let axClient = AXClient()
+    private let runtimeMetrics = RuntimeMetrics()
+    private lazy var axClient = AXClient(runtimeMetrics: runtimeMetrics)
     private let displayClient = DisplayClient()
     private let spaceClient = SpaceClient()
     private var restorePersistence = RestorePersistence(manager: RestoreManager())
@@ -75,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayModel = OverlayModel.empty
     private let menubar = Menubar()
     private let startupArguments = StartupArguments.current
-    private var worldActor = WorldActor()
+    private lazy var worldActor = WorldActor(runtimeMetrics: runtimeMetrics)
     private let reporter = StartupReporter()
     private var config = Config.default
     private var operatingStatus = MenubarOperatingStatus.empty
@@ -103,11 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var runningServices: RunningServices?
     private var servicesStarted = false
     private var isPaused = false
-    // Session-scoped set of WindowIDs that have refused kAXRaiseAction with an
-    // unrecoverable error (attributeUnsupported / actionUnsupported). The World
-    // is rebuilt from the OS on every focus-cycle press, so we can't rely on
-    // removing the window from a Space — env refresh re-discovers it. The
-    // blocklist filters cycle candidates at the call site instead.
+    // AX raise failures survive environment refreshes, so exclusions are session-scoped.
     private var axRaiseBlocklist: Set<WindowID> = []
 
     static func main() {
@@ -2253,6 +2250,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ event: AXEvent,
         snapshot: FocusedWindowSnapshot?
     ) async {
+        let metricInterval = runtimeMetrics.begin(.manualResizeHandoff)
+        defer { runtimeMetrics.end(metricInterval) }
         let selectedEvent = externalGeometryEventSelection(
             for: event,
             liveSnapshot: axClient.windowSnapshot(),

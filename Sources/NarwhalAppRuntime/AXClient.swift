@@ -130,15 +130,18 @@ private struct CoordinatedFrameWrite {
 struct AXClient {
     private let inventoryFilter: WindowInventoryFilter
     private let settleStrategy: AXSettleStrategy
+    private let runtimeMetrics: RuntimeMetrics?
     private static let messagingTimeout: Float = 1.0
     private static let frameWriteSettleInterval: TimeInterval = 0.08
 
     init(
         processID: pid_t = getpid(),
-        settleStrategy: AXSettleStrategy = .suspending
+        settleStrategy: AXSettleStrategy = .suspending,
+        runtimeMetrics: RuntimeMetrics? = nil
     ) {
         inventoryFilter = WindowInventoryFilter(currentProcessID: processID)
         self.settleStrategy = settleStrategy
+        self.runtimeMetrics = runtimeMetrics
     }
 
     private static func bounded(_ element: AXUIElement) -> AXUIElement {
@@ -155,6 +158,8 @@ struct AXClient {
     }
 
     func windowSnapshot() -> AXWindowSnapshot {
+        let metricInterval = runtimeMetrics?.begin(.windowSnapshot)
+        defer { runtimeMetrics?.end(metricInterval) }
         guard
             let windows = CGWindowListCopyWindowInfo(
                 [.optionOnScreenOnly, .excludeDesktopElements],
@@ -250,6 +255,8 @@ struct AXClient {
     }
 
     func focusedWindowSnapshot() -> Result<FocusedWindowSnapshot, AXClientError> {
+        let metricInterval = runtimeMetrics?.begin(.focusedWindowSnapshot)
+        defer { runtimeMetrics?.end(metricInterval) }
         let focusedWindow: AXUIElement
         switch focusedWindowElement() {
         case .success(let window):
@@ -324,6 +331,8 @@ struct AXClient {
     func setFramesCoordinated(
         _ requests: [(window: WindowMetadata, frame: CGRect)]
     ) async -> [WindowID: AXFrameWriteOutcome] {
+        let metricInterval = runtimeMetrics?.begin(.coordinatedFrameWrite)
+        defer { runtimeMetrics?.end(metricInterval) }
         var outcomes: [WindowID: AXFrameWriteOutcome] = [:]
         var pending: [CoordinatedFrameWrite] = []
 
