@@ -4,9 +4,9 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 tmp_root="/private/tmp/narwhal-startup-failure-smoke"
-config="$tmp_root/init.lua"
-state_path="$tmp_root/state.json"
-log_path="$tmp_root/narwhal.log"
+config="$tmp_root/config/init.lua"
+state_path="$tmp_root/state/state.json"
+log_path="$tmp_root/log/narwhal.log"
 export NARWHAL_LOG_PATH="$log_path"
 socket_path="/tmp/narwhal-$(id -u).sock"
 app_pid=""
@@ -65,7 +65,7 @@ if pgrep -x NarwhalApp >/dev/null 2>&1; then
 fi
 
 rm -rf "$tmp_root"
-mkdir -p "$tmp_root"
+mkdir -p "$tmp_root/config" "$tmp_root/state" "$tmp_root/log"
 cp "$repo_root/DefaultConfig/init.lua" "$config"
 rm -f "$log_path" "$socket_path"
 

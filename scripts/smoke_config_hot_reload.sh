@@ -4,16 +4,35 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 tmp_root="/private/tmp/narwhal-hot-reload-smoke"
-config="$tmp_root/init.lua"
-log_path="$tmp_root/narwhal.log"
+config="$tmp_root/config/init.lua"
+state_path="$tmp_root/state/state.json"
+log_path="$tmp_root/log/narwhal.log"
 export NARWHAL_LOG_PATH="$log_path"
 app_pid=""
+ctl=""
 
 cleanup() {
   if [ -n "$app_pid" ] && kill -0 "$app_pid" 2>/dev/null; then
+    if [ -x "$ctl" ]; then
+      "$ctl" quit >/dev/null 2>&1 || true
+      sleep 0.5
+    fi
     kill "$app_pid" 2>/dev/null || true
     wait "$app_pid" 2>/dev/null || true
   fi
+}
+
+wait_for_process_exit() {
+  local pid="$1"
+  local timeout_seconds="$2"
+  local deadline=$((SECONDS + timeout_seconds))
+  while [ "$SECONDS" -le "$deadline" ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  fail "timed out waiting for NarwhalApp to exit"
 }
 trap cleanup EXIT
 
@@ -50,7 +69,7 @@ if pgrep -x NarwhalApp >/dev/null 2>&1; then
 fi
 
 rm -rf "$tmp_root"
-mkdir -p "$tmp_root"
+mkdir -p "$tmp_root/config" "$tmp_root/state" "$tmp_root/log"
 cp "$repo_root/DefaultConfig/init.lua" "$config"
 rm -f "$log_path"
 
@@ -60,8 +79,9 @@ export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/narwhal-
 swift build --disable-sandbox --product NarwhalApp
 swift build --disable-sandbox --product NarwhalCtl
 bin_path="$(swift build --disable-sandbox --show-bin-path)"
+ctl="$bin_path/NarwhalCtl"
 
-"$bin_path/NarwhalApp" --config "$config" &
+"$bin_path/NarwhalApp" --config "$config" --restore-state "$state_path" &
 app_pid="$!"
 
 wait_for_log "Config watcher ready for " 20
@@ -76,8 +96,13 @@ perl -0pi -e 's/return \{/return false/' "$config"
 wait_for_log "Config reload failed (file watcher)" 10
 assert_app_running
 
-"$bin_path/NarwhalCtl" reset | grep -Eq '^ok ipc-' || fail "narwhalctl reset did not return ok"
+"$ctl" reset | grep -Eq '^ok ipc-' || fail "narwhalctl reset did not return ok"
 wait_for_log "IPC reset layout memory" 10
 assert_app_running
+
+"$ctl" quit | grep -Eq '^ok ipc-' || fail "narwhalctl quit did not return ok"
+wait_for_process_exit "$app_pid" 10
+app_pid=""
+wait_for_log "NarwhalApp stopped" 5
 
 echo "smoke_config_hot_reload passed"
