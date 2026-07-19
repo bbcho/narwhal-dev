@@ -17,6 +17,7 @@ enum DiagnosticsMenuVerification {
             openConfig: {},
             openAccessibilitySettings: {},
             revealLogs: {},
+            toggleLaunchAtLogin: {},
             copyDiagnostics: {
                 do {
                     try copyRuntimeDiagnostics(diagnostics, to: pasteboard)

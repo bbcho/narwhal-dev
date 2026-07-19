@@ -8,6 +8,7 @@ struct MenubarActions {
     let openConfig: () -> Void
     let openAccessibilitySettings: () -> Void
     let revealLogs: () -> Void
+    let toggleLaunchAtLogin: () -> Void
     let copyDiagnostics: () -> Void
     let resetLayout: () -> Void
     let quit: () -> Void
@@ -18,6 +19,7 @@ struct MenubarActions {
         openConfig: {},
         openAccessibilitySettings: {},
         revealLogs: {},
+        toggleLaunchAtLogin: {},
         copyDiagnostics: {},
         resetLayout: {},
         quit: {}
@@ -59,6 +61,12 @@ final class Menubar {
     private let focusMenuItem = NSMenuItem(title: "Focus: unknown", action: nil, keyEquivalent: "")
     private let lastCommandMenuItem = NSMenuItem(title: "Last: none", action: nil, keyEquivalent: "")
     private let retryMenuItem = NSMenuItem(title: "Retry Startup", action: #selector(retryStartup), keyEquivalent: "")
+    private let loginItemMenuItem = NSMenuItem(
+        title: "Launch at Login",
+        action: #selector(toggleLaunchAtLogin),
+        keyEquivalent: ""
+    )
+    private var loginItemStatus: LoginItemStatus = .unavailable
     private var actions: MenubarActions?
     private let lightIcon = NarwhalIconResources.statusItemIcon(variant: .light)
     private let darkIcon = NarwhalIconResources.statusItemIcon(variant: .dark)
@@ -94,6 +102,8 @@ final class Menubar {
         menu.addItem(menuItem(title: "Open Config", action: #selector(openConfig)))
         menu.addItem(menuItem(title: "Accessibility Settings", action: #selector(openAccessibilitySettings)))
         menu.addItem(menuItem(title: "Reveal Logs", action: #selector(revealLogs)))
+        loginItemMenuItem.target = self
+        menu.addItem(loginItemMenuItem)
         menu.addItem(menuItem(title: "Copy Diagnostics", action: #selector(copyRuntimeDiagnostics)))
         menu.addItem(menuItem(title: "Reset Layout", action: #selector(resetLayout)))
         menu.addItem(.separator())
@@ -119,6 +129,11 @@ final class Menubar {
         renderStatus()
     }
 
+    func updateLoginItemStatus(_ status: LoginItemStatus) {
+        loginItemStatus = status
+        renderStatus()
+    }
+
     private func renderStatus() {
         switch configStatus {
         case .loaded:
@@ -128,6 +143,9 @@ final class Menubar {
         }
         runtimeMenuItem.title = "Runtime: \(runtimeReadiness.summary)"
         retryMenuItem.isEnabled = runtimeReadiness.canRetryStartup
+        loginItemMenuItem.title = loginItemStatus.menuTitle
+        loginItemMenuItem.state = loginItemStatus.isEnabled ? .on : .off
+        loginItemMenuItem.isEnabled = loginItemStatus.canPerformAction
         accessibilityMenuItem.title = "AX: \(accessibilityDescription)"
         scopeMenuItem.title = scopeDescription
         focusMenuItem.title = focusDescription
@@ -157,6 +175,10 @@ final class Menubar {
 
     func debugMenuItem(titled title: String) -> (title: String, isEnabled: Bool)? {
         statusItem?.menu?.items.first(where: { $0.title == title }).map { ($0.title, $0.isEnabled) }
+    }
+
+    func debugMenuItemIsOn(titled title: String) -> Bool? {
+        statusItem?.menu?.items.first(where: { $0.title == title }).map { $0.state == .on }
     }
 
     func debugMenuTitles() -> [String] {
@@ -260,6 +282,11 @@ final class Menubar {
     @objc
     private func revealLogs() {
         actions?.revealLogs()
+    }
+
+    @objc
+    private func toggleLaunchAtLogin() {
+        actions?.toggleLaunchAtLogin()
     }
 
     @objc

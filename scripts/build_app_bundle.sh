@@ -11,7 +11,6 @@ usage: scripts/build_app_bundle.sh [--configuration debug|release] [--output DIR
 
 Builds NarwhalApp and NarwhalCtl, then assembles:
   DIR/Narwhal.app
-  DIR/com.ben.narwhal.plist
 
 Default DIR is .build/narwhal-package.
 USAGE
@@ -69,17 +68,15 @@ resources="$contents/Resources"
 frameworks="$contents/Frameworks"
 app_executable="$macos/NarwhalApp"
 ctl_executable="$macos/narwhalctl"
-launch_agent="$output_root/com.ben.narwhal.plist"
-legacy_launch_agent="$output_root/com.ben.winmgr.plist"
 lua_dylib="/opt/homebrew/opt/lua/lib/liblua.dylib"
 minimum_macos_version="26.0"
 
-if [ -e "$bundle" ] || [ -e "$launch_agent" ] || [ -e "$legacy_bundle" ] || [ -e "$legacy_launch_agent" ]; then
+if [ -e "$bundle" ] || [ -e "$legacy_bundle" ]; then
   if [ "$replace_existing" != "true" ]; then
     echo "package output exists; rerun with --replace: $output_root" >&2
     exit 1
   fi
-  rm -rf "$bundle" "$launch_agent" "$legacy_bundle" "$legacy_launch_agent"
+  rm -rf "$bundle" "$legacy_bundle"
 fi
 
 if [ ! -f "$lua_dylib" ]; then
@@ -169,11 +166,7 @@ if ! otool -L "$app_executable" | awk '$1 == "@executable_path/../Frameworks/lib
   exit 1
 fi
 
-cp "$repo_root/Packaging/com.ben.narwhal.plist" "$launch_agent"
-plutil -insert ProgramArguments.0 -string "$app_executable" "$launch_agent"
-plutil -replace WorkingDirectory -string "$repo_root" "$launch_agent"
-
-plutil -lint "$contents/Info.plist" "$launch_agent"
+plutil -lint "$contents/Info.plist"
 
 # Mode selected by NARWHAL_SIGNING_IDENTITY:
 #   unset / "-" / "ad-hoc"          ad-hoc. cdhash drifts per build → TCC grant resets per install.
@@ -212,13 +205,5 @@ codesign "${codesign_args[@]}" "$bundle"
 
 cat <<EOF
 Built $bundle
-Built $launch_agent
-
-Install LaunchAgent:
-  mkdir -p "$HOME/Library/LaunchAgents"
-  cp "$launch_agent" "$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
-  launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
-
-Unload LaunchAgent:
-  launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
+Launch at Login is user-controlled from the Narwhal menu through SMAppService.
 EOF

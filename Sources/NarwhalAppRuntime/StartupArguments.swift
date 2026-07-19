@@ -8,6 +8,7 @@ enum StartupCommand: Equatable {
     case pushLeft
     case focusedWindow
     case checkAccessibility
+    case unregisterLoginItem
 }
 
 enum StartupArgumentError: Error, CustomStringConvertible, Equatable {
@@ -55,6 +56,7 @@ struct StartupArguments {
         if raw.contains("--push-left") { return .pushLeft }
         if raw.contains("--focused-window") { return .focusedWindow }
         if raw.contains("--check-accessibility") { return .checkAccessibility }
+        if raw.contains("--unregister-login-item") { return .unregisterLoginItem }
         return .normal
     }
 

@@ -14,6 +14,7 @@ enum RecoveryMenuVerification {
             openConfig: {},
             openAccessibilitySettings: {},
             revealLogs: {},
+            toggleLaunchAtLogin: { retryCount += 10 },
             copyDiagnostics: {},
             resetLayout: {},
             quit: {}
@@ -22,6 +23,7 @@ enum RecoveryMenuVerification {
 
         menubar.updateConfigStatus(.failed("invalid Lua near line 4"))
         menubar.updateRuntimeReadiness(.degraded(.serviceStartupFailed(service: "hotkeys")))
+        menubar.updateLoginItemStatus(.enabled)
 
         let expectedItems = [
             "Config: failed - invalid Lua near line 4",
@@ -31,6 +33,7 @@ enum RecoveryMenuVerification {
             "Open Config",
             "Accessibility Settings",
             "Reveal Logs",
+            "Launch at Login",
             "Copy Diagnostics",
             "Reset Layout",
             "Quit Narwhal"
@@ -44,6 +47,12 @@ enum RecoveryMenuVerification {
         }
         guard menubar.debugPerformMenuItem(titled: "Retry Startup"), retryCount == 1 else {
             return (false, "Retry Startup did not invoke its action exactly once")
+        }
+        guard menubar.debugMenuItemIsOn(titled: "Launch at Login") == true,
+              menubar.debugPerformMenuItem(titled: "Launch at Login"),
+              retryCount == 11
+        else {
+            return (false, "Launch at Login was not rendered as a checked actionable menu item")
         }
 
         menubar.updateRuntimeReadiness(.operational)

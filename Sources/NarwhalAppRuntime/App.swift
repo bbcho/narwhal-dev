@@ -77,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
     private var overlayModel = OverlayModel.empty
     private let menubar = Menubar()
+    private let loginItemController = LoginItemController()
     private let startupArguments = StartupArguments.current
     private lazy var worldActor = WorldActor(runtimeMetrics: runtimeMetrics)
     private let reporter = StartupReporter()
@@ -181,6 +182,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reportAccessibilityStatus(prompt: false)
             NSApplication.shared.terminate(nil)
             return
+        case .unregisterLoginItem:
+            do {
+                try loginItemController.unregister()
+                reporter.info("Launch at Login unregistered")
+                reporter.info("NarwhalApp stopped")
+                exitAfterFlushing(0)
+            } catch {
+                reporter.error("Launch at Login unregister failed: \(String(describing: error))")
+                reporter.info("NarwhalApp stopped")
+                exitAfterFlushing(1)
+            }
         case .normal:
             break
         }
@@ -677,6 +689,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             revealLogs: { [weak self] in
                 self?.revealLogsFromMenu()
             },
+            toggleLaunchAtLogin: { [weak self] in
+                self?.toggleLaunchAtLoginFromMenu()
+            },
             copyDiagnostics: { [weak self] in
                 Task { @MainActor in
                     await self?.copyDiagnosticsToPasteboard()
@@ -699,6 +714,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menubar.updateConfigStatus(.loaded)
         }
         menubar.updateRuntimeReadiness(runtimeReadiness)
+        menubar.updateLoginItemStatus(loginItemController.status)
         menubar.updateOperatingStatus(operatingStatus)
     }
 
@@ -773,6 +789,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let logURL = URL(fileURLWithPath: StartupReporter.defaultLogPath)
         NSWorkspace.shared.activateFileViewerSelecting([logURL])
         reporter.info("Revealed runtime log")
+    }
+
+    private func toggleLaunchAtLoginFromMenu() {
+        do {
+            let status = try loginItemController.performAction()
+            menubar.updateLoginItemStatus(status)
+            switch status {
+            case .enabled:
+                reporter.info("Launch at Login enabled")
+            case .disabled:
+                reporter.info("Launch at Login disabled")
+            case .requiresApproval:
+                reporter.info("Launch at Login requires approval in System Settings")
+            case .unavailable:
+                reporter.error("Launch at Login is unavailable for this app bundle")
+            case .failed:
+                break
+            }
+        } catch {
+            let message = String(describing: error)
+            menubar.updateLoginItemStatus(.failed(message))
+            reporter.error("Launch at Login update failed: \(message)")
+            showOperatorFeedback("Launch at Login update failed", tone: .error)
+        }
     }
 
     @MainActor

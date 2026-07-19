@@ -62,6 +62,7 @@ struct StartupArgumentsTests {
         #expect(StartupArguments(raw: ["NarwhalApp", "--push-left", "--focused-window"]).command == .pushLeft)
         #expect(StartupArguments(raw: ["NarwhalApp", "--focused-window", "--check-accessibility"]).command == .focusedWindow)
         #expect(StartupArguments(raw: ["NarwhalApp", "--check-accessibility"]).command == .checkAccessibility)
+        #expect(StartupArguments(raw: ["NarwhalApp", "--unregister-login-item"]).command == .unregisterLoginItem)
     }
 
     @Test("Startup service failure injection validates service names")

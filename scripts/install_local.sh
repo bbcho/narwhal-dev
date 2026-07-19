@@ -4,27 +4,20 @@ set -euo pipefail
 configuration="release"
 package_dir=""
 app_dir="$HOME/Applications"
-launch_agents_dir="$HOME/Library/LaunchAgents"
 replace_existing="false"
-use_launchctl="true"
-reset_accessibility="true"
 
 usage() {
   cat <<'USAGE'
 usage: scripts/install_local.sh [options]
 
-Builds a local package, installs Narwhal.app, writes a LaunchAgent plist, and
-bootstraps it unless --no-launchctl is set.
+Builds and installs Narwhal.app. Launch at Login remains user-controlled from
+the Narwhal menu and Accessibility approval is never reset by this script.
 
 Options:
   --configuration debug|release   Build configuration. Default: release.
-  --package-dir DIR               Temporary package output. Default: .build/narwhal-package-install.
-  --app-dir DIR                   Directory that will contain Narwhal.app. Default: ~/Applications.
-  --launch-agents-dir DIR         LaunchAgent directory. Default: ~/Library/LaunchAgents.
-  --replace                       Replace an existing installed app/plist.
-  --no-launchctl                  Do not run launchctl bootout/bootstrap.
-  --no-reset-accessibility        Do not reset Narwhal's Accessibility approval.
-                                  Default: reset when launchctl is used.
+  --package-dir DIR               Package output. Default: .build/narwhal-package-install.
+  --app-dir DIR                   Directory containing Narwhal.app. Default: ~/Applications.
+  --replace                       Replace an existing app and retain Narwhal.app.previous.
   --help                          Show this help.
 USAGE
 }
@@ -46,21 +39,8 @@ while [ "$#" -gt 0 ]; do
       app_dir="$2"
       shift 2
       ;;
-    --launch-agents-dir)
-      [ "$#" -ge 2 ] || { echo "--launch-agents-dir requires a directory" >&2; exit 2; }
-      launch_agents_dir="$2"
-      shift 2
-      ;;
     --replace)
       replace_existing="true"
-      shift
-      ;;
-    --no-launchctl)
-      use_launchctl="false"
-      shift
-      ;;
-    --no-reset-accessibility)
-      reset_accessibility="false"
       shift
       ;;
     --help|-h)
@@ -93,103 +73,98 @@ fi
 if [[ "$app_dir" != /* ]]; then
   app_dir="$repo_root/$app_dir"
 fi
-if [[ "$launch_agents_dir" != /* ]]; then
-  launch_agents_dir="$repo_root/$launch_agents_dir"
-fi
+case "$app_dir" in
+  ""|/)
+    echo "refusing unsafe application directory: $app_dir" >&2
+    exit 2
+    ;;
+esac
 
 source_app="$package_dir/Narwhal.app"
 installed_app="$app_dir/Narwhal.app"
-launch_agent="$launch_agents_dir/com.ben.narwhal.plist"
-app_executable="$installed_app/Contents/MacOS/NarwhalApp"
-bundle_identifier="com.ben.narwhal"
+previous_app="$app_dir/Narwhal.app.previous"
+staged_app="$app_dir/.Narwhal.app.installing.$$"
 socket_path="/tmp/narwhal-$(id -u).sock"
-legacy_installed_app="$app_dir/WinMgr.app"
-legacy_launch_agent="$launch_agents_dir/com.ben.winmgr.plist"
-legacy_socket_path="/tmp/winmgr-$(id -u).sock"
+installed_ctl="$installed_app/Contents/MacOS/narwhalctl"
+legacy_app="$app_dir/WinMgr.app"
+did_backup="false"
+install_succeeded="false"
+
+cleanup() {
+  local status="$?"
+  rm -rf "$staged_app"
+  if [ "$install_succeeded" != "true" ] \
+      && [ "$did_backup" = "true" ] \
+      && [ ! -e "$installed_app" ] \
+      && [ -e "$previous_app" ]; then
+    mv "$previous_app" "$installed_app"
+  fi
+  return "$status"
+}
+trap cleanup EXIT
 
 wait_for_socket_absent() {
-  local path="$1"
-  local attempts="$2"
-  local delay="$3"
+  local attempts=50
   for ((i = 0; i < attempts; i++)); do
-    [ ! -S "$path" ] && return 0
-    sleep "$delay"
+    [ ! -S "$socket_path" ] && return 0
+    sleep 0.1
   done
-  [ ! -S "$path" ]
+  [ ! -S "$socket_path" ]
 }
 
-graceful_quit_existing_app() {
-  local ctl="$installed_app/Contents/MacOS/narwhalctl"
-  if [ "$use_launchctl" != "true" ]; then
-    return 0
-  fi
-  if [ -x "$ctl" ] && [ -S "$socket_path" ]; then
-    echo "Requesting Narwhal quit before LaunchAgent bootout"
-    "$ctl" quit >/dev/null 2>&1 || true
-    wait_for_socket_absent "$socket_path" 50 0.1 || true
-  fi
-}
-
-graceful_quit_legacy_app() {
-  local ctl="$legacy_installed_app/Contents/MacOS/winmgrctl"
-  if [ "$use_launchctl" != "true" ]; then
-    return 0
-  fi
-  if [ -x "$ctl" ] && [ -S "$legacy_socket_path" ]; then
-    echo "Requesting legacy WinMgr quit before LaunchAgent bootout"
-    "$ctl" quit >/dev/null 2>&1 || true
-    wait_for_socket_absent "$legacy_socket_path" 50 0.1 || true
-  fi
-}
-
-if [ "$replace_existing" != "true" ] && {
-  [ -e "$installed_app" ] \
-    || [ -e "$launch_agent" ] \
-    || [ -e "$legacy_installed_app" ] \
-    || [ -e "$legacy_launch_agent" ]
-}; then
+if [ "$replace_existing" != "true" ] && { [ -e "$installed_app" ] || [ -e "$legacy_app" ]; }; then
   echo "install target exists; rerun with --replace" >&2
   echo "  app: $installed_app" >&2
-  echo "  plist: $launch_agent" >&2
-  echo "  legacy app: $legacy_installed_app" >&2
-  echo "  legacy plist: $legacy_launch_agent" >&2
+  echo "  legacy app: $legacy_app" >&2
   exit 1
 fi
 
-build_args=(--configuration "$configuration" --output "$package_dir" --replace)
-"$repo_root/scripts/build_app_bundle.sh" "${build_args[@]}"
+"$repo_root/scripts/build_app_bundle.sh" \
+  --configuration "$configuration" \
+  --output "$package_dir" \
+  --replace
 
-if [ -e "$installed_app" ] || [ -e "$launch_agent" ] || [ -e "$legacy_installed_app" ] || [ -e "$legacy_launch_agent" ]; then
-  graceful_quit_existing_app
-  graceful_quit_legacy_app
-  if [ "$use_launchctl" = "true" ] && [ -e "$launch_agent" ]; then
+codesign --verify --deep --strict "$source_app"
+mkdir -p "$app_dir"
+cp -R "$source_app" "$staged_app"
+codesign --verify --deep --strict "$staged_app"
+
+if [ -x "$installed_ctl" ] && [ -S "$socket_path" ]; then
+  echo "Requesting Narwhal quit before replacement"
+  "$installed_ctl" quit >/dev/null
+  wait_for_socket_absent || {
+    echo "Narwhal did not stop before replacement" >&2
+    exit 1
+  }
+fi
+
+if [ -e "$installed_app" ]; then
+  rm -rf "$previous_app"
+  mv "$installed_app" "$previous_app"
+  did_backup="true"
+fi
+
+mv "$staged_app" "$installed_app"
+codesign --verify --deep --strict "$installed_app"
+
+if [ "$app_dir" = "$HOME/Applications" ]; then
+  launch_agent="$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
+  legacy_launch_agent="$HOME/Library/LaunchAgents/com.ben.winmgr.plist"
+  if [ -e "$launch_agent" ]; then
     launchctl bootout "gui/$(id -u)" "$launch_agent" 2>/dev/null || true
+    rm -f "$launch_agent"
   fi
-  if [ "$use_launchctl" = "true" ] && [ -e "$legacy_launch_agent" ]; then
+  if [ -e "$legacy_launch_agent" ]; then
     launchctl bootout "gui/$(id -u)" "$legacy_launch_agent" 2>/dev/null || true
+    rm -f "$legacy_launch_agent"
   fi
-  rm -rf "$installed_app" "$launch_agent" "$legacy_installed_app" "$legacy_launch_agent"
+  rm -rf "$legacy_app"
 fi
 
-mkdir -p "$app_dir" "$launch_agents_dir"
-cp -R "$source_app" "$installed_app"
-cp "$repo_root/Packaging/com.ben.narwhal.plist" "$launch_agent"
-plutil -insert ProgramArguments.0 -string "$app_executable" "$launch_agent"
-plutil -replace WorkingDirectory -string "$HOME" "$launch_agent"
-plutil -lint "$launch_agent"
-
-if [ "$use_launchctl" = "true" ]; then
-  if [ "$reset_accessibility" != "false" ]; then
-    echo "Resetting Accessibility approval for $bundle_identifier"
-    tccutil reset Accessibility "$bundle_identifier"
-  fi
-  launchctl bootout "gui/$(id -u)" "$launch_agent" 2>/dev/null || true
-  launchctl bootstrap "gui/$(id -u)" "$launch_agent"
-fi
-
+install_succeeded="true"
 cat <<EOF
 Installed $installed_app
-Installed $launch_agent
-LaunchAgent active: $use_launchctl
-Accessibility reset: $([ "$use_launchctl" = "true" ] && [ "$reset_accessibility" != "false" ] && echo true || echo false)
+Previous version retained: $([ -e "$previous_app" ] && echo "$previous_app" || echo none)
+Accessibility approval was not changed.
+Open Narwhal and use its menu to control Launch at Login.
 EOF

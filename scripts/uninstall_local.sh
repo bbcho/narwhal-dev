@@ -2,23 +2,19 @@
 set -euo pipefail
 
 app_dir="$HOME/Applications"
-launch_agents_dir="$HOME/Library/LaunchAgents"
 keep_app="false"
-use_launchctl="true"
 
 usage() {
   cat <<'USAGE'
 usage: scripts/uninstall_local.sh [options]
 
-Boots out the local LaunchAgent, removes its plist, and removes Narwhal.app
-unless --keep-app is set.
+Unregisters Launch at Login, requests a graceful quit, and removes Narwhal.app
+and its retained previous version unless --keep-app is set.
 
 Options:
-  --app-dir DIR             Directory containing Narwhal.app. Default: ~/Applications.
-  --launch-agents-dir DIR   LaunchAgent directory. Default: ~/Library/LaunchAgents.
-  --keep-app                Leave Narwhal.app installed.
-  --no-launchctl            Do not run launchctl bootout.
-  --help                    Show this help.
+  --app-dir DIR   Directory containing Narwhal.app. Default: ~/Applications.
+  --keep-app      Leave Narwhal.app installed after disabling Launch at Login.
+  --help          Show this help.
 USAGE
 }
 
@@ -29,17 +25,8 @@ while [ "$#" -gt 0 ]; do
       app_dir="$2"
       shift 2
       ;;
-    --launch-agents-dir)
-      [ "$#" -ge 2 ] || { echo "--launch-agents-dir requires a directory" >&2; exit 2; }
-      launch_agents_dir="$2"
-      shift 2
-      ;;
     --keep-app)
       keep_app="true"
-      shift
-      ;;
-    --no-launchctl)
-      use_launchctl="false"
       shift
       ;;
     --help|-h)
@@ -59,68 +46,65 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 if [[ "$app_dir" != /* ]]; then
   app_dir="$repo_root/$app_dir"
 fi
-if [[ "$launch_agents_dir" != /* ]]; then
-  launch_agents_dir="$repo_root/$launch_agents_dir"
-fi
+case "$app_dir" in
+  ""|/)
+    echo "refusing unsafe application directory: $app_dir" >&2
+    exit 2
+    ;;
+esac
 
 installed_app="$app_dir/Narwhal.app"
-launch_agent="$launch_agents_dir/com.ben.narwhal.plist"
+previous_app="$app_dir/Narwhal.app.previous"
+ctl="$installed_app/Contents/MacOS/narwhalctl"
+app_executable="$installed_app/Contents/MacOS/NarwhalApp"
 socket_path="/tmp/narwhal-$(id -u).sock"
-legacy_installed_app="$app_dir/WinMgr.app"
-legacy_launch_agent="$launch_agents_dir/com.ben.winmgr.plist"
-legacy_socket_path="/tmp/winmgr-$(id -u).sock"
+unregister_status="app-not-found"
 
 wait_for_socket_absent() {
-  local path="$1"
-  local attempts="$2"
-  local delay="$3"
+  local attempts=50
   for ((i = 0; i < attempts; i++)); do
-    [ ! -S "$path" ] && return 0
-    sleep "$delay"
+    [ ! -S "$socket_path" ] && return 0
+    sleep 0.1
   done
-  [ ! -S "$path" ]
+  [ ! -S "$socket_path" ]
 }
 
-graceful_quit_existing_app() {
-  local ctl="$installed_app/Contents/MacOS/narwhalctl"
-  if [ "$use_launchctl" != "true" ]; then
-    return 0
-  fi
-  if [ -x "$ctl" ] && [ -S "$socket_path" ]; then
-    echo "Requesting Narwhal quit before LaunchAgent bootout"
-    "$ctl" quit >/dev/null 2>&1 || true
-    wait_for_socket_absent "$socket_path" 50 0.1 || true
-  fi
-}
-
-graceful_quit_legacy_app() {
-  local ctl="$legacy_installed_app/Contents/MacOS/winmgrctl"
-  if [ "$use_launchctl" != "true" ]; then
-    return 0
-  fi
-  if [ -x "$ctl" ] && [ -S "$legacy_socket_path" ]; then
-    echo "Requesting legacy WinMgr quit before LaunchAgent bootout"
-    "$ctl" quit >/dev/null 2>&1 || true
-    wait_for_socket_absent "$legacy_socket_path" 50 0.1 || true
-  fi
-}
-
-if [ "$use_launchctl" = "true" ] && [ -e "$launch_agent" ]; then
-  graceful_quit_existing_app
-  launchctl bootout "gui/$(id -u)" "$launch_agent" 2>/dev/null || true
-fi
-if [ "$use_launchctl" = "true" ] && [ -e "$legacy_launch_agent" ]; then
-  graceful_quit_legacy_app
-  launchctl bootout "gui/$(id -u)" "$legacy_launch_agent" 2>/dev/null || true
+if [ -x "$ctl" ] && [ -S "$socket_path" ]; then
+  echo "Requesting Narwhal quit"
+  "$ctl" quit >/dev/null
+  wait_for_socket_absent || {
+    echo "Narwhal did not stop; refusing to remove a running app" >&2
+    exit 1
+  }
 fi
 
-rm -f "$launch_agent" "$legacy_launch_agent"
+if [ -x "$app_executable" ]; then
+  unregister_status="completed"
+  "$app_executable" --unregister-login-item || {
+    unregister_status="failed"
+    echo "warning: Launch at Login could not be unregistered automatically" >&2
+  }
+fi
+
+if [ "$app_dir" = "$HOME/Applications" ]; then
+  launch_agent="$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
+  legacy_launch_agent="$HOME/Library/LaunchAgents/com.ben.winmgr.plist"
+  if [ -e "$launch_agent" ]; then
+    launchctl bootout "gui/$(id -u)" "$launch_agent" 2>/dev/null || true
+    rm -f "$launch_agent"
+  fi
+  if [ -e "$legacy_launch_agent" ]; then
+    launchctl bootout "gui/$(id -u)" "$legacy_launch_agent" 2>/dev/null || true
+    rm -f "$legacy_launch_agent"
+  fi
+fi
+
 if [ "$keep_app" != "true" ]; then
-  rm -rf "$installed_app" "$legacy_installed_app"
+  rm -rf "$installed_app" "$previous_app" "$app_dir/WinMgr.app"
 fi
 
 cat <<EOF
-Removed $launch_agent
-Removed legacy $legacy_launch_agent
+Launch at Login unregister: $unregister_status
 Removed app: $([ "$keep_app" = "true" ] && echo false || echo true)
+Accessibility approval was not reset.
 EOF
