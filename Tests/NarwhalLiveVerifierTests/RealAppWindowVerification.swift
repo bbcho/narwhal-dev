@@ -502,7 +502,8 @@ enum RealAppWindowVerification {
                 )
             },
             worldActor: worldActor,
-            applier: applier
+            applier: applier,
+            strategy: .coordinated
         )
 
         try await applyWorkflowCommand(
@@ -589,7 +590,8 @@ enum RealAppWindowVerification {
             "Chrome over Firefox Firefox reserve shrink room",
             plan: { await worldActor.planResize(firefoxBefore.id, direction: .up, delta: Self.browserResizeReserveDelta) },
             worldActor: worldActor,
-            applier: applier
+            applier: applier,
+            strategy: .coordinated
         )
 
         try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
@@ -606,7 +608,8 @@ enum RealAppWindowVerification {
             "Chrome over Firefox Chrome resize down",
             plan: { await worldActor.planResize(chromeBefore.id, direction: .down, delta: 0.10) },
             worldActor: worldActor,
-            applier: applier
+            applier: applier,
+            strategy: .coordinated
         )
 
         let chromeAfter = try currentWorkflowMetadata(for: chrome, using: axClient)
@@ -715,7 +718,8 @@ enum RealAppWindowVerification {
                 "manual browser resize Firefox reserve shrink room \(attempt)",
                 plan: { await worldActor.planResize(firefoxAfterReserve.id, direction: .up, delta: 0.35) },
                 worldActor: worldActor,
-                applier: applier
+                applier: applier,
+                strategy: .coordinated
             )
 
             try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
@@ -798,6 +802,7 @@ enum RealAppWindowVerification {
         let externalPlannedFrames = try await applyExternalGeometryWorkflowEvent(
             "manual browser resize Chrome external geometry",
             event: event,
+            sourceFrame: manualChromeFrame,
             worldActor: worldActor,
             applier: applier
         )
@@ -1063,14 +1068,15 @@ enum RealAppWindowVerification {
         plan: () async -> Result<CommandPlanResult, CommandError>,
         worldActor: WorldActor,
         applier: LayoutApplier,
-        allowNoMove: Bool = false
+        allowNoMove: Bool = false,
+        strategy: LayoutFrameWriteStrategy = .sequential
     ) async throws -> [WindowID: CGRect] {
         let first = try await requireWorkflowPlan(name, plan(), allowNoMove: allowNoMove)
         if first.desiredLayout.delta.moves.isEmpty {
             await worldActor.commit(first, appliedFrames: [:])
             return first.desiredLayout.layout.tiled
         }
-        let firstResult = await applier.apply(first)
+        let firstResult = await applier.apply(first, strategy: strategy)
         switch plannedLayoutApplyDecision(plan: first, applyResult: firstResult, retryOnClamp: true) {
         case .commit(let appliedFrames, _):
             await worldActor.commit(first, appliedFrames: appliedFrames)
@@ -1087,7 +1093,7 @@ enum RealAppWindowVerification {
                 throw RealAppWindowVerifierFailure("\(name) clamped without retry: \(summary)")
             }
             let retry = try await requireWorkflowPlan("\(name) retry after clamp", plan(), allowNoMove: allowNoMove)
-            let retryResult = await applier.apply(retry)
+            let retryResult = await applier.apply(retry, strategy: strategy)
             switch plannedLayoutApplyDecision(plan: retry, applyResult: retryResult, retryOnClamp: false) {
             case .commit(let retryAppliedFrames, _):
                 await worldActor.commit(retry, appliedFrames: retryAppliedFrames)
@@ -1110,6 +1116,7 @@ enum RealAppWindowVerification {
     private static func applyExternalGeometryWorkflowEvent(
         _ name: String,
         event: AXEvent,
+        sourceFrame: CGRect,
         worldActor: WorldActor,
         applier: LayoutApplier
     ) async throws -> [WindowID: CGRect] {
@@ -1123,7 +1130,15 @@ enum RealAppWindowVerification {
             throw RealAppWindowVerifierFailure("\(name) plan failed: \(error.message)")
         }
 
-        let firstResult = await applier.apply(first)
+        guard let sourceWindowID = externalGeometryWindowID(for: event) else {
+            throw RealAppWindowVerifierFailure("\(name) has no source window")
+        }
+        let preservedFrames = [sourceWindowID: sourceFrame]
+        let firstResult = await applier.apply(
+            first,
+            preserving: preservedFrames,
+            strategy: .coordinated
+        )
         switch plannedLayoutApplyDecision(plan: first, applyResult: firstResult, retryOnClamp: true) {
         case .commit(let appliedFrames, _):
             await worldActor.commit(first, appliedFrames: appliedFrames)
@@ -1146,7 +1161,11 @@ enum RealAppWindowVerification {
             case .failure(let error):
                 throw RealAppWindowVerifierFailure("\(name) retry after clamp failed: \(error.message)")
             }
-            let retryResult = await applier.apply(retry)
+            let retryResult = await applier.apply(
+                retry,
+                preserving: preservedFrames,
+                strategy: .coordinated
+            )
             switch plannedLayoutApplyDecision(plan: retry, applyResult: retryResult, retryOnClamp: false) {
             case .commit(let retryAppliedFrames, _):
                 await worldActor.commit(retry, appliedFrames: retryAppliedFrames)
@@ -1170,13 +1189,20 @@ enum RealAppWindowVerification {
         _ context: String,
         plans: [(name: String, plan: () async -> Result<CommandPlanResult, CommandError>)],
         worldActor: WorldActor,
-        applier: LayoutApplier
+        applier: LayoutApplier,
+        strategy: LayoutFrameWriteStrategy = .sequential
     ) async throws {
         var rejected: [String] = []
         for entry in plans {
             switch await entry.plan() {
             case .success:
-                try await applyWorkflowCommand(entry.name, plan: entry.plan, worldActor: worldActor, applier: applier)
+                try await applyWorkflowCommand(
+                    entry.name,
+                    plan: entry.plan,
+                    worldActor: worldActor,
+                    applier: applier,
+                    strategy: strategy
+                )
                 return
             case .failure(let error):
                 rejected.append("\(entry.name): \(error.message)")
@@ -1249,7 +1275,7 @@ enum RealAppWindowVerification {
             throw RealAppWindowVerifierFailure("\(context) applied no frames")
         }
         let plannedFrames = plan.desiredLayout.layout.tiled
-        let missingWindowIDs = plannedFrames.keys.filter { appliedFrames[$0] == nil }
+        let missingWindowIDs = plan.desiredLayout.delta.moves.keys.filter { appliedFrames[$0] == nil }
         guard missingWindowIDs.isEmpty else {
             let missing = missingWindowIDs
                 .map(\.description)

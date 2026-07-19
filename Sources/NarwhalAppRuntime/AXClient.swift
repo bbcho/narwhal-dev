@@ -118,6 +118,15 @@ enum AXSettleStrategy: Sendable {
     case servicingRunLoop
 }
 
+@MainActor
+private struct CoordinatedFrameWrite {
+    let windowID: WindowID
+    let element: AXUIElement
+    let target: CGRect
+    var lastFrame: CGRect
+    var positionFirst: Bool
+}
+
 struct AXClient {
     private let inventoryFilter: WindowInventoryFilter
     private let settleStrategy: AXSettleStrategy
@@ -309,6 +318,128 @@ struct AXClient {
         case .failure(let error):
             return .failed(error)
         }
+    }
+
+    @MainActor
+    func setFramesCoordinated(
+        _ requests: [(window: WindowMetadata, frame: CGRect)]
+    ) async -> [WindowID: AXFrameWriteOutcome] {
+        var outcomes: [WindowID: AXFrameWriteOutcome] = [:]
+        var pending: [CoordinatedFrameWrite] = []
+
+        for request in requests {
+            switch await windowElement(matching: request.window) {
+            case .success(let element):
+                pending.append(CoordinatedFrameWrite(
+                    windowID: request.window.id,
+                    element: element,
+                    target: request.frame,
+                    lastFrame: .null,
+                    positionFirst: false
+                ))
+            case .failure(let error):
+                outcomes[request.window.id] = .failed(error)
+            }
+        }
+
+        for _ in 0..<3 where !pending.isEmpty {
+            var ready: [CoordinatedFrameWrite] = []
+            for var write in pending {
+                switch focusedWindowFrame(write.element) {
+                case .success(let current):
+                    write.lastFrame = current
+                    if current.narwhalApproximatelyEquals(write.target, tolerance: frameWriteSettleTolerance) {
+                        outcomes[write.windowID] = .converged(actual: current)
+                        continue
+                    }
+                    write.positionFirst = write.target.minX < current.minX || write.target.minY < current.minY
+                case .failure:
+                    write.positionFirst = false
+                }
+                ready.append(write)
+            }
+            pending = ready
+            guard !pending.isEmpty else { break }
+
+            var didWritePositionFirst = false
+            pending = pending.filter { write in
+                guard write.positionFirst else { return true }
+                switch setPosition(write.target.origin, on: write.element) {
+                case .success:
+                    didWritePositionFirst = true
+                    return true
+                case .failure(let error):
+                    outcomes[write.windowID] = .failed(error)
+                    return false
+                }
+            }
+            if didWritePositionFirst {
+                await settle(for: Self.frameWriteSettleInterval)
+            }
+            guard !pending.isEmpty else { break }
+
+            var didWriteSize = false
+            pending = pending.filter { write in
+                switch setSize(write.target.size, on: write.element) {
+                case .success:
+                    didWriteSize = true
+                    return true
+                case .failure(let error):
+                    outcomes[write.windowID] = .failed(error)
+                    return false
+                }
+            }
+            if didWriteSize {
+                await settle(for: Self.frameWriteSettleInterval)
+            }
+            guard !pending.isEmpty else { break }
+
+            var didWritePosition = false
+            pending = pending.filter { write in
+                switch setPosition(write.target.origin, on: write.element) {
+                case .success:
+                    didWritePosition = true
+                    return true
+                case .failure(let error):
+                    outcomes[write.windowID] = .failed(error)
+                    return false
+                }
+            }
+            if didWritePosition {
+                await settle(for: Self.frameWriteSettleInterval)
+            }
+
+            var unsettled: [CoordinatedFrameWrite] = []
+            for var write in pending {
+                switch focusedWindowFrame(write.element) {
+                case .success(let actual):
+                    write.lastFrame = actual
+                    if actual.narwhalApproximatelyEquals(write.target, tolerance: frameWriteSettleTolerance) {
+                        outcomes[write.windowID] = .converged(actual: actual)
+                    } else {
+                        unsettled.append(write)
+                    }
+                case .failure(let error):
+                    outcomes[write.windowID] = .failed(error)
+                }
+            }
+            pending = unsettled
+        }
+
+        for write in pending {
+            if write.lastFrame.isNull {
+                switch focusedWindowFrame(write.element) {
+                case .success(let actual):
+                    outcomes[write.windowID] = frameWriteDidNotConverge(target: write.target, actual: actual)
+                case .failure(let error):
+                    outcomes[write.windowID] = .failed(error)
+                }
+            } else {
+                outcomes[write.windowID] = frameWriteDidNotConverge(target: write.target, actual: write.lastFrame)
+            }
+        }
+
+        return outcomes
     }
 
     @MainActor

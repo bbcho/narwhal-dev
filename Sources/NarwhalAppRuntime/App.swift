@@ -1857,7 +1857,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             result,
             operation: "Resize \(direction.rawValue) \(delta)",
             persistReason: "resize \(direction.rawValue) \(delta)",
-            retryOnClamp: retryOnClamp
+            retryOnClamp: retryOnClamp,
+            writeStrategy: .coordinated
         ) {
             await self.worldActor.planResize(windowID, direction: direction, delta: delta)
         }
@@ -2011,13 +2012,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         retryOnClamp: Bool,
         showFocusBorder: Bool = true,
         preserving preservedFrames: [WindowID: CGRect] = [:],
+        writeStrategy: LayoutFrameWriteStrategy = .sequential,
         replanAfterClamp: () async -> Result<CommandPlanResult, CommandError>
     ) async -> Bool {
         let applyResult = await LayoutApplier(
             axClient: axClient,
             reporter: reporter,
             echoSuppressor: echoSuppressor
-        ).apply(result, preserving: preservedFrames)
+        ).apply(result, preserving: preservedFrames, strategy: writeStrategy)
         switch plannedLayoutApplyDecision(plan: result, applyResult: applyResult, retryOnClamp: retryOnClamp) {
         case .commit(let appliedFrames, let focusUpdate):
             await worldActor.commit(result, appliedFrames: appliedFrames)
@@ -2072,6 +2074,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     persistReason: persistReason,
                     retryOnClamp: false,
                     preserving: preservedFrames,
+                    writeStrategy: writeStrategy,
                     replanAfterClamp: replanAfterClamp
                 )
             case .failure(let error):
@@ -2264,7 +2267,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 persistReason: "manual resize",
                 retryOnClamp: true,
                 showFocusBorder: snapshot != nil,
-                preserving: preservedFrames
+                preserving: preservedFrames,
+                writeStrategy: .coordinated
             ) {
                 await self.replanExternalGeometryAfterClamp(result)
             }
