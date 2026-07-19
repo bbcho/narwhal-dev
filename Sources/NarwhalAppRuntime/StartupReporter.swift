@@ -44,7 +44,7 @@ struct StartupReporter {
         let line = formattedLogLine(timestamp: timestamp(), level: level, message: message)
         guard let data = line.data(using: .utf8) else { return }
         FileHandle.standardError.write(data)
-        sink.write(data)
+        sink.write(data, synchronizing: level == .error)
     }
 
     private static func currentTimestamp() -> String {
@@ -72,14 +72,16 @@ final class FileLogSink {
         try? handle?.close()
     }
 
-    func write(_ data: Data) {
+    func write(_ data: Data, synchronizing: Bool = false) {
         guard let handle else { return }
 
         lock.lock()
         defer { lock.unlock() }
         do {
             try handle.write(contentsOf: data)
-            try handle.synchronize()
+            if synchronizing {
+                try handle.synchronize()
+            }
         } catch {
             reportFailureOnce(error)
         }
