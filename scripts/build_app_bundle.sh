@@ -202,6 +202,7 @@ if [ -n "$build_number" ]; then
   plutil -replace CFBundleVersion -string "$build_number" "$contents/Info.plist"
 fi
 cp "$repo_root/DefaultConfig/init.lua" "$resources/DefaultConfig/init.lua"
+cp "$repo_root/THIRD_PARTY_NOTICES.md" "$resources/THIRD_PARTY_NOTICES.md"
 cp "$repo_root/Packaging/Assets/NarwhalIcon.icns" "$resources/NarwhalIcon.icns"
 cp "$repo_root/Packaging/Assets/NarwhalToolbarIcon.png" "$resources/NarwhalToolbarIcon.png"
 cp "$repo_root/Packaging/Assets/NarwhalToolbarIcon@2x.png" "$resources/NarwhalToolbarIcon@2x.png"

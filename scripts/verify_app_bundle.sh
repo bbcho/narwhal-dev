@@ -64,6 +64,7 @@ info_plist="$app_path/Contents/Info.plist"
 app_executable="$app_path/Contents/MacOS/NarwhalApp"
 ctl_executable="$app_path/Contents/MacOS/narwhalctl"
 lua_dylib="$app_path/Contents/Frameworks/liblua.dylib"
+third_party_notices="$app_path/Contents/Resources/THIRD_PARTY_NOTICES.md"
 
 plutil -lint "$info_plist"
 codesign --verify --deep --strict --verbose=2 "$app_path"
@@ -110,6 +111,11 @@ if otool -L "$app_executable" | grep -Eq '/(opt/homebrew|usr/local)/.*liblua'; t
 fi
 if [ -e "$(dirname "$app_path")/com.ben.narwhal.plist" ]; then
   echo "legacy LaunchAgent was packaged beside the app" >&2
+  exit 1
+fi
+if [ ! -s "$third_party_notices" ] \
+    || ! grep -Fq 'Copyright (C) 1994-2025 Lua.org, PUC-Rio.' "$third_party_notices"; then
+  echo "packaged app is missing the Lua license notice" >&2
   exit 1
 fi
 
