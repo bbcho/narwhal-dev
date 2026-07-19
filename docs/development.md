@@ -97,8 +97,8 @@ Shell-support tests cover:
 - Service lifecycle rollback.
 - IPC transport connection behavior.
 
-Manual and script smokes cover AppKit, Accessibility, LaunchAgent, real display
-state, hotkeys, and event taps.
+Manual and script smokes cover AppKit, Accessibility, `SMAppService`, real
+display state, hotkeys, event taps, install replacement, and graceful shutdown.
 
 Live AppKit verifiers cover visible UI and layout behavior that unit tests cannot
 prove. Run the full live suite before shipping focus-border, tiled-border,
@@ -223,22 +223,13 @@ Any packaging change should run:
 
 ```sh
 scripts/build_app_bundle.sh --configuration debug --output .build/narwhal-package-next --replace
-plutil -p .build/narwhal-package-next/Narwhal.app/Contents/Info.plist
-plutil -p .build/narwhal-package-next/com.ben.narwhal.plist
-otool -L .build/narwhal-package-next/Narwhal.app/Contents/MacOS/NarwhalApp | sed -n '1,4p'
+scripts/verify_app_bundle.sh --app .build/narwhal-package-next/Narwhal.app
+scripts/smoke_install_upgrade.sh
 ```
 
 ## Release Checklist
 
-For a local release candidate:
-
-1. Run the full automated suite.
-2. Build a package.
-3. Run the local install lifecycle gate.
-4. Install to user paths with LaunchAgent.
-5. Verify `launchctl print`.
-6. Run `narwhalctl reset`.
-7. Run manual tiling/focus/swap/reset smoke.
-8. Check `~/Library/Logs/Narwhal/narwhal.log`.
-
-See [Sprint gates](sprint-gates.md) for detailed acceptance criteria.
+Run every [production gate](sprint-gates.md) on the release commit, including the
+trusted real-app suite. Releases require an exact semantic tag, clean tree,
+Developer ID identity, notarization credentials, explicit architecture, retained
+dSYMs, Gatekeeper success, and checksums. See [Release process](release.md).

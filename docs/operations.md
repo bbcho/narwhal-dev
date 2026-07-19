@@ -1,86 +1,83 @@
 # Operations Runbook
 
-This runbook covers build, install, update, uninstall, logs, smoke tests, and
-common failure handling.
+This runbook covers local builds, installation, recovery, diagnostics, and the
+production release gates.
 
 ## Prerequisites
 
 - macOS 26 or newer.
-- Xcode Command Line Tools or a compatible Swift toolchain.
-- Homebrew Lua:
+- Xcode or Command Line Tools with a compatible Swift toolchain.
+- Homebrew Lua 5.5 at `/opt/homebrew/opt/lua/lib/liblua.dylib`.
+- Accessibility approval for the exact app or terminal-hosted process that uses
+  the Accessibility APIs.
+
+Install Lua with `brew install lua`.
+
+## Build and Verify a Bundle
+
+Run the automated suite:
 
 ```sh
-brew install lua
+CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache \
+  swift test --disable-sandbox
 ```
 
-The packaging script expects:
-
-```text
-/opt/homebrew/opt/lua/lib/liblua.dylib
-```
-
-## Build
-
-Run tests:
+Build and inspect a development bundle:
 
 ```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
+scripts/build_app_bundle.sh \
+  --configuration debug \
+  --output .build/narwhal-package-next \
+  --replace
+scripts/verify_app_bundle.sh \
+  --app .build/narwhal-package-next/Narwhal.app
 ```
 
-Build app bundle:
-
-```sh
-scripts/build_app_bundle.sh --configuration debug --output .build/narwhal-package-next --replace
-```
-
-The package output contains:
-
-```text
-.build/narwhal-package-next/Narwhal.app
-.build/narwhal-package-next/com.ben.narwhal.plist
-```
-
-The app bundle contains:
-
-- `Contents/MacOS/NarwhalApp`
-- `Contents/MacOS/narwhalctl`
-- `Contents/Resources/DefaultConfig/init.lua`
-- `Contents/Frameworks/liblua.dylib`
+The bundle contains the app, `narwhalctl`, the default config, the icon assets,
+the Lua runtime, and the Lua license notice. Lua is linked from inside the app;
+the packaged executable must not depend on the Homebrew path.
 
 ## Install
 
-Install for the current user:
+Install a local build:
 
 ```sh
-scripts/install_local.sh --replace --configuration debug
+scripts/install_local.sh --replace --configuration release
 ```
 
-Useful options:
+The installer stages and verifies the new bundle before replacing
+`~/Applications/Narwhal.app`. On replacement, the former bundle is retained as
+`~/Applications/Narwhal.app.previous`. A failed swap restores the former bundle.
+The installer neither resets Accessibility nor enables Launch at Login.
+
+Use Narwhal's menu item **Launch at Login** to register or unregister the app
+through `SMAppService`. If macOS requires approval, the menu opens Login Items in
+System Settings.
+
+For an isolated install lifecycle test:
 
 ```sh
-scripts/install_local.sh --configuration release
-scripts/install_local.sh --no-launchctl
-scripts/install_local.sh --app-dir .build/install-test/Applications --launch-agents-dir .build/install-test/LaunchAgents --no-launchctl --replace
+scripts/smoke_install_upgrade.sh
 ```
 
-Default install locations:
+## Updates and Rollback
 
-```text
-~/Applications/Narwhal.app
-~/Library/LaunchAgents/com.ben.narwhal.plist
-```
+**Check for Updates…** is user initiated. Narwhal reads the latest stable GitHub
+release metadata and, when a newer semantic version exists, changes the menu
+item to **Get Narwhal VERSION…**. Selecting it opens the GitHub release page.
+Narwhal never downloads or executes an update.
 
-## Update
-
-Reinstall with replacement:
+Install a downloaded, verified repo build with the replacement command above.
+If the new build does not work, quit it and restore the retained
+`Narwhal.app.previous` bundle in Finder. Verify the restored bundle before
+opening it:
 
 ```sh
-scripts/install_local.sh --replace --configuration debug
+codesign --verify --deep --strict "$HOME/Applications/Narwhal.app"
 ```
 
-The installer asks the running app to quit through IPC when possible, then boots
-out the LaunchAgent, replaces the app and plist, and bootstraps the LaunchAgent
-again.
+See [Release process](release.md) for Developer ID, notarization, and published
+artifact requirements.
 
 ## Uninstall
 
@@ -88,269 +85,122 @@ again.
 scripts/uninstall_local.sh
 ```
 
-Keep the app bundle but remove LaunchAgent:
+The script requests a graceful IPC quit, unregisters the `SMAppService` login
+item, and removes both the current and retained previous app. Use `--keep-app`
+to unregister Launch at Login without removing the app. Accessibility approval
+is not reset.
 
-```sh
-scripts/uninstall_local.sh --keep-app
-```
+## Logs and Support Bundles
 
-Skip launchctl for test directories:
-
-```sh
-scripts/uninstall_local.sh --no-launchctl --app-dir .build/install-test/Applications --launch-agents-dir .build/install-test/LaunchAgents
-```
-
-## LaunchAgent
-
-Inspect:
-
-```sh
-launchctl print "gui/$(id -u)/com.ben.narwhal"
-```
-
-Boot out:
-
-```sh
-launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
-```
-
-Bootstrap:
-
-```sh
-launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.ben.narwhal.plist"
-```
-
-## Logs
-
-Primary log:
+The primary log is:
 
 ```text
 ~/Library/Logs/Narwhal/narwhal.log
 ```
 
-Follow logs:
+Narwhal rotates at 5 MiB, retains three generations, and enforces owner-only
+permissions. Runtime logging redacts window titles, bundle identifiers, and
+absolute paths before writing to unified logging, stderr, or files.
 
-```sh
-tail -f "$HOME/Library/Logs/Narwhal/narwhal.log"
-```
+Use **Copy Diagnostics** for the current privacy-reviewed JSON status. Use
+**Export Support Bundle…** to create a ZIP containing only `diagnostics.json`
+and up to 4 MiB of redacted current/rotated logs. It does not include config or
+restore state. Review the ZIP before sharing it.
 
-`NARWHAL_LOG_PATH` overrides this path for isolated smoke-test runs. Normal user
-launches should use the default private log directory. Narwhal rotates the log
-at 5 MiB and retains three owner-readable archives (`narwhal.log.1` through
-`narwhal.log.3`).
-
-Expected healthy startup sequence:
-
-- `NarwhalApp started`
-- `Accessibility trusted`
-- `Environment refreshed (startup)`
-- `Restore state loaded` or `Restore state not found`
-- `Registered hotkeys`
-- `AX observer ready; notification fast path active`
-- `Display observer ready`
-- `Config watcher ready` or skipped because config directory is absent
-- `IPC server ready`
-- `Drag zones ready`
-- `Layout command loop ready`
+`NARWHAL_LOG_PATH` is supported for isolated smoke runs. Do not use it in a
+normal installation.
 
 ## Runtime Paths
 
 | Artifact | Path |
 |---|---|
+| App | `~/Applications/Narwhal.app` |
+| Previous app | `~/Applications/Narwhal.app.previous` |
+| Config | `~/.config/narwhal/init.lua` |
+| Restore state | `~/Library/Application Support/narwhal/state.json` |
+| Restore backup | `~/Library/Application Support/narwhal/state.json.previous` |
 | Log | `~/Library/Logs/Narwhal/narwhal.log` |
 | IPC socket | `/tmp/narwhal-$(id -u).sock` |
-| User config | `~/.config/narwhal/init.lua` |
-| Restore state | `~/Library/Application Support/narwhal/state.json` |
-| Installed app | `~/Applications/Narwhal.app` |
-| LaunchAgent plist | `~/Library/LaunchAgents/com.ben.narwhal.plist` |
+
+Invalid restore files are moved beside the primary file as
+`state.json.corrupt-IDENTIFIER` with owner-only permissions. A valid backup is
+restored automatically; otherwise Narwhal starts with an empty layout and shows
+a warning. State from a future schema is left untouched and the runtime remains
+degraded until a compatible build is installed.
 
 ## Health Checks
 
-Check config:
+Use the binaries inside the installed app for an unambiguous process identity:
 
 ```sh
-NarwhalApp --check-config
+app="$HOME/Applications/Narwhal.app/Contents/MacOS/NarwhalApp"
+ctl="$HOME/Applications/Narwhal.app/Contents/MacOS/narwhalctl"
+
+"$app" --check-config
+"$app" --check-accessibility
+"$app" --check-environment
+"$ctl" status
+"$ctl" status --json
 ```
 
-Check Accessibility:
+Normal startup falls back to built-in defaults when a user config is invalid;
+`--check-config` remains strict and exits nonzero. Saving a corrected config
+hot-reloads it without restarting the app.
 
-```sh
-NarwhalApp --check-accessibility
-```
+A healthy startup reaches these log events:
 
-Check full environment:
+- `Accessibility trusted`
+- `Environment refreshed (startup)`
+- `AX observer ready; notification fast path active`
+- `Display observer ready`
+- `IPC server ready`
+- `Layout command loop ready`
 
-```sh
-NarwhalApp --check-environment
-```
+## Verification Gates
 
-Print focused window:
+Run the current gate commands from [Production gates](sprint-gates.md). In
+particular, `scripts/live_verify_all.sh` must run from an Accessibility-trusted
+runner. A skipped live suite, a suite that opens no real apps, or a run with no
+matching tests is a failure.
 
-```sh
-NarwhalApp --focused-window
-```
-
-One-shot push left:
-
-```sh
-NarwhalApp --push-left
-```
-
-Use a test restore path:
-
-```sh
-NarwhalApp --restore-state /private/tmp/narwhal-state.json
-```
-
-Use a test config:
-
-```sh
-NarwhalApp --config /private/tmp/narwhal-init.lua
-```
-
-## Smoke Tests
-
-Automated suite:
-
-```sh
-CLANG_MODULE_CACHE_PATH=/private/tmp/narwhal-clang-module-cache swift test --disable-sandbox
-```
-
-Package gate:
-
-```sh
-scripts/build_app_bundle.sh --configuration debug --output .build/narwhal-package-next --replace
-plutil -p .build/narwhal-package-next/Narwhal.app/Contents/Info.plist
-plutil -p .build/narwhal-package-next/com.ben.narwhal.plist
-otool -L .build/narwhal-package-next/Narwhal.app/Contents/MacOS/NarwhalApp | sed -n '1,4p'
-```
-
-Install lifecycle:
-
-```sh
-scripts/install_local.sh --no-launchctl --app-dir .build/install-test/Applications --launch-agents-dir .build/install-test/LaunchAgents --replace --configuration debug
-scripts/uninstall_local.sh --no-launchctl --app-dir .build/install-test/Applications --launch-agents-dir .build/install-test/LaunchAgents
-```
-
-Startup/shutdown smoke:
-
-```sh
-scripts/smoke_startup_shutdown.sh
-```
-
-Config hot-reload smoke:
-
-```sh
-scripts/smoke_config_hot_reload.sh
-```
-
-See [sprint-gates.md](sprint-gates.md) for complete gate criteria.
+The live gate manipulates real Chrome, Firefox, System Settings, and Terminal
+windows. Close sensitive work and stop an installed Narwhal process first.
 
 ## Troubleshooting
 
-### Accessibility Not Trusted
+### Accessibility is not trusted
 
-Symptom:
+Approval belongs to the exact executable identity making AX calls. Grant access
+in System Settings → Privacy & Security → Accessibility, restart that runner,
+and rerun a real AX frame-write verifier. Ad-hoc rebuilds can change identity;
+use a stable `NARWHAL_SIGNING_IDENTITY` for repeated installed-app testing.
 
-```text
-Accessibility not trusted
-```
+### IPC is unavailable
 
-Fix:
-
-1. Open System Settings.
-2. Go to Privacy & Security, Accessibility.
-3. Grant permission to the exact executable or app bundle being run.
-4. Restart Narwhal.
-
-Different builds may need separate permissions.
-
-### IPC Failed
-
-Check whether the socket exists:
+Confirm Narwhal is running and inspect the socket and log:
 
 ```sh
 ls -l "/tmp/narwhal-$(id -u).sock"
-```
-
-Check whether the LaunchAgent is running:
-
-```sh
-launchctl print "gui/$(id -u)/com.ben.narwhal"
-```
-
-Read logs:
-
-```sh
 tail -n 100 "$HOME/Library/Logs/Narwhal/narwhal.log"
 ```
 
-If a stale socket remains after a crash:
+If no Narwhal process owns a stale socket, remove that exact socket and restart
+the app.
 
-```sh
-rm "/tmp/narwhal-$(id -u).sock"
-```
+### Config reload failed
 
-Then restart the app.
+The previous valid in-memory config remains active. Fix and save the Lua file,
+then look for `Config reload completed (file watcher)`.
 
-### Active Space Unavailable
+### A layout write fails
 
-Narwhal reads the active macOS Space through private CoreGraphics symbols. If the
-symbol is unavailable or returns `0`, layout services do not start.
+The window may have disappeared, may not be resizable, may enforce a larger
+minimum size, or may not converge after AX writes. Narwhal records observed
+constraints and retries once; it does not commit a layout whose writes fail.
+Use `narwhalctl status` and export a support bundle.
 
-Check:
+### Restore is wrong after a display change
 
-```sh
-NarwhalApp --check-environment
-tail -n 80 "$HOME/Library/Logs/Narwhal/narwhal.log"
-```
-
-### Config Reload Failed
-
-Logs show the exact parse or Lua error:
-
-```sh
-tail -n 80 "$HOME/Library/Logs/Narwhal/narwhal.log"
-```
-
-The previous valid config remains active. Fix the Lua file and save it again.
-
-### Hotkey Does Nothing
-
-Check:
-
-- Accessibility is trusted.
-- The app is running.
-- The hotkey is registered in `~/Library/Logs/Narwhal/narwhal.log`.
-- No other app has captured the same global hotkey.
-- The key is supported by `HotkeyManager`.
-
-### Layout Write Fails
-
-Common causes:
-
-- Target window disappeared.
-- Window is not resizable.
-- App imposes a minimum size larger than the solved tile.
-- AX did not converge after frame writes.
-
-Narwhal records observed minimum-size constraints when a frame is clamped and
-retries once. If the layout remains unsatisfiable, the planned layout is not
-committed.
-
-Capture the current runtime state without exposing window titles or user paths:
-
-```sh
-narwhalctl status
-narwhalctl status --json
-```
-
-### Restore Looks Wrong After Monitor Changes
-
-Restore prefers display fingerprint and falls back to display slot. If a display
-cannot be fingerprinted, slot order may decide the match. Reset layout memory if
-the physical monitor setup changed substantially:
-
-```sh
-narwhalctl reset
-```
+Restore matches display fingerprints first and slots second. A substantial
+physical display change may make the old layout unsuitable. Reset layout memory
+with `narwhalctl reset` after preserving any support evidence you need.

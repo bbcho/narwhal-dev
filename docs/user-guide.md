@@ -31,9 +31,13 @@ scripts/install_local.sh --replace --configuration debug
 The installer:
 
 - Builds `Narwhal.app`.
-- Copies it to `~/Applications/Narwhal.app`.
-- Writes `~/Library/LaunchAgents/com.ben.narwhal.plist`.
-- Starts the LaunchAgent unless `--no-launchctl` is passed.
+- Stages and verifies it before copying it to `~/Applications/Narwhal.app`.
+- Retains the replaced build as `~/Applications/Narwhal.app.previous`.
+- Leaves Accessibility and Launch at Login unchanged.
+
+Use **Launch at Login** in the Narwhal menu to opt in through macOS Login Items.
+Use **Check for Updates…** to check the latest stable GitHub release; Narwhal
+opens the release page but never downloads or runs an update.
 
 Uninstall:
 
@@ -60,6 +64,10 @@ tail -n 80 "$HOME/Library/Logs/Narwhal/narwhal.log"
 
 A healthy startup logs Accessibility trust, hotkey registration, observers, IPC
 server startup, drag-zone startup, and `Layout command loop ready`.
+
+The menu remains available when config, restore, or runtime service startup is
+degraded. It can retry startup, open the config, open Accessibility settings,
+reveal logs, copy diagnostics, or export a privacy-safe support bundle.
 
 ## Default Hotkeys
 
@@ -287,6 +295,10 @@ Narwhal persists restore state by default at:
 Restore stores stable window descriptors such as bundle ID, title, role,
 occurrence, and last known frame. It does not store raw window IDs as stable
 identity, because macOS window IDs change across launches.
+
+Narwhal retains the previous valid snapshot. Invalid state is quarantined with
+owner-only permissions and recovered from that backup when possible. A future
+schema is preserved untouched for a newer Narwhal build.
 
 You can override the restore path for testing:
 

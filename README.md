@@ -29,6 +29,10 @@ The program is built as:
   uninstall, logs, smoke tests, and troubleshooting.
 - [Developer guide](docs/development.md): local setup, test strategy, coding
   conventions, and release checks.
+- [Privacy](docs/privacy.md): local data, redaction, support bundles, and the
+  user-initiated update request.
+- [Release process](docs/release.md): signing, notarization, artifacts, and CI
+  credentials.
 - [Design notes](design.md): detailed product and layout semantics.
 - [Sprint gates](docs/sprint-gates.md): acceptance gates and smoke-test history.
 
@@ -61,9 +65,9 @@ For daily use, prefer a release build:
 scripts/install_local.sh --replace --configuration release
 ```
 
-The local installer writes `~/Applications/Narwhal.app` and a LaunchAgent so
-Narwhal starts at login. Narwhal runs as a menu-bar accessory app: look for the
-Narwhal menu-bar icon rather than a Dock icon.
+The local installer writes `~/Applications/Narwhal.app`. Narwhal runs as a
+menu-bar accessory app: look for its menu-bar icon rather than a Dock icon. Use
+the **Launch at Login** menu item to opt in through macOS Login Items.
 
 Control the running app:
 

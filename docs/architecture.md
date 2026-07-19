@@ -238,5 +238,5 @@ Shell-support tests cover:
 - Service lifecycle rollback.
 - IPC transport behavior.
 
-Manual and script smoke tests cover AppKit, AX, LaunchAgent, and real process
-lifecycle behavior.
+Manual and script smoke tests cover AppKit, AX, `SMAppService`, staged install
+replacement, real process lifecycle, and real application windows.

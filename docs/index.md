@@ -15,8 +15,12 @@ Use this page as the map for Narwhal documentation.
 
 - [Operations runbook](operations.md): build, install, update, uninstall, logs,
   health checks, smoke tests, and troubleshooting.
-- [Sprint gates](sprint-gates.md): detailed acceptance gates and observed smoke
-  history.
+- [Production gates](sprint-gates.md): pull request, trusted runtime, real-app,
+  and release acceptance criteria.
+- [Privacy](privacy.md): local state, redaction, support export, and network
+  behavior.
+- [Release process](release.md): credentials, signed/notarized artifacts, and
+  GitHub publishing.
 
 ## Developer Documentation
 
