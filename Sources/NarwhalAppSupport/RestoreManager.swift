@@ -186,8 +186,8 @@ public func cancelRestoreSave(in state: RestoreSaveSchedulerState) -> RestoreSav
 
 @MainActor
 public final class RestoreSaveScheduler {
-    public typealias Save = (StoredWorld) throws -> Void
-    public typealias Observe = (RestoreSaveEvent) -> Void
+    public typealias Save = @Sendable (StoredWorld) async throws -> Void
+    public typealias Observe = @MainActor @Sendable (RestoreSaveEvent) -> Void
 
     private let urlPath: String
     private let debounceInterval: TimeInterval
@@ -196,21 +196,8 @@ public final class RestoreSaveScheduler {
     private var state = RestoreSaveSchedulerState.empty
     private var timer: Timer?
     private var timerGeneration: UInt64?
-
-    public convenience init(
-        manager: RestoreManager,
-        debounceInterval: TimeInterval = 0.25,
-        observe: @escaping Observe = { _ in }
-    ) {
-        self.init(
-            urlPath: manager.url.path,
-            debounceInterval: debounceInterval,
-            save: { stored in
-                try manager.save(stored)
-            },
-            observe: observe
-        )
-    }
+    private var saveTail: Task<Void, Never>?
+    private var saveTailGeneration: UInt64 = 0
 
     public init(
         urlPath: String,
@@ -230,15 +217,16 @@ public final class RestoreSaveScheduler {
         scheduleTimer(generation: scheduled.request.generation)
     }
 
-    public func flushPending() {
+    public func flushPending() async {
         timer?.invalidate()
         timer = nil
         timerGeneration = nil
         let flushed = flushRestoreSave(in: state)
         state = flushed.state
         if let request = flushed.request {
-            saveAndObserve(request)
+            enqueueSave(request)
         }
+        await saveTail?.value
     }
 
     public func cancelPending() {
@@ -269,15 +257,35 @@ public final class RestoreSaveScheduler {
         let fired = fireRestoreSaveTimer(generation: generation, in: state)
         state = fired.state
         guard case .save(let request) = fired.decision else { return }
-        saveAndObserve(request)
+        enqueueSave(request)
     }
 
-    private func saveAndObserve(_ request: RestoreSaveRequest) {
-        do {
-            try save(request.stored)
-            observe(restoreSaveSuccessEvent(for: request, urlPath: urlPath))
-        } catch {
-            observe(restoreSaveFailureEvent(for: request, urlPath: urlPath, message: String(describing: error)))
+    private func enqueueSave(_ request: RestoreSaveRequest) {
+        let previous = saveTail
+        let save = self.save
+        let observe = self.observe
+        let urlPath = self.urlPath
+        saveTailGeneration += 1
+        let tailGeneration = saveTailGeneration
+        let clearCompletedTail: @MainActor @Sendable (UInt64) -> Void = { [weak self] generation in
+            guard self?.saveTailGeneration == generation else { return }
+            self?.saveTail = nil
+        }
+        saveTail = Task.detached {
+            await previous?.value
+            let event: RestoreSaveEvent
+            do {
+                try await save(request.stored)
+                event = restoreSaveSuccessEvent(for: request, urlPath: urlPath)
+            } catch {
+                event = restoreSaveFailureEvent(
+                    for: request,
+                    urlPath: urlPath,
+                    message: String(describing: error)
+                )
+            }
+            await observe(event)
+            await clearCompletedTail(tailGeneration)
         }
     }
 }
@@ -301,39 +309,67 @@ func restoreSaveFailureEvent(for request: RestoreSaveRequest, urlPath: String, m
 
 @MainActor
 public final class RestorePersistence {
-    private let manager: RestoreManager
+    private let restoreURL: URL
+    private let store: RestoreFileStore
     private let scheduler: RestoreSaveScheduler
 
     public var url: URL {
-        manager.url
+        restoreURL
     }
 
     public init(
         manager: RestoreManager,
         debounceInterval: TimeInterval = 0.25,
+        measureSave: @escaping @Sendable (Double) -> Void = { _ in },
         observe: @escaping RestoreSaveScheduler.Observe = { _ in }
     ) {
-        self.manager = manager
+        self.restoreURL = manager.url
+        let store = RestoreFileStore(manager: manager)
+        self.store = store
         self.scheduler = RestoreSaveScheduler(
-            manager: manager,
+            urlPath: manager.url.path,
             debounceInterval: debounceInterval,
+            save: { stored in
+                let startedAt = ProcessInfo.processInfo.systemUptime
+                defer {
+                    let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
+                    measureSave(max(0, elapsed) * 1_000)
+                }
+                try await store.save(stored)
+            },
             observe: observe
         )
     }
 
-    public func load() throws -> StoredWorld? {
-        try manager.load()
+    public func load() async throws -> StoredWorld? {
+        try await store.load()
     }
 
     public func scheduleSave(_ stored: StoredWorld, reason: String) {
         scheduler.scheduleSave(stored, reason: reason)
     }
 
-    public func flushPending() {
-        scheduler.flushPending()
+    public func flushPending() async {
+        await scheduler.flushPending()
     }
 
     public func cancelPending() {
         scheduler.cancelPending()
+    }
+}
+
+private actor RestoreFileStore {
+    let manager: RestoreManager
+
+    init(manager: RestoreManager) {
+        self.manager = manager
+    }
+
+    func load() throws -> StoredWorld? {
+        try manager.load()
+    }
+
+    func save(_ stored: StoredWorld) throws {
+        try manager.save(stored)
     }
 }

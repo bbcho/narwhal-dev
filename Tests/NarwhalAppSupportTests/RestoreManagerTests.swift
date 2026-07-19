@@ -207,7 +207,7 @@ struct RestoreManagerTests {
 
     @Test("Scheduler flush writes latest pending save immediately")
     @MainActor
-    func schedulerFlushWritesLatestPendingSaveImmediately() {
+    func schedulerFlushWritesLatestPendingSaveImmediately() async {
         let saves = RecordedRestoreSaves()
         let events = RecordedRestoreEvents()
         let scheduler = RestoreSaveScheduler(
@@ -225,7 +225,7 @@ struct RestoreManagerTests {
 
         scheduler.scheduleSave(first, reason: "first")
         scheduler.scheduleSave(second, reason: "second")
-        scheduler.flushPending()
+        await scheduler.flushPending()
 
         #expect(saves.savedWorlds() == [second])
         #expect(events.events() == [
@@ -239,7 +239,7 @@ struct RestoreManagerTests {
 
     @Test("Scheduler failed save reports failure and later flush can save")
     @MainActor
-    func schedulerFailedSaveReportsFailureAndLaterFlushCanSave() {
+    func schedulerFailedSaveReportsFailureAndLaterFlushCanSave() async {
         let saves = RecordedRestoreSaves(failuresBeforeSuccess: 1)
         let events = RecordedRestoreEvents()
         let scheduler = RestoreSaveScheduler(
@@ -256,9 +256,9 @@ struct RestoreManagerTests {
         let saved = storedWorldFixture(title: "saved")
 
         scheduler.scheduleSave(failed, reason: "first")
-        scheduler.flushPending()
+        await scheduler.flushPending()
         scheduler.scheduleSave(saved, reason: "second")
-        scheduler.flushPending()
+        await scheduler.flushPending()
 
         #expect(saves.savedWorlds() == [saved])
         #expect(events.events() == [
@@ -278,7 +278,7 @@ struct RestoreManagerTests {
 
     @Test("Scheduler cancel drops pending save without writing")
     @MainActor
-    func schedulerCancelDropsPendingSaveWithoutWriting() {
+    func schedulerCancelDropsPendingSaveWithoutWriting() async {
         let saves = RecordedRestoreSaves()
         let events = RecordedRestoreEvents()
         let scheduler = RestoreSaveScheduler(
@@ -294,10 +294,65 @@ struct RestoreManagerTests {
 
         scheduler.scheduleSave(storedWorldFixture(title: "cancel"), reason: "cancel")
         scheduler.cancelPending()
-        scheduler.flushPending()
+        await scheduler.flushPending()
 
         #expect(saves.savedWorlds() == [])
         #expect(events.events() == [])
+    }
+
+    @Test("Scheduler serializes a save queued while the previous save is in flight")
+    @MainActor
+    func schedulerSerializesInflightSaves() async {
+        let first = storedWorldFixture(title: "first")
+        let second = storedWorldFixture(title: "second")
+        let probe = OrderedAsyncRestoreSaves(blockedWorld: first)
+        let scheduler = RestoreSaveScheduler(
+            urlPath: "/tmp/narwhal-state.json",
+            debounceInterval: 60.0,
+            save: { stored in await probe.save(stored) }
+        )
+
+        scheduler.scheduleSave(first, reason: "first")
+        let firstFlush = Task { @MainActor in
+            await scheduler.flushPending()
+        }
+        while await probe.startedCount() == 0 {
+            await Task.yield()
+        }
+
+        scheduler.scheduleSave(second, reason: "second")
+        let secondFlush = Task { @MainActor in
+            await scheduler.flushPending()
+        }
+        await Task.yield()
+
+        #expect(await probe.startedWorlds() == [first])
+        await probe.releaseBlockedSave()
+        await firstFlush.value
+        await secondFlush.value
+        #expect(await probe.startedWorlds() == [first, second])
+        #expect(await probe.completedWorlds() == [first, second])
+    }
+
+    @Test("Restore persistence flush awaits the filesystem actor and reports timing")
+    @MainActor
+    func persistenceFlushAwaitsFilesystemActor() async throws {
+        let paths = temporaryRestorePath()
+        defer { removeTemporaryRestoreRoot(paths.root) }
+        let durations = RecordedRestoreDurations()
+        let persistence = RestorePersistence(
+            manager: RestoreManager(url: paths.file),
+            debounceInterval: 60.0,
+            measureSave: { durations.record($0) }
+        )
+        let stored = storedWorldFixture(title: "background")
+
+        persistence.scheduleSave(stored, reason: "test")
+        await persistence.flushPending()
+
+        #expect(try await persistence.load() == stored)
+        #expect(durations.values().count == 1)
+        #expect(durations.values().allSatisfy { $0 >= 0 })
     }
 
     private func storedWorldFixture(title: String = "Window") -> StoredWorld {
@@ -393,6 +448,62 @@ private final class RecordedRestoreSaves {
         lock.lock()
         defer { lock.unlock() }
         return saved
+    }
+}
+
+private actor OrderedAsyncRestoreSaves {
+    private let blockedWorld: StoredWorld
+    private var started: [StoredWorld] = []
+    private var completed: [StoredWorld] = []
+    private var blockedContinuation: CheckedContinuation<Void, Never>?
+
+    init(blockedWorld: StoredWorld) {
+        self.blockedWorld = blockedWorld
+    }
+
+    func save(_ stored: StoredWorld) async {
+        started.append(stored)
+        if stored == blockedWorld {
+            await withCheckedContinuation { continuation in
+                blockedContinuation = continuation
+            }
+        }
+        completed.append(stored)
+    }
+
+    func startedCount() -> Int {
+        started.count
+    }
+
+    func startedWorlds() -> [StoredWorld] {
+        started
+    }
+
+    func completedWorlds() -> [StoredWorld] {
+        completed
+    }
+
+    func releaseBlockedSave() {
+        blockedContinuation?.resume()
+        blockedContinuation = nil
+    }
+}
+
+private final class RecordedRestoreDurations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var durations: [Double] = []
+
+    func record(_ duration: Double) {
+        lock.lock()
+        durations.append(duration)
+        lock.unlock()
+    }
+
+    func values() -> [Double] {
+        lock.lock()
+        let snapshot = durations
+        lock.unlock()
+        return snapshot
     }
 }
 

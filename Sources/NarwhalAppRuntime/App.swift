@@ -104,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var runningServices: RunningServices?
     private var servicesStarted = false
     private var isPaused = false
+    private var isPreparingToTerminate = false
     // AX raise failures survive environment refreshes, so exclusions are session-scoped.
     private var axRaiseBlocklist: Set<WindowID> = []
 
@@ -201,7 +202,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        restorePersistence.flushPending()
         accessibilityPollTimer?.invalidate()
         accessibilityPollTimer = nil
         environmentRefreshCoalescingTimer?.invalidate()
@@ -214,6 +214,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         servicesStarted = false
         overlay.stop()
         reporter.info("NarwhalApp stopped")
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isPreparingToTerminate else { return .terminateLater }
+        isPreparingToTerminate = true
+        Task { @MainActor in
+            await restorePersistence.flushPending()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     private func updateOperatingStatus(_ update: (inout MenubarOperatingStatus) -> Void) {
@@ -444,7 +454,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func restorePersistence(for manager: RestoreManager) -> RestorePersistence {
         RestorePersistence(
             manager: manager,
-            debounceInterval: Self.restoreSaveDebounceInterval
+            debounceInterval: Self.restoreSaveDebounceInterval,
+            measureSave: { [runtimeMetrics] durationMilliseconds in
+                runtimeMetrics.record(.restoreWrite, durationMilliseconds: durationMilliseconds)
+            }
         ) { [reporter] event in
             logRestoreSaveEvent(event, reporter: reporter)
         }
@@ -455,7 +468,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch startupConfigLoad() {
         case .success(let loaded):
             config = loaded.config
-            worldActor = WorldActor(config: loaded.config)
+            worldActor = WorldActor(config: loaded.config, runtimeMetrics: runtimeMetrics)
             overlay.updateConfig(border: loaded.config.border, hud: loaded.config.hud)
             logStartupConfig(loaded)
             return true
@@ -506,7 +519,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             await performPush(direction)
-            terminateAfterFlushingRestore()
+            requestTermination()
         }
     }
 
@@ -582,7 +595,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             quit: { [weak self] in
                 Task { @MainActor in
-                    self?.terminateAfterFlushingRestore()
+                    self?.requestTermination()
                 }
             }
         )
@@ -2097,7 +2110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         do {
-            guard let stored = try restorePersistence.load() else {
+            guard let stored = try await restorePersistence.load() else {
                 reporter.info("Restore state not found at \(restorePersistence.url.path)")
                 return true
             }
@@ -2500,7 +2513,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.info("IPC quit requested")
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 100_000_000)
-                self?.terminateAfterFlushingRestore()
+                self?.requestTermination()
             }
             return .ok(commandID: commandID)
         case .pushFocused(let direction):
@@ -2807,8 +2820,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func terminateAfterFlushingRestore() {
-        restorePersistence.flushPending()
+    private func requestTermination() {
         NSApplication.shared.terminate(nil)
     }
 
