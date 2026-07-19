@@ -580,6 +580,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     await self?.reloadConfig(reason: "menubar")
                 }
             },
+            copyDiagnostics: { [weak self] in
+                Task { @MainActor in
+                    await self?.copyDiagnosticsToPasteboard()
+                }
+            },
             reset: { [weak self] in
                 Task { @MainActor in
                     await self?.performHotkey(.command(.resetLayout))
@@ -2844,6 +2849,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             droppedLogLineCount: reporter.droppedLogLineCount,
             latency: runtimeMetrics.summaries()
         )
+    }
+
+    @MainActor
+    private func copyDiagnosticsToPasteboard() async {
+        do {
+            try copyRuntimeDiagnostics(await runtimeDiagnostics())
+            reporter.info("Runtime diagnostics copied to pasteboard")
+            showOperatorFeedback("Diagnostics copied", tone: .success)
+        } catch {
+            reporter.error("Runtime diagnostics copy failed: \(String(describing: error))")
+            showOperatorFeedback("Diagnostics copy failed", tone: .error)
+        }
     }
 
     private func exitAfterFlushing(_ status: Int32) -> Never {

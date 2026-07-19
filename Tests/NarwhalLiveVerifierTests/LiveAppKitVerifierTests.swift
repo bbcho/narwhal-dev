@@ -43,6 +43,11 @@ struct LiveAppKitVerifierTests {
         try expectPassed(MenubarIconVerification.verifyStatusItemUsesToolbarIcon())
     }
 
+    @Test("Copy Diagnostics menu action")
+    func copyDiagnosticsMenuAction() throws {
+        try expectPassed(DiagnosticsMenuVerification.verifyCopyDiagnosticsAction())
+    }
+
     @Test("Observation replay")
     func observationReplay() throws {
         try expectPassed(ObservationReplayVerification.verifyPartialTopologyReplay())

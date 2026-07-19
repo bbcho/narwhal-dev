@@ -34,16 +34,23 @@ final class Menubar {
     private let focusMenuItem = NSMenuItem(title: "Focus: unknown", action: nil, keyEquivalent: "")
     private let lastCommandMenuItem = NSMenuItem(title: "Last: none", action: nil, keyEquivalent: "")
     private var reload: (() -> Void)?
+    private var copyDiagnostics: (() -> Void)?
     private var reset: (() -> Void)?
     private var quit: (() -> Void)?
     private let lightIcon = NarwhalIconResources.statusItemIcon(variant: .light)
     private let darkIcon = NarwhalIconResources.statusItemIcon(variant: .dark)
     private var appearanceObservation: NSKeyValueObservation?
 
-    func start(reload: @escaping () -> Void, reset: @escaping () -> Void, quit: @escaping () -> Void) {
+    func start(
+        reload: @escaping () -> Void,
+        copyDiagnostics: @escaping () -> Void,
+        reset: @escaping () -> Void,
+        quit: @escaping () -> Void
+    ) {
         guard statusItem == nil else { return }
 
         self.reload = reload
+        self.copyDiagnostics = copyDiagnostics
         self.reset = reset
         self.quit = quit
 
@@ -65,6 +72,7 @@ final class Menubar {
         menu.addItem(lastCommandMenuItem)
         menu.addItem(.separator())
         menu.addItem(menuItem(title: "Reload Config", action: #selector(reloadConfig)))
+        menu.addItem(menuItem(title: "Copy Diagnostics", action: #selector(copyRuntimeDiagnostics)))
         menu.addItem(menuItem(title: "Reset Layout", action: #selector(resetLayout)))
         menu.addItem(.separator())
         menu.addItem(menuItem(title: "Quit Narwhal", action: #selector(quitApp)))
@@ -110,6 +118,13 @@ final class Menubar {
             imagePosition: button.imagePosition
         )
     }
+
+    func debugPerformMenuItem(titled title: String) -> Bool {
+        guard let item = statusItem?.menu?.items.first(where: { $0.title == title }),
+              let action = item.action
+        else { return false }
+        return NSApp.sendAction(action, to: item.target, from: item)
+    }
 #endif
 
     func stop() {
@@ -117,6 +132,7 @@ final class Menubar {
         NSStatusBar.system.removeStatusItem(statusItem)
         self.statusItem = nil
         reload = nil
+        copyDiagnostics = nil
         reset = nil
         quit = nil
     }
@@ -189,6 +205,11 @@ final class Menubar {
     @objc
     private func reloadConfig() {
         reload?()
+    }
+
+    @objc
+    private func copyRuntimeDiagnostics() {
+        copyDiagnostics?()
     }
 
     @objc

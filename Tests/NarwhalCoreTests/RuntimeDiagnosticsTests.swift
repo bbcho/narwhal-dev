@@ -4,18 +4,16 @@ import Testing
 
 @Suite("Runtime diagnostics")
 struct RuntimeDiagnosticsTests {
-    @Test("Diagnostics JSON round-trips without private window metadata")
-    func diagnosticsJSONRoundTripsWithoutPrivateMetadata() throws {
+    @Test("Diagnostics JSON round-trips with only approved fields")
+    func diagnosticsJSONRoundTripsWithOnlyApprovedFields() throws {
         let diagnostics = fixture()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(diagnostics)
-        let json = String(decoding: data, as: UTF8.self)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         #expect(try JSONDecoder().decode(RuntimeDiagnostics.self, from: data) == diagnostics)
-        #expect(!json.contains("Secret Project"))
-        #expect(!json.contains("com.example.private-app"))
-        #expect(!json.contains("/Users/ben/private-config.toml"))
+        #expect(Set(object.keys) == approvedTopLevelKeys)
     }
 
     @Test("Diagnostics expose a versioned stable operational shape")
@@ -61,5 +59,15 @@ struct RuntimeDiagnosticsTests {
                 )
             ]
         )
+    }
+
+    private var approvedTopLevelKeys: Set<String> {
+        [
+            "schemaVersion", "generatedAt", "appVersion", "buildVersion",
+            "accessibilityTrusted", "notificationFastPathActive", "configHealthy", "paused",
+            "activeSpaceID", "displayCount", "windowCount", "tiledWindowCount",
+            "snapshotQuality", "focusedWindowID", "lastCommand", "pendingHotkeyCount",
+            "pendingGeometryEventCount", "droppedLogLineCount", "latency"
+        ]
     }
 }

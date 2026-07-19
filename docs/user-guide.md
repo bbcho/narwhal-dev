@@ -209,6 +209,13 @@ narwhalctl reset
 Reset clears BSP trees, floating lists, focus memory, pending rules, and observed
 minimum-size constraints. It does not close windows.
 
+### Copy Diagnostics
+
+Choose `Copy Diagnostics` from the Narwhal menu-bar menu to place the current
+runtime status on the clipboard as JSON. The report includes health, counts,
+queue depth, and aggregate latency, but excludes window titles, application
+names, and user paths.
+
 ### Drag Into A Zone
 
 Hold the configured drag modifier before mouse-down, drag the focused window,
