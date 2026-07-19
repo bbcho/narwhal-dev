@@ -81,6 +81,7 @@ enum RealAppWindowVerification {
     private static let manualResizeShrinkSafety: CGFloat = 8
     private static let realAppFrameWriteTolerance: CGFloat = 6
     private static let browserResizeReserveDelta = 0.18
+    private static let coordinatedResizeDeadline: TimeInterval = 0.8
 
     static func verifyFirefox() async -> (passed: Bool, message: String) {
         await verifyApp(firefoxSpec())
@@ -604,6 +605,7 @@ enum RealAppWindowVerification {
         }
 
         try await focusIfPossible(chromeBefore, appName: chrome.spec.name, using: axClient)
+        let coordinatedResizeStarted = ProcessInfo.processInfo.systemUptime
         let resizePlannedFrames = try await applyWorkflowCommand(
             "Chrome over Firefox Chrome resize down",
             plan: { await worldActor.planResize(chromeBefore.id, direction: .down, delta: 0.10) },
@@ -611,6 +613,13 @@ enum RealAppWindowVerification {
             applier: applier,
             strategy: .coordinated
         )
+        let coordinatedResizeDuration = ProcessInfo.processInfo.systemUptime - coordinatedResizeStarted
+        guard coordinatedResizeDuration <= Self.coordinatedResizeDeadline else {
+            throw RealAppWindowVerifierFailure(
+                "Chrome over Firefox coordinated resize exceeded visible handoff deadline: "
+                    + "duration=\(coordinatedResizeDuration)s deadline=\(Self.coordinatedResizeDeadline)s"
+            )
+        }
 
         let chromeAfter = try currentWorkflowMetadata(for: chrome, using: axClient)
         let firefoxAfter = try currentWorkflowMetadata(for: firefox, using: axClient)
@@ -648,7 +657,7 @@ enum RealAppWindowVerification {
             )
         }
 
-        return "chrome-over-firefox resize chrome=\(chromeAfter.frame.shortDescription) firefox=\(firefoxAfter.frame.shortDescription)"
+        return "chrome-over-firefox resize duration=\(coordinatedResizeDuration)s chrome=\(chromeAfter.frame.shortDescription) firefox=\(firefoxAfter.frame.shortDescription)"
     }
 
     private static func verifyChromeFirefoxManualResizeWorkflow(
@@ -799,6 +808,7 @@ enum RealAppWindowVerification {
         } else {
             event = .windowMoved(chromeAfterReserve.id, manualChromeFrame)
         }
+        let manualHandoffStarted = ProcessInfo.processInfo.systemUptime
         let externalPlannedFrames = try await applyExternalGeometryWorkflowEvent(
             "manual browser resize Chrome external geometry",
             event: event,
@@ -806,6 +816,13 @@ enum RealAppWindowVerification {
             worldActor: worldActor,
             applier: applier
         )
+        let manualHandoffDuration = ProcessInfo.processInfo.systemUptime - manualHandoffStarted
+        guard manualHandoffDuration <= Self.coordinatedResizeDeadline else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize sibling handoff exceeded visible deadline: "
+                    + "duration=\(manualHandoffDuration)s deadline=\(Self.coordinatedResizeDeadline)s"
+            )
+        }
 
         let chromeAfter = try currentWorkflowMetadata(for: chrome, using: axClient)
         let firefoxAfter = try currentWorkflowMetadata(for: firefox, using: axClient)
@@ -823,6 +840,25 @@ enum RealAppWindowVerification {
             in: externalPlannedFrames,
             context: "Firefox after manual resize"
         )
+        guard chromeAfter.frame.matches(manualChromeFrame, tolerance: frameWriteSettleTolerance) else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize changed the pointer-controlled Chrome frame: "
+                    + "manual=\(manualChromeFrame.debugDescription) "
+                    + "after=\(chromeAfter.frame.debugDescription)"
+            )
+        }
+        let chromeServerFrame = LiveWindowServerVerification.waitForFrame(
+            windowNumber: Int(chromeAfter.id.raw),
+            matching: manualChromeFrame,
+            tolerance: frameWriteSettleTolerance
+        )
+        guard chromeServerFrame?.matches(manualChromeFrame, tolerance: frameWriteSettleTolerance) == true else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize changed the WindowServer-visible Chrome frame: "
+                    + "manual=\(manualChromeFrame.debugDescription) "
+                    + "after=\(chromeServerFrame?.debugDescription ?? "nil")"
+            )
+        }
         guard plannedChromeFrame.height >= manualChromeFrame.height - frameWriteSettleTolerance else {
             throw RealAppWindowVerifierFailure(
                 "manual browser resize plan lost Chrome's manual height: "
@@ -872,7 +908,7 @@ enum RealAppWindowVerification {
             )
         }
 
-        return "real 3-window Chrome/Firefox manual resize companion=\(companionAfter.frame.shortDescription) chrome=\(chromeAfter.frame.shortDescription) firefox=\(firefoxAfter.frame.shortDescription)"
+        return "real 3-window Chrome/Firefox manual resize duration=\(manualHandoffDuration)s companion=\(companionAfter.frame.shortDescription) chrome=\(chromeAfter.frame.shortDescription) firefox=\(firefoxAfter.frame.shortDescription)"
     }
 
     private static func manualResizeVerificationDisplay(_ displays: [DisplayID: DisplayInfo]) throws -> DisplayInfo {
