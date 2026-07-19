@@ -46,7 +46,7 @@ final class FileLogSink: @unchecked Sendable {
             handle = prepareLogFile()
             withStateLock { available = handle != nil }
             if handle == nil {
-                writeStderr("Log file unavailable at \(path)\n")
+                writeStderr("Log file unavailable\n")
             }
         }
     }
@@ -112,7 +112,7 @@ final class FileLogSink: @unchecked Sendable {
     private func reportFailureOnce(_ error: Error) {
         guard !reportedFailure else { return }
         reportedFailure = true
-        writeStderr("Log file write failed: \(String(describing: error))\n")
+        writeStderr("Log file write failed\n")
     }
 
     private func prepareLogFile() -> FileHandle? {
@@ -165,11 +165,11 @@ final class FileLogSink: @unchecked Sendable {
         guard Darwin.lstat(archivePath, &fileStatus) == 0 else { return }
         let kind = fileStatus.st_mode & mode_t(S_IFMT)
         guard kind == mode_t(S_IFREG) || kind == mode_t(S_IFLNK) else {
-            writeStderr("Log rotation refused non-file archive at \(archivePath)\n")
+            writeStderr("Log rotation refused non-file archive\n")
             return
         }
         if Darwin.unlink(archivePath) != 0 {
-            writeStderr("Log rotation could not remove \(archivePath): errno=\(errno)\n")
+            writeStderr("Log rotation could not remove archive: errno=\(errno)\n")
         }
     }
 
@@ -184,11 +184,11 @@ final class FileLogSink: @unchecked Sendable {
             return
         }
         guard kind == mode_t(S_IFREG) else {
-            writeStderr("Log rotation refused non-file archive at \(source)\n")
+            writeStderr("Log rotation refused non-file archive\n")
             return
         }
         guard Darwin.rename(source, destination) == 0 else {
-            writeStderr("Log rotation could not move \(source) to \(destination): errno=\(errno)\n")
+            writeStderr("Log rotation could not move archive: errno=\(errno)\n")
             return
         }
         _ = Darwin.chmod(destination, mode_t(S_IRUSR | S_IWUSR))

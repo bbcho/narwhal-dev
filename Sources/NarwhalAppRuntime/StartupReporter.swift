@@ -30,13 +30,15 @@ struct StartupReporter {
     }
 
     func info(_ message: String) {
-        logger.info("\(message, privacy: .public)")
-        write(level: .info, message: message)
+        let safeMessage = redactedLogMessage(message)
+        logger.info("\(safeMessage, privacy: .public)")
+        write(level: .info, message: safeMessage)
     }
 
     func error(_ message: String) {
-        logger.error("\(message, privacy: .public)")
-        write(level: .error, message: message)
+        let safeMessage = redactedLogMessage(message)
+        logger.error("\(safeMessage, privacy: .public)")
+        write(level: .error, message: safeMessage)
     }
 
     func flush() {

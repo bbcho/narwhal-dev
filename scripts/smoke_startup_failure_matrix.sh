@@ -86,7 +86,7 @@ run_case() {
   app_pid="$!"
 
   if [ "$service" = "dragZones" ]; then
-    wait_for_log "IPC server ready at $socket_path" 20
+    wait_for_log "IPC server ready at <path>" 20
   fi
 
   wait_for_log "service startup failed at $service after starting $started: injected startup failure at service $service" 20

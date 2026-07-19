@@ -76,6 +76,15 @@ wait_for_socket_absent() {
   fail "IPC socket still exists after shutdown: $socket_path"
 }
 
+assert_private_log_data_absent() {
+  if grep -Fq "$tmp_root" "$log_path"; then
+    fail "runtime log exposed a full test path"
+  fi
+  if grep -Eq 'bundle=[^<]|title="' "$log_path"; then
+    fail "runtime log exposed a bundle identifier or window title"
+  fi
+}
+
 if pgrep -x NarwhalApp >/dev/null 2>&1; then
   fail "NarwhalApp is already running; stop it before running this smoke"
 fi
@@ -95,13 +104,13 @@ bin_path="$(swift build --disable-sandbox --show-bin-path)"
 "$bin_path/NarwhalApp" --config "$config" --restore-state "$state_path" &
 app_pid="$!"
 
-wait_for_log "Using restore state path $state_path" 20
+wait_for_log "Using restore state path <path>" 20
 wait_for_log "Accessibility trusted" 20
 wait_for_log "Registered hotkeys:" 20
 wait_for_log "AX observer ready; notification fast path active" 20
 wait_for_log "Display observer ready" 20
 wait_for_log "Config watcher ready" 20
-wait_for_log "IPC server ready at $socket_path" 20
+wait_for_log "IPC server ready at <path>" 20
 wait_for_log "Drag zones ready with modifier shift" 20
 wait_for_log "Layout command loop ready" 20
 
@@ -129,5 +138,6 @@ wait "$app_pid" 2>/dev/null || true
 app_pid=""
 wait_for_log "NarwhalApp stopped" 5
 wait_for_socket_absent 5
+assert_private_log_data_absent
 
 echo "smoke_startup_shutdown passed"

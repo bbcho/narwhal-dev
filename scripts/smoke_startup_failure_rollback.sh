@@ -78,7 +78,7 @@ bin_path="$(swift build --disable-sandbox --show-bin-path)"
 "$bin_path/NarwhalApp" --config "$config" --restore-state "$state_path" --debug-fail-service-start dragZones &
 app_pid="$!"
 
-wait_for_log "IPC server ready at $socket_path" 20
+wait_for_log "IPC server ready at <path>" 20
 wait_for_log "service startup failed at dragZones after starting hotkeys, axObserver, displayObserver, configWatcher, ipcServer: injected startup failure at service dragZones" 20
 wait_for_log "Runtime service startup failed; recovery menu remains available" 20
 if ! kill -0 "$app_pid" 2>/dev/null; then

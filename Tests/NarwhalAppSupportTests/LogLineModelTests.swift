@@ -17,6 +17,29 @@ struct LogLineModelTests {
         ) == "2026-05-20T12:34:57Z error: AX focus read failed\n")
     }
 
+    @Test("Log privacy removes titles, bundle identifiers, and full paths")
+    func redactsPrivateSupportData() {
+        let message = redactedLogMessage(
+            #"Focused id=w9 bundle=com.secret.mail title="Inbox • person@example.com" role=AXWindow config=/Users/person/.config/narwhal/init.lua socket(/private/tmp/narwhal.sock)"#
+        )
+
+        #expect(message.contains("com.secret.mail") == false)
+        #expect(message.contains("person@example.com") == false)
+        #expect(message.contains("/Users/person") == false)
+        #expect(message.contains("/private/tmp") == false)
+        #expect(message.contains("id=w9"))
+        #expect(message.contains("role=AXWindow"))
+    }
+
+    @Test("Log privacy preserves hotkey slash notation and operational frames")
+    func preservesOperationalData() {
+        let message = redactedLogMessage(
+            "Registered control-option-/ frame=(10.0, 20.0, 300.0, 400.0)"
+        )
+
+        #expect(message == "Registered control-option-/ frame=(10.0, 20.0, 300.0, 400.0)")
+    }
+
     @Test("Rotation shifts archives oldest-first and replaces the oldest generation")
     func rotationPlanIsOldestFirst() {
         #expect(logRotationPlan(

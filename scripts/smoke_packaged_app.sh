@@ -99,8 +99,8 @@ ctl="$package_root/Narwhal.app/Contents/MacOS/narwhalctl"
 "$app" --config "$config" --restore-state "$state_path" &
 app_pid="$!"
 
-wait_for_log "Using restore state path $state_path" 20
-wait_for_log "IPC server ready at $socket_path" 20
+wait_for_log "Using restore state path <path>" 20
+wait_for_log "IPC server ready at <path>" 20
 wait_for_log "Layout command loop ready" 20
 
 missing_window="4294967294"
