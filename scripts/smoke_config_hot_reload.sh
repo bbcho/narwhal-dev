@@ -57,7 +57,8 @@ rm -f "$log_path"
 cd "$repo_root"
 export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/narwhal-clang-module-cache}"
 
-swift build --disable-sandbox --product NarwhalApp --product NarwhalCtl
+swift build --disable-sandbox --product NarwhalApp
+swift build --disable-sandbox --product NarwhalCtl
 bin_path="$(swift build --disable-sandbox --show-bin-path)"
 
 "$bin_path/NarwhalApp" --config "$config" &

@@ -5,6 +5,9 @@ configuration="release"
 package_dir=""
 app_dir="$HOME/Applications"
 replace_existing="false"
+display_version=""
+build_number=""
+architecture=""
 
 usage() {
   cat <<'USAGE'
@@ -17,6 +20,9 @@ Options:
   --configuration debug|release   Build configuration. Default: release.
   --package-dir DIR               Package output. Default: .build/narwhal-package-install.
   --app-dir DIR                   Directory containing Narwhal.app. Default: ~/Applications.
+  --version MAJOR.MINOR.PATCH     Stamp an explicit application version.
+  --build-number INTEGER          Stamp an explicit application build number.
+  --architecture arm64|x86_64     Build one explicit architecture.
   --replace                       Replace an existing app and retain Narwhal.app.previous.
   --help                          Show this help.
 USAGE
@@ -42,6 +48,21 @@ while [ "$#" -gt 0 ]; do
     --replace)
       replace_existing="true"
       shift
+      ;;
+    --version)
+      [ "$#" -ge 2 ] || { echo "--version requires MAJOR.MINOR.PATCH" >&2; exit 2; }
+      display_version="$2"
+      shift 2
+      ;;
+    --build-number)
+      [ "$#" -ge 2 ] || { echo "--build-number requires an integer" >&2; exit 2; }
+      build_number="$2"
+      shift 2
+      ;;
+    --architecture)
+      [ "$#" -ge 2 ] || { echo "--architecture requires arm64 or x86_64" >&2; exit 2; }
+      architecture="$2"
+      shift 2
       ;;
     --help|-h)
       usage
@@ -119,10 +140,15 @@ if [ "$replace_existing" != "true" ] && { [ -e "$installed_app" ] || [ -e "$lega
   exit 1
 fi
 
-"$repo_root/scripts/build_app_bundle.sh" \
-  --configuration "$configuration" \
-  --output "$package_dir" \
+build_args=(
+  --configuration "$configuration"
+  --output "$package_dir"
   --replace
+)
+[ -z "$display_version" ] || build_args+=(--version "$display_version")
+[ -z "$build_number" ] || build_args+=(--build-number "$build_number")
+[ -z "$architecture" ] || build_args+=(--architecture "$architecture")
+"$repo_root/scripts/build_app_bundle.sh" "${build_args[@]}"
 
 codesign --verify --deep --strict "$source_app"
 mkdir -p "$app_dir"

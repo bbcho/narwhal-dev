@@ -20,9 +20,15 @@ jobs:
         run: scripts/live_verify_all.sh
       - name: Verify startup and durable shutdown
         run: scripts/smoke_startup_shutdown.sh
+      - name: Verify degraded startup and recovery
+        run: scripts/smoke_startup_recovery.sh
       - name: Verify service rollback matrix
         run: scripts/smoke_startup_failure_matrix.sh
       - name: Verify config hot reload
         run: scripts/smoke_config_hot_reload.sh
       - name: Verify packaged application
         run: scripts/smoke_packaged_app.sh
+      - name: Verify install, replacement, and uninstall
+        run: scripts/smoke_install_upgrade.sh
+      - name: Soak trusted runtime
+        run: scripts/smoke_runtime_soak.sh --duration-seconds 300
