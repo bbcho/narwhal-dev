@@ -8,12 +8,12 @@ import NarwhalCore
 
 @MainActor
 enum LiveCommandWorkflowVerification {
-    static func verifyCommandWorkflows() -> (passed: Bool, message: String) {
-        verify("full command workflows") {
+    static func verifyCommandWorkflows() async -> (passed: Bool, message: String) {
+        await verify("full command workflows") {
             let context = try liveWorkflowContext()
             var coverage = LiveCommandWorkflowCoverage.empty
             try verifyZeroWindowFailures(display: context.primaryDisplay, coverage: &coverage)
-            try verifyFocusCycleRaisesTargetWithAX(display: context.primaryDisplay, coverage: &coverage)
+            try await verifyFocusCycleRaisesTargetWithAX(display: context.primaryDisplay, coverage: &coverage)
             for count in 1...6 {
                 try verifyWindowCountWorkflow(
                     count: count,
@@ -43,15 +43,15 @@ enum LiveCommandWorkflowVerification {
 
     private static func verify(
         _ name: String,
-        run: () throws -> String
-    ) -> (passed: Bool, message: String) {
+        run: () async throws -> String
+    ) async -> (passed: Bool, message: String) {
         if isSystemLocked() {
             return (false, "live command workflow verification requires an unlocked user session")
         }
         do {
             _ = NSApplication.shared
             VerifierAppDelegate.installIfNeeded()
-            return (true, try run())
+            return (true, try await run())
         } catch let error as LiveCommandWorkflowFailure {
             return (false, error.message)
         } catch {
@@ -868,7 +868,7 @@ enum LiveCommandWorkflowVerification {
     private static func verifyFocusCycleRaisesTargetWithAX(
         display: DisplayInfo,
         coverage: inout LiveCommandWorkflowCoverage
-    ) throws {
+    ) async throws {
         // See LiveFocusWorkflowVerification.activateVerifierApplication for why
         // we use .accessory: prevents AppKit auto-terminate on the deferred
         // window cleanup at end of test.
@@ -880,7 +880,7 @@ enum LiveCommandWorkflowVerification {
         defer {
             windows.forEach { $0.window.orderOut(nil) }
         }
-        RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+        await settleLiveVerifier(for: 0.12)
         try requireVisible(windows, context: "focusCycle AX raise setup")
 
         let world = workflowWorld(windows: windows, displays: [display], activeDisplay: display)
@@ -899,20 +899,20 @@ enum LiveCommandWorkflowVerification {
         windows[0].window.orderFrontRegardless()
         windows[1].window.orderFrontRegardless()
         windows[2].window.orderFrontRegardless()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+        await settleLiveVerifier(for: 0.12)
         try requireLiveWindowNotFront(
             target.window.id,
             liveWindows: windows,
             context: "focusCycle AX raise precondition"
         )
 
-        switch awaitLiveVerifierOperation({ await AXClient(processID: -1).focusWindow(target.window) }) {
+        switch await AXClient(processID: -1, settleStrategy: .servicingRunLoop).focusWindow(target.window) {
         case .success:
             break
         case .failure(let error):
             throw LiveCommandWorkflowFailure("focusCycle AX raise failed focusing \(target.window.id.description): \(error.description)")
         }
-        RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+        await settleLiveVerifier(for: 0.12)
         try requireFrontLiveWindow(
             target.window.id,
             liveWindows: windows,

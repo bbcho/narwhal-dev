@@ -2,6 +2,16 @@
 import Foundation
 
 @MainActor
+func settleLiveVerifier(for interval: TimeInterval) async {
+    serviceLiveVerifierRunLoop(for: interval)
+}
+
+@MainActor
+private func serviceLiveVerifierRunLoop(for interval: TimeInterval) {
+    RunLoop.current.run(until: Date().addingTimeInterval(max(0, interval)))
+}
+
+@MainActor
 private final class LiveVerifierAsyncResult<Value> {
     var value: Value?
     var isComplete = false

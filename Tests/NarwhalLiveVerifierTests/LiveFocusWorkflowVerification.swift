@@ -38,7 +38,7 @@ final class VerifierAppDelegate: NSObject, NSApplicationDelegate {
 
 @MainActor
 enum LiveFocusWorkflowVerification {
-    static func verifyCycleMouseAndBorderWorkflow() -> (passed: Bool, message: String) {
+    static func verifyCycleMouseAndBorderWorkflow() async -> (passed: Bool, message: String) {
         if isSystemLocked() {
             return (false, "live focus workflow verification requires an unlocked user session")
         }
@@ -60,9 +60,9 @@ enum LiveFocusWorkflowVerification {
                 )
             }
 
-            activateVerifierApplication()
+            await activateVerifierApplication()
 
-            let axClient = AXClient(processID: -1)
+            let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
             let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
             let windows = makeWindows(display: display)
             var observer: AXObserverService?
@@ -96,7 +96,7 @@ enum LiveFocusWorkflowVerification {
             let tiledTargets = try currentTiledTargets(in: world, context: "initial tiled border")
             overlayModel = overlayModel.settingTiledBorders(tiledTargets)
             overlay.render(overlayModel)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+            await settleLiveVerifier(for: 0.12)
             try requireTiledBorderVisible(
                 overlay: overlay,
                 targetID: tiledBorderID,
@@ -105,7 +105,7 @@ enum LiveFocusWorkflowVerification {
                 context: "initial tiled border"
             )
 
-            try focusVerifierWindow(windows.floatA, using: axClient, context: "focus-cycle source")
+            try await focusVerifierWindow(windows.floatA, using: axClient, context: "focus-cycle source")
             world = worldBySettingFocus(windows.floatA.id, in: world)
             let cycleTarget = try focusCycleTarget(in: world, from: windows.floatA.id)
             guard cycleTarget.window.id == windows.floatB.id else {
@@ -116,15 +116,15 @@ enum LiveFocusWorkflowVerification {
 
             windows.floatA.window.orderFrontRegardless()
             windows.floatB.window.orderBack(nil)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+            await settleLiveVerifier(for: 0.12)
             try requireLiveWindowNotFront(windows.floatB, liveWindows: windows.all, context: "focus-cycle precondition")
-            try focusViaAX(windows.floatB, using: axClient, context: "focus-cycle target")
+            try await focusViaAX(windows.floatB, using: axClient, context: "focus-cycle target")
             try requireFrontLiveWindow(windows.floatB, liveWindows: windows.all, context: "focus-cycle target")
 
             let floatBFocus = FocusBorderTarget(window: cycleTarget.window, frame: cycleTarget.frame)
             overlayModel = overlayModel.showingFocusBorder(floatBFocus)
             overlay.render(overlayModel)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+            await settleLiveVerifier(for: 0.12)
             try requireFocusBorderVisible(
                 overlay: overlay,
                 target: floatBFocus,
@@ -134,12 +134,12 @@ enum LiveFocusWorkflowVerification {
             )
 
             windows.tiled.window.orderFrontRegardless()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
-            try focusVerifierWindow(windows.tiled, using: axClient, context: "mouse workflow tiled source")
+            await settleLiveVerifier(for: 0.12)
+            try await focusVerifierWindow(windows.tiled, using: axClient, context: "mouse workflow tiled source")
             let tiledFocusTarget = try focusTarget(for: tiledBorderID, in: world)
             overlayModel = overlayModel.showingFocusBorder(tiledFocusTarget)
             overlay.render(overlayModel)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+            await settleLiveVerifier(for: 0.12)
             try requireFocusBorderVisible(
                 overlay: overlay,
                 target: tiledFocusTarget,
@@ -169,7 +169,7 @@ enum LiveFocusWorkflowVerification {
             )
             observer?.start()
 
-            try raiseClickTarget(
+            try await raiseClickTarget(
                 windows.floatA,
                 overFocused: windows.tiled,
                 focusedBorderID: tiledBorderID,
@@ -211,10 +211,10 @@ enum LiveFocusWorkflowVerification {
             // the tile), the unfocused floating window must still cover the tile border.
             // See Overlay.orderTiledBorderWindow.
             windows.floatA.window.orderFrontRegardless()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            await settleLiveVerifier(for: 0.05)
             windows.floatB.window.orderFrontRegardless()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            try focusVerifierWindow(
+            await settleLiveVerifier(for: 0.05)
+            try await focusVerifierWindow(
                 windows.floatB,
                 using: axClient,
                 context: "regression: focus floatB so floatA is unfocused over tile"
@@ -336,16 +336,16 @@ enum LiveFocusWorkflowVerification {
         _ window: LiveFocusWindow,
         using axClient: AXClient,
         context: String
-    ) throws {
-        switch awaitLiveVerifierOperation({ await axClient.focusWindow(window.metadata) }) {
+    ) async throws {
+        switch await axClient.focusWindow(window.metadata) {
         case .success:
-            RunLoop.current.run(until: Date().addingTimeInterval(0.16))
+            await settleLiveVerifier(for: 0.16)
         case .failure(let error):
             throw LiveFocusWorkflowFailure("\(context) failed focusing \(window.id.description): \(error.description)")
         }
     }
 
-    private static func activateVerifierApplication() {
+    private static func activateVerifierApplication() async {
         NSApp.setActivationPolicy(.accessory)
         // Install (once) a delegate that explicitly forbids auto-terminating on
         // last-window-closed. Without this, the test process exits cleanly
@@ -356,7 +356,7 @@ enum LiveFocusWorkflowVerification {
         NSApp.finishLaunching()
         NSApp.unhide(nil)
         NSApp.activate(ignoringOtherApps: true)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+        await settleLiveVerifier(for: 0.12)
     }
 
     private static func raiseClickTarget(
@@ -366,12 +366,12 @@ enum LiveFocusWorkflowVerification {
         overlay: Overlay,
         using axClient: AXClient,
         context: String
-    ) throws {
-        activateVerifierApplication()
-        try focusVerifierWindow(focused, using: axClient, context: "\(context) focused source")
+    ) async throws {
+        await activateVerifierApplication()
+        try await focusVerifierWindow(focused, using: axClient, context: "\(context) focused source")
 
         target.window.order(.above, relativeTo: focused.windowNumber)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.12))
+        await settleLiveVerifier(for: 0.12)
 
         let ignoredOverlayWindows = Set([
             overlay.debugFocusBorderWindowNumber(),
@@ -397,16 +397,16 @@ enum LiveFocusWorkflowVerification {
         _ window: LiveFocusWindow,
         using axClient: AXClient,
         context: String
-    ) throws {
-        activateVerifierApplication()
+    ) async throws {
+        await activateVerifierApplication()
         window.window.makeKeyAndOrderFront(nil)
         window.window.orderFrontRegardless()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.18))
+        await settleLiveVerifier(for: 0.18)
         if (try? focusedSnapshot(using: axClient, expected: window, context: context)) != nil {
             return
         }
 
-        switch awaitLiveVerifierOperation({ await axClient.focusWindow(window.metadata) }) {
+        switch await axClient.focusWindow(window.metadata) {
         case .success:
             break
         case .failure(let error):
@@ -414,7 +414,7 @@ enum LiveFocusWorkflowVerification {
                 "\(context) could not focus verifier window \(window.id.description): \(error.description)"
             )
         }
-        RunLoop.current.run(until: Date().addingTimeInterval(0.18))
+        await settleLiveVerifier(for: 0.18)
         _ = try focusedSnapshot(using: axClient, expected: window, context: context)
     }
 

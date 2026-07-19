@@ -88,8 +88,8 @@ struct LiveAppKitVerifierTests {
     @Test("Live focus + command workflows")
     func liveFocusAndCommandWorkflows() async throws {
         _ = NSApplication.shared
-        let focusResult = LiveFocusWorkflowVerification.verifyCycleMouseAndBorderWorkflow()
-        let commandResult = LiveCommandWorkflowVerification.verifyCommandWorkflows()
+        let focusResult = await LiveFocusWorkflowVerification.verifyCycleMouseAndBorderWorkflow()
+        let commandResult = await LiveCommandWorkflowVerification.verifyCommandWorkflows()
         guard focusResult.passed else {
             throw LiveVerifierFailure("focus workflow failed: \(focusResult.message)")
         }

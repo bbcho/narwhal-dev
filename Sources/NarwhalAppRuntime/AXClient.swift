@@ -113,13 +113,23 @@ enum AXFrameWriteOutcome: Sendable {
     case failed(AXClientError)
 }
 
+enum AXSettleStrategy: Sendable {
+    case suspending
+    case servicingRunLoop
+}
+
 struct AXClient {
     private let inventoryFilter: WindowInventoryFilter
+    private let settleStrategy: AXSettleStrategy
     private static let messagingTimeout: Float = 1.0
     private static let frameWriteSettleInterval: TimeInterval = 0.08
 
-    init(processID: pid_t = getpid()) {
+    init(
+        processID: pid_t = getpid(),
+        settleStrategy: AXSettleStrategy = .suspending
+    ) {
         inventoryFilter = WindowInventoryFilter(currentProcessID: processID)
+        self.settleStrategy = settleStrategy
     }
 
     private static func bounded(_ element: AXUIElement) -> AXUIElement {
@@ -281,6 +291,7 @@ struct AXClient {
         }
     }
 
+    @MainActor
     func setFocusedWindowFrame(_ frame: CGRect) async -> AXFrameWriteOutcome {
         switch focusedWindowElement() {
         case .success(let window):
@@ -290,6 +301,7 @@ struct AXClient {
         }
     }
 
+    @MainActor
     func setFrame(_ window: WindowMetadata, to frame: CGRect) async -> AXFrameWriteOutcome {
         switch await windowElement(matching: window) {
         case .success(let element):
@@ -299,6 +311,7 @@ struct AXClient {
         }
     }
 
+    @MainActor
     func frame(of window: WindowMetadata) async -> Result<CGRect, AXClientError> {
         switch await windowElement(matching: window) {
         case .success(let element):
@@ -308,6 +321,7 @@ struct AXClient {
         }
     }
 
+    @MainActor
     func closeWindow(_ window: WindowMetadata) async -> Result<Void, AXClientError> {
         switch await windowElement(matching: window) {
         case .success(let element):
@@ -335,6 +349,7 @@ struct AXClient {
         }
     }
 
+    @MainActor
     func focusWindow(_ window: WindowMetadata) async -> Result<Void, AXClientError> {
         guard await activateApplication(processID: window.pid) else {
             return .failure(.applicationActivateFailed(window.pid))
@@ -564,6 +579,7 @@ struct AXClient {
         return nil
     }
 
+    @MainActor
     private func setFrame(_ window: AXUIElement, to frame: CGRect) async -> AXFrameWriteOutcome {
         var lastFrame = CGRect.null
 
@@ -679,6 +695,7 @@ struct AXClient {
         return .success(())
     }
 
+    @MainActor
     private func windowElement(matching metadata: WindowMetadata) async -> Result<AXUIElement, AXClientError> {
         var expectedTitle = metadata.title
         var expectedFrame = metadata.frame
@@ -708,9 +725,20 @@ struct AXClient {
         return .failure(.windowElementNotFound(metadata.id))
     }
 
+    @MainActor
     private func settle(for interval: TimeInterval) async {
-        let nanoseconds = UInt64(max(0, interval) * 1_000_000_000)
-        try? await Task.sleep(nanoseconds: nanoseconds)
+        switch settleStrategy {
+        case .suspending:
+            let nanoseconds = UInt64(max(0, interval) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanoseconds)
+        case .servicingRunLoop:
+            serviceRunLoop(for: interval)
+        }
+    }
+
+    @MainActor
+    private func serviceRunLoop(for interval: TimeInterval) {
+        RunLoop.current.run(until: Date().addingTimeInterval(max(0, interval)))
     }
 
     private func isResizable(
