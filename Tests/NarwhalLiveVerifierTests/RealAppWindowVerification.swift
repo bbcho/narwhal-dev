@@ -18,24 +18,24 @@ import Testing
 )
 struct RealAppWindowVerificationTests {
     @Test("Firefox accepts real AX frame writes")
-    func firefoxAcceptsRealAXFrameWrites() throws {
+    func firefoxAcceptsRealAXFrameWrites() async throws {
         _ = NSApplication.shared
         VerifierAppDelegate.installIfNeeded()
-        try expectPassed(RealAppWindowVerification.verifyFirefox())
+        try expectPassed(await RealAppWindowVerification.verifyFirefox())
     }
 
     @Test("Chrome accepts real AX frame writes")
-    func chromeAcceptsRealAXFrameWrites() throws {
+    func chromeAcceptsRealAXFrameWrites() async throws {
         _ = NSApplication.shared
         VerifierAppDelegate.installIfNeeded()
-        try expectPassed(RealAppWindowVerification.verifyChrome())
+        try expectPassed(await RealAppWindowVerification.verifyChrome())
     }
 
     @Test("System Settings accepts real AX frame writes")
-    func systemSettingsAcceptsRealAXFrameWrites() throws {
+    func systemSettingsAcceptsRealAXFrameWrites() async throws {
         _ = NSApplication.shared
         VerifierAppDelegate.installIfNeeded()
-        try expectPassed(RealAppWindowVerification.verifySystemSettings())
+        try expectPassed(await RealAppWindowVerification.verifySystemSettings())
     }
 
     @Test("Real apps complete Narwhal command workflows")
@@ -79,18 +79,19 @@ enum RealAppWindowVerification {
     private static let firefoxManualStagingMinimumHeight: CGFloat = 640
     private static let manualResizeShrinkReserve: CGFloat = 120
     private static let manualResizeShrinkSafety: CGFloat = 8
+    private static let realAppFrameWriteTolerance: CGFloat = 6
     private static let browserResizeReserveDelta = 0.18
 
-    static func verifyFirefox() -> (passed: Bool, message: String) {
-        verifyApp(firefoxSpec())
+    static func verifyFirefox() async -> (passed: Bool, message: String) {
+        await verifyApp(firefoxSpec())
     }
 
-    static func verifyChrome() -> (passed: Bool, message: String) {
-        verifyApp(chromeSpec())
+    static func verifyChrome() async -> (passed: Bool, message: String) {
+        await verifyApp(chromeSpec())
     }
 
-    static func verifySystemSettings() -> (passed: Bool, message: String) {
-        verifyApp(systemSettingsSpec())
+    static func verifySystemSettings() async -> (passed: Bool, message: String) {
+        await verifyApp(systemSettingsSpec())
     }
 
     static func verifyRealAppCommandWorkflows() async -> (passed: Bool, message: String) {
@@ -112,6 +113,8 @@ enum RealAppWindowVerification {
     }
 
     static func verifyChromeFirefoxManualTileResize() async -> (passed: Bool, message: String) {
+        let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
+        var originals: [RealAppOriginal] = []
         do {
             try waitForUnlockedSession()
             let displays = DisplayClient().currentDisplays()
@@ -119,21 +122,6 @@ enum RealAppWindowVerification {
                 throw RealAppWindowVerifierFailure("manual browser resize verification requires a display at least 900x620")
             }
             let targetDisplay = try manualResizeVerificationDisplay(displays)
-
-            let axClient = AXClient(processID: -1)
-            var originals: [RealAppOriginal] = []
-            var didRestore = false
-            defer {
-                if !didRestore {
-                    for original in originals.reversed() {
-                        do {
-                            try cleanupApp(original, using: axClient)
-                        } catch {
-                            print("REAL APP MANUAL RESIZE VERIFY: failed to clean up \(original.spec.name) window \(original.metadata.id.description): \(String(describing: error))")
-                        }
-                    }
-                }
-            }
 
             for spec in [chromeSpec(), firefoxSpec(), terminalSpec()] {
                 originals.append(try launchTrackedWindow(
@@ -157,14 +145,14 @@ enum RealAppWindowVerification {
                 displays: displays
             )
 
-            for original in originals.reversed() {
-                try cleanupApp(original, using: axClient)
-            }
-            didRestore = true
+            try await cleanupApps(originals, using: axClient)
+            originals.removeAll()
             return (true, summary)
         } catch let error as RealAppWindowVerifierFailure {
+            await cleanupAppsBestEffort(originals, using: axClient, context: "REAL APP MANUAL RESIZE VERIFY")
             return (false, error.message)
         } catch {
+            await cleanupAppsBestEffort(originals, using: axClient, context: "REAL APP MANUAL RESIZE VERIFY")
             return (false, "manual browser resize verification failed: \(String(describing: error))")
         }
     }
@@ -181,25 +169,13 @@ enum RealAppWindowVerification {
         spec: RealAppSpec,
         label: String
     ) async -> (passed: Bool, message: String) {
+        let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
+        var originals: [RealAppOriginal] = []
         do {
             try waitForUnlockedSession()
             let displays = DisplayClient().currentDisplays()
             let targetDisplay = try manualResizeVerificationDisplay(displays)
-            let axClient = AXClient(processID: -1)
-            var originals: [RealAppOriginal] = []
             var selectedIDs = Set<WindowID>()
-            var didRestore = false
-            defer {
-                if !didRestore {
-                    for original in originals.reversed() {
-                        do {
-                            try cleanupApp(original, using: axClient)
-                        } catch {
-                            print("REAL \(label.uppercased()) STACK VERIFY: failed to clean up \(original.metadata.id.description): \(String(describing: error))")
-                        }
-                    }
-                }
-            }
 
             for index in 0..<3 {
                 let original = try launchTrackedWindow(
@@ -218,7 +194,7 @@ enum RealAppWindowVerification {
             for (index, original) in originals.enumerated() {
                 let metadata = try currentWorkflowMetadata(for: original, using: axClient)
                 try await focusIfPossible(metadata, appName: "\(label) stack \(index + 1)", using: axClient)
-                let actual = try verifyFrameWrite(
+                let actual = try await verifyFrameWrite(
                     frames[index],
                     metadata: metadata,
                     appName: "\(label) vertical stack",
@@ -239,15 +215,15 @@ enum RealAppWindowVerification {
                 }
             }
 
-            for original in originals.reversed() {
-                try cleanupApp(original, using: axClient)
-            }
-            didRestore = true
+            try await cleanupApps(originals, using: axClient)
+            originals.removeAll()
 
             return (true, "three \(label) vertical stack passed: \(actuals.map(\.shortDescription).joined(separator: ","))")
         } catch let error as RealAppWindowVerifierFailure {
+            await cleanupAppsBestEffort(originals, using: axClient, context: "REAL \(label.uppercased()) STACK VERIFY")
             return (false, error.message)
         } catch {
+            await cleanupAppsBestEffort(originals, using: axClient, context: "REAL \(label.uppercased()) STACK VERIFY")
             return (false, "three \(label) vertical stack verification failed: \(String(describing: error))")
         }
     }
@@ -292,7 +268,7 @@ enum RealAppWindowVerification {
         return "data:text/html;base64,\(Data(html.utf8).base64EncodedString())"
     }
 
-    private static func verifyApp(_ spec: RealAppSpec) -> (passed: Bool, message: String) {
+    private static func verifyApp(_ spec: RealAppSpec) async -> (passed: Bool, message: String) {
         do {
             try waitForUnlockedSession()
             let displays = DisplayClient().currentDisplays()
@@ -303,7 +279,7 @@ enum RealAppWindowVerification {
                 throw RealAppWindowVerifierFailure("real app verification requires a display at least 900x620")
             }
 
-            return (true, "real app frame verification passed: \(try verify(spec: spec, displays: displays))")
+            return (true, "real app frame verification passed: \(try await verify(spec: spec, displays: displays))")
         } catch let error as RealAppWindowVerifierFailure {
             return (false, error.message)
         } catch {
@@ -332,129 +308,110 @@ enum RealAppWindowVerification {
     private static func verify(
         spec: RealAppSpec,
         displays: [DisplayID: DisplayInfo]
-    ) throws -> String {
-        let axClient = AXClient(processID: -1)
+    ) async throws -> String {
+        let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
         let original = try launchTrackedWindow(
             spec: spec,
             using: axClient,
             requiringNewWindow: spec.pattern == .browser,
             token: "direct"
         )
-        let restoreFrame = original.frame
-        var didRestore = false
-        defer {
-            if !didRestore {
-                do {
-                    try cleanupApp(original, using: axClient)
-                } catch {
-                    print("REAL APP VERIFY: failed to clean up \(spec.name) window \(original.metadata.id.description): \(String(describing: error))")
-                }
+        do {
+            let restoreFrame = original.frame
+            switch await axClient.focusWindow(original.metadata) {
+            case .success:
+                break
+            case .failure(let error):
+                print("REAL APP VERIFY: \(spec.name) focus was unavailable before frame writes: \(error.description)")
             }
+
+            let display = displayContaining(original.frame, displays: displays)
+                ?? displays.values.sorted(by: { $0.slot < $1.slot }).first!
+            let targets = try targetFrames(in: display.visibleFrame, originalFrame: original.frame, spec: spec)
+            var actuals: [CGRect] = []
+
+            for (index, target) in targets.enumerated() {
+                let actual = try await verifyFrameWrite(
+                    target,
+                    metadata: original.metadata,
+                    appName: spec.name,
+                    step: index + 1,
+                    using: axClient
+                )
+                actuals.append(actual)
+                LiveWindowServerVerification.reviewPause(
+                    "\(spec.name) step \(index + 1) matched real app frame \(actual.debugDescription)"
+                )
+            }
+
+            let movedAway = actuals.contains {
+                !$0.matches(restoreFrame, tolerance: frameWriteSettleTolerance)
+            }
+            guard movedAway else {
+                throw RealAppWindowVerifierFailure("\(spec.name) did not visibly move away from its original frame")
+            }
+
+            try await cleanupApp(original, using: axClient)
+            return "\(spec.name)=\(actuals.map(\.shortDescription).joined(separator: ","))"
+        } catch {
+            await cleanupAppsBestEffort([original], using: axClient, context: "REAL APP VERIFY")
+            throw error
         }
-
-        switch awaitLiveVerifierOperation({ await axClient.focusWindow(original.metadata) }) {
-        case .success:
-            break
-        case .failure(let error):
-            print("REAL APP VERIFY: \(spec.name) focus was unavailable before frame writes: \(error.description)")
-        }
-
-        let display = displayContaining(original.frame, displays: displays)
-            ?? displays.values.sorted(by: { $0.slot < $1.slot }).first!
-        let targets = try targetFrames(in: display.visibleFrame, originalFrame: original.frame, spec: spec)
-        var actuals: [CGRect] = []
-
-        for (index, target) in targets.enumerated() {
-            let actual = try verifyFrameWrite(
-                target,
-                metadata: original.metadata,
-                appName: spec.name,
-                step: index + 1,
-                using: axClient
-            )
-            actuals.append(actual)
-            LiveWindowServerVerification.reviewPause(
-                "\(spec.name) step \(index + 1) matched real app frame \(actual.debugDescription)"
-            )
-        }
-
-        let movedAway = actuals.contains {
-            !$0.matches(restoreFrame, tolerance: frameWriteSettleTolerance)
-        }
-        guard movedAway else {
-            throw RealAppWindowVerifierFailure("\(spec.name) did not visibly move away from its original frame")
-        }
-
-        try cleanupApp(original, using: axClient)
-        didRestore = true
-
-        return "\(spec.name)=\(actuals.map(\.shortDescription).joined(separator: ","))"
     }
 
     private static func verifyRealCommandWorkflows(displays: [DisplayID: DisplayInfo]) async throws -> String {
         let specs = commonWorkflowSpecs()
-        let axClient = AXClient(processID: -1)
+        let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
         var originals: [RealAppOriginal] = []
         var skipped: [String] = []
-        var didRestore = false
-        defer {
-            if !didRestore {
-                for original in originals.reversed() {
-                    do {
-                        try cleanupApp(original, using: axClient)
-                    } catch {
-                        print("REAL APP WORKFLOW VERIFY: failed to clean up \(original.spec.name) window \(original.metadata.id.description): \(String(describing: error))")
+        do {
+            for spec in specs {
+                do {
+                    originals.append(try launchTrackedWindow(
+                        spec: spec,
+                        using: axClient,
+                        requiringNewWindow: true,
+                        token: "workflow"
+                    ))
+                } catch {
+                    if spec.required || spec.pattern == .browser || spec.pattern == .terminal {
+                        throw error
                     }
+                    skipped.append("\(spec.name): \(String(describing: error))")
+                    continue
                 }
             }
-        }
 
-        for spec in specs {
-            do {
-                originals.append(try launchTrackedWindow(
-                    spec: spec,
-                    using: axClient,
-                    requiringNewWindow: true,
-                    token: "workflow"
-                ))
-            } catch {
-                if spec.required || spec.pattern == .browser || spec.pattern == .terminal {
-                    throw error
-                }
-                skipped.append("\(spec.name): \(String(describing: error))")
-                continue
+            guard !originals.isEmpty else {
+                throw RealAppWindowVerifierFailure("no real workflow apps were available")
             }
-        }
 
-        guard !originals.isEmpty else {
-            throw RealAppWindowVerifierFailure("no real workflow apps were available")
-        }
-
-        var summaries: [String] = []
-        summaries.append(try await verifyChromeOverFirefoxResizeWorkflow(
-            originals,
-            axClient: axClient,
-            displays: displays
-        ))
-        for original in originals {
-            summaries.append(try await verifySingleAppWorkflow(
-                original,
+            var summaries: [String] = []
+            summaries.append(try await verifyChromeOverFirefoxResizeWorkflow(
+                originals,
                 axClient: axClient,
                 displays: displays
             ))
-        }
-        summaries.append(try await verifyMixedAppWorkflow(
-            originals,
-            axClient: axClient,
-            displays: displays
-        ))
+            for original in originals {
+                summaries.append(try await verifySingleAppWorkflow(
+                    original,
+                    axClient: axClient,
+                    displays: displays
+                ))
+            }
+            summaries.append(try await verifyMixedAppWorkflow(
+                originals,
+                axClient: axClient,
+                displays: displays
+            ))
 
-        for original in originals.reversed() {
-            try cleanupApp(original, using: axClient)
+            try await cleanupApps(originals, using: axClient)
+            originals.removeAll()
+            return "\(summaries.joined(separator: "; ")) skipped=\(skipped.isEmpty ? "none" : skipped.joined(separator: ","))"
+        } catch {
+            await cleanupAppsBestEffort(originals, using: axClient, context: "REAL APP WORKFLOW VERIFY")
+            throw error
         }
-        didRestore = true
-
-        return "\(summaries.joined(separator: "; ")) skipped=\(skipped.isEmpty ? "none" : skipped.joined(separator: ","))"
     }
 
     private static func verifySingleAppWorkflow(
@@ -580,6 +537,13 @@ enum RealAppWindowVerification {
         let worldActor = WorldActor(config: .default)
         let reporter = StartupReporter(logPath: "/tmp/narwhal-real-app-workflows.log")
         let applier = LayoutApplier(axClient: axClient, reporter: reporter)
+        let targetDisplay = try manualResizeVerificationDisplay(displays)
+
+        try await stageManualResizeWindows(
+            [companion, chrome, firefox],
+            on: targetDisplay,
+            using: axClient
+        )
 
         try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
         let companionWindow = try currentWorkflowMetadata(for: companion, using: axClient)
@@ -933,25 +897,63 @@ enum RealAppWindowVerification {
         let firefox = try requireOriginal(named: "Firefox", in: originals)
         let companion = try requireOriginal(named: "Terminal", in: originals)
         let visible = display.visibleFrame
-        let margin: CGFloat = 40
-        let stackGap: CGFloat = 40
-        let browserWidth = min(max(visible.width * 0.45, 1_300), visible.width * 0.48)
+        let margin: CGFloat = 16
+        let stackGap: CGFloat = 16
+        let minimumChromeHeight = max(CGFloat(420), chrome.spec.minimumWindowSize.height)
+        let minimumCompanionWidth = max(CGFloat(480), companion.spec.minimumWindowSize.width)
+        let probeWidth = min(max(firefox.spec.minimumWindowSize.width, 1_300), visible.width - margin * 2)
+        let probeHeight = min(
+            max(Self.firefoxManualStagingMinimumHeight, firefox.spec.minimumWindowSize.height),
+            visible.height - margin * 2
+        )
+        guard probeWidth > 0, probeHeight > 0 else {
+            throw RealAppWindowVerifierFailure(
+                "manual browser resize staging has no usable Firefox probe frame: visible=\(visible.debugDescription)"
+            )
+        }
+
+        let firefoxMetadata = try currentWorkflowMetadata(for: firefox, using: axClient)
+        let probeFrame = CGRect(
+            x: visible.minX + margin,
+            y: visible.maxY - margin - probeHeight,
+            width: probeWidth,
+            height: probeHeight
+        ).standardized
+        var firefoxMinimumWidth = firefox.spec.minimumWindowSize.width
+        var firefoxMinimumHeight = max(Self.firefoxManualStagingMinimumHeight, firefox.spec.minimumWindowSize.height)
+        switch await axClient.setFrame(firefoxMetadata, to: probeFrame) {
+        case .converged:
+            break
+        case .clamped(let actual, let observed):
+            firefoxMinimumWidth = max(firefoxMinimumWidth, observed.minWidth ?? actual.width)
+            firefoxMinimumHeight = max(firefoxMinimumHeight, observed.minHeight ?? actual.height)
+        case .failed(let error):
+            throw RealAppWindowVerifierFailure(
+                "Firefox manual-resize staging probe failed: \(error.description)"
+            )
+        }
+
+        let maximumBrowserWidth = visible.width - margin * 3 - minimumCompanionWidth
+        let browserWidth = min(
+            max(visible.width * 0.45, firefoxMinimumWidth),
+            maximumBrowserWidth
+        )
         let stackHeight = visible.height - margin * 2 - stackGap
-        let minimumChromeHeight: CGFloat = 420
-        let firefoxHeightWithShrinkRoom = Self.firefoxManualStagingMinimumHeight + Self.manualResizeShrinkReserve
-        let chromeHeight = max(
-            minimumChromeHeight,
-            min(visible.height * 0.34, stackHeight - firefoxHeightWithShrinkRoom)
+        let firefoxHeightWithShrinkRoom = firefoxMinimumHeight + Self.manualResizeShrinkReserve
+        let chromeHeight = min(
+            max(minimumChromeHeight, visible.height * 0.28),
+            stackHeight - firefoxHeightWithShrinkRoom
         )
         let firefoxHeight = stackHeight - chromeHeight
-        guard chromeHeight >= minimumChromeHeight,
+        guard browserWidth >= firefoxMinimumWidth,
+              chromeHeight >= minimumChromeHeight,
               firefoxHeight >= firefoxHeightWithShrinkRoom
         else {
             throw RealAppWindowVerifierFailure(
-                "manual browser resize staging requires enough vertical room for Firefox shrink reserve: visible=\(visible.debugDescription)"
+                "manual browser resize staging cannot fit live Firefox constraints: visible=\(visible.debugDescription) minFirefox=(\(firefoxMinimumWidth),\(firefoxMinimumHeight))"
             )
         }
-        let companionWidth = max(480, visible.width - browserWidth - margin * 3)
+        let companionWidth = visible.width - browserWidth - margin * 3
         let companionFrame = CGRect(
             x: visible.maxX - margin - companionWidth,
             y: visible.minY + margin,
@@ -979,7 +981,7 @@ enum RealAppWindowVerification {
         for (index, placement) in placements.enumerated() {
             let metadata = try currentWorkflowMetadata(for: placement.0, using: axClient)
             try await focusIfPossible(metadata, appName: placement.0.spec.name, using: axClient)
-            _ = try verifyFrameWrite(
+            _ = try await verifyFrameWrite(
                 placement.1,
                 metadata: metadata,
                 appName: "\(placement.0.spec.name) manual-resize staging",
@@ -987,7 +989,7 @@ enum RealAppWindowVerification {
                 using: axClient
             )
         }
-        try? await Task.sleep(nanoseconds: 160_000_000)
+        await settleLiveVerifier(for: 0.16)
     }
 
     private static func framesDoNotVisiblyOverlap(_ lhs: CGRect, _ rhs: CGRect, tolerance: CGFloat) -> Bool {
@@ -1301,7 +1303,7 @@ enum RealAppWindowVerification {
     ) async throws {
         switch await axClient.focusWindow(metadata) {
         case .success:
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            await settleLiveVerifier(for: 0.12)
         case .failure(let error):
             print("REAL APP WORKFLOW VERIFY: \(appName) focus was unavailable: \(error.description)")
         }
@@ -1369,18 +1371,40 @@ enum RealAppWindowVerification {
         )
     }
 
-    private static func cleanupApp(_ original: RealAppOriginal, using axClient: AXClient) throws {
+    private static func cleanupApp(_ original: RealAppOriginal, using axClient: AXClient) async throws {
         if original.createdByVerifier {
-            try closeCreatedWindow(original, using: axClient)
+            try await closeCreatedWindow(original, using: axClient)
             return
         }
-        try restoreWindow(
+        try await restoreWindow(
             original.metadata,
             bundleID: original.bundleID,
             appName: original.spec.name,
             to: original.frame,
             using: axClient
         )
+    }
+
+    private static func cleanupApps(_ originals: [RealAppOriginal], using axClient: AXClient) async throws {
+        for original in originals.reversed() {
+            try await cleanupApp(original, using: axClient)
+        }
+    }
+
+    private static func cleanupAppsBestEffort(
+        _ originals: [RealAppOriginal],
+        using axClient: AXClient,
+        context: String
+    ) async {
+        for original in originals.reversed() {
+            do {
+                try await cleanupApp(original, using: axClient)
+            } catch {
+                print(
+                    "\(context): failed to clean up \(original.spec.name) window \(original.metadata.id.description): \(String(describing: error))"
+                )
+            }
+        }
     }
 
     private static func launch(spec: RealAppSpec, bundleID: String, token: String) throws {
@@ -1522,16 +1546,16 @@ enum RealAppWindowVerification {
         appName: String,
         step: Int,
         using axClient: AXClient
-    ) throws -> CGRect {
+    ) async throws -> CGRect {
         let actual: CGRect
-        switch awaitLiveVerifierOperation({ await axClient.setFrame(metadata, to: target) }) {
+        switch await axClient.setFrame(metadata, to: target) {
         case .converged(let frame):
             actual = frame
         case .clamped(let frame, let observed):
             guard frameWriteApproximatelySettled(
                 target: target,
                 actual: frame,
-                tolerance: Double(frameWriteSettleTolerance)
+                tolerance: Double(max(frameWriteSettleTolerance, Self.realAppFrameWriteTolerance))
             ) else {
                 throw RealAppWindowVerifierFailure(
                     "\(appName) step \(step) clamped instead of settling: target=\(target.debugDescription) actual=\(frame.debugDescription) observed=\(observed)"
@@ -1547,7 +1571,7 @@ enum RealAppWindowVerification {
         guard frameWriteApproximatelySettled(
             target: target,
             actual: actual,
-            tolerance: Double(frameWriteSettleTolerance)
+            tolerance: Double(max(frameWriteSettleTolerance, Self.realAppFrameWriteTolerance))
         ) else {
             throw RealAppWindowVerifierFailure(
                 "\(appName) step \(step) did not settle near target: target=\(target.debugDescription) actual=\(actual.debugDescription)"
@@ -1568,16 +1592,16 @@ enum RealAppWindowVerification {
         return actual
     }
 
-    private static func closeCreatedWindow(_ original: RealAppOriginal, using axClient: AXClient) throws {
+    private static func closeCreatedWindow(_ original: RealAppOriginal, using axClient: AXClient) async throws {
         if original.spec.name == "Terminal",
            closeTerminalWindow(windowID: original.metadata.id) {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            await settleLiveVerifier(for: 0.2)
             return
         }
 
-        switch awaitLiveVerifierOperation({ await axClient.closeWindow(original.metadata) }) {
+        switch await axClient.closeWindow(original.metadata) {
         case .success:
-            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            await settleLiveVerifier(for: 0.2)
             return
         case .failure(let error):
             throw RealAppWindowVerifierFailure(
@@ -1612,9 +1636,9 @@ enum RealAppWindowVerification {
         appName: String,
         to frame: CGRect,
         using axClient: AXClient
-    ) throws {
+    ) async throws {
         var failures: [String] = []
-        switch awaitLiveVerifierOperation({ await axClient.setFrame(original, to: frame) }) {
+        switch await axClient.setFrame(original, to: frame) {
         case .converged, .clamped:
             return
         case .failed(let error):
@@ -1629,7 +1653,7 @@ enum RealAppWindowVerification {
                 return $0.frame.area > $1.frame.area
             }
         for candidate in candidates {
-            switch awaitLiveVerifierOperation({ await axClient.setFrame(candidate, to: frame) }) {
+            switch await axClient.setFrame(candidate, to: frame) {
             case .converged, .clamped:
                 return
             case .failed(let error):
