@@ -9,6 +9,7 @@ struct MenubarActions {
     let openAccessibilitySettings: () -> Void
     let revealLogs: () -> Void
     let toggleLaunchAtLogin: () -> Void
+    let checkForUpdates: () -> Void
     let copyDiagnostics: () -> Void
     let resetLayout: () -> Void
     let quit: () -> Void
@@ -20,6 +21,7 @@ struct MenubarActions {
         openAccessibilitySettings: {},
         revealLogs: {},
         toggleLaunchAtLogin: {},
+        checkForUpdates: {},
         copyDiagnostics: {},
         resetLayout: {},
         quit: {}
@@ -67,6 +69,12 @@ final class Menubar {
         keyEquivalent: ""
     )
     private var loginItemStatus: LoginItemStatus = .unavailable
+    private let updateMenuItem = NSMenuItem(
+        title: "Check for Updates…",
+        action: #selector(checkForUpdates),
+        keyEquivalent: ""
+    )
+    private var updateStatus: UpdateMenuStatus = .idle
     private var actions: MenubarActions?
     private let lightIcon = NarwhalIconResources.statusItemIcon(variant: .light)
     private let darkIcon = NarwhalIconResources.statusItemIcon(variant: .dark)
@@ -104,6 +112,8 @@ final class Menubar {
         menu.addItem(menuItem(title: "Reveal Logs", action: #selector(revealLogs)))
         loginItemMenuItem.target = self
         menu.addItem(loginItemMenuItem)
+        updateMenuItem.target = self
+        menu.addItem(updateMenuItem)
         menu.addItem(menuItem(title: "Copy Diagnostics", action: #selector(copyRuntimeDiagnostics)))
         menu.addItem(menuItem(title: "Reset Layout", action: #selector(resetLayout)))
         menu.addItem(.separator())
@@ -134,6 +144,11 @@ final class Menubar {
         renderStatus()
     }
 
+    func updateUpdateStatus(_ status: UpdateMenuStatus) {
+        updateStatus = status
+        renderStatus()
+    }
+
     private func renderStatus() {
         switch configStatus {
         case .loaded:
@@ -146,6 +161,8 @@ final class Menubar {
         loginItemMenuItem.title = loginItemStatus.menuTitle
         loginItemMenuItem.state = loginItemStatus.isEnabled ? .on : .off
         loginItemMenuItem.isEnabled = loginItemStatus.canPerformAction
+        updateMenuItem.title = updateStatus.title
+        updateMenuItem.isEnabled = updateStatus.isEnabled
         accessibilityMenuItem.title = "AX: \(accessibilityDescription)"
         scopeMenuItem.title = scopeDescription
         focusMenuItem.title = focusDescription
@@ -287,6 +304,11 @@ final class Menubar {
     @objc
     private func toggleLaunchAtLogin() {
         actions?.toggleLaunchAtLogin()
+    }
+
+    @objc
+    private func checkForUpdates() {
+        actions?.checkForUpdates()
     }
 
     @objc

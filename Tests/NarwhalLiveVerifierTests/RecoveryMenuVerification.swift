@@ -15,6 +15,7 @@ enum RecoveryMenuVerification {
             openAccessibilitySettings: {},
             revealLogs: {},
             toggleLaunchAtLogin: { retryCount += 10 },
+            checkForUpdates: { retryCount += 100 },
             copyDiagnostics: {},
             resetLayout: {},
             quit: {}
@@ -24,6 +25,12 @@ enum RecoveryMenuVerification {
         menubar.updateConfigStatus(.failed("invalid Lua near line 4"))
         menubar.updateRuntimeReadiness(.degraded(.serviceStartupFailed(service: "hotkeys")))
         menubar.updateLoginItemStatus(.enabled)
+        guard let updateURL = URL(string: "https://github.com/bbcho/narwhal-dev/releases/tag/v2.0.0"),
+              let updateVersion = try? SemanticVersion("2.0.0")
+        else {
+            return (false, "update verifier fixture was invalid")
+        }
+        menubar.updateUpdateStatus(.available(version: updateVersion, pageURL: updateURL))
 
         let expectedItems = [
             "Config: failed - invalid Lua near line 4",
@@ -34,6 +41,7 @@ enum RecoveryMenuVerification {
             "Accessibility Settings",
             "Reveal Logs",
             "Launch at Login",
+            "Get Narwhal 2.0.0…",
             "Copy Diagnostics",
             "Reset Layout",
             "Quit Narwhal"
@@ -53,6 +61,13 @@ enum RecoveryMenuVerification {
               retryCount == 11
         else {
             return (false, "Launch at Login was not rendered as a checked actionable menu item")
+        }
+        guard menubar.debugPerformMenuItem(titled: "Get Narwhal 2.0.0…"), retryCount == 111 else {
+            return (false, "available update menu item did not invoke its action")
+        }
+        menubar.updateUpdateStatus(.checking)
+        guard menubar.debugMenuItem(titled: "Checking for Updates…")?.isEnabled == false else {
+            return (false, "in-progress update menu item remained enabled")
         }
 
         menubar.updateRuntimeReadiness(.operational)

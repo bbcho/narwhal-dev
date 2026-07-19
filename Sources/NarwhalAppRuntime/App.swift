@@ -78,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayModel = OverlayModel.empty
     private let menubar = Menubar()
     private let loginItemController = LoginItemController()
+    private let updateChecker = UpdateChecker()
     private let startupArguments = StartupArguments.current
     private lazy var worldActor = WorldActor(runtimeMetrics: runtimeMetrics)
     private let reporter = StartupReporter()
@@ -115,6 +116,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationFlushState: TerminationFlushState = .idle
     private var terminationFlushTask: Task<Void, Never>?
     private var terminationTimeoutTask: Task<Void, Never>?
+    private var updateCheckTask: Task<Void, Never>?
+    private var updateStatus: UpdateMenuStatus = .idle
     // AX raise failures survive environment refreshes, so exclusions are session-scoped.
     private var axRaiseBlocklist: Set<WindowID> = []
 
@@ -228,6 +231,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         terminationFlushTask = nil
         terminationTimeoutTask?.cancel()
         terminationTimeoutTask = nil
+        updateCheckTask?.cancel()
+        updateCheckTask = nil
         accessibilityPollTimer?.invalidate()
         accessibilityPollTimer = nil
         environmentRefreshCoalescingTimer?.invalidate()
@@ -692,6 +697,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             toggleLaunchAtLogin: { [weak self] in
                 self?.toggleLaunchAtLoginFromMenu()
             },
+            checkForUpdates: { [weak self] in
+                self?.handleUpdateMenuAction()
+            },
             copyDiagnostics: { [weak self] in
                 Task { @MainActor in
                     await self?.copyDiagnosticsToPasteboard()
@@ -715,6 +723,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menubar.updateRuntimeReadiness(runtimeReadiness)
         menubar.updateLoginItemStatus(loginItemController.status)
+        menubar.updateUpdateStatus(updateStatus)
         menubar.updateOperatingStatus(operatingStatus)
     }
 
@@ -812,6 +821,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menubar.updateLoginItemStatus(.failed(message))
             reporter.error("Launch at Login update failed: \(message)")
             showOperatorFeedback("Launch at Login update failed", tone: .error)
+        }
+    }
+
+    private func handleUpdateMenuAction() {
+        if case .available(_, let pageURL) = updateStatus {
+            guard NSWorkspace.shared.open(pageURL) else {
+                reporter.error("Available update page could not be opened")
+                showOperatorFeedback("Could not open update page", tone: .error)
+                return
+            }
+            reporter.info("Opened available update page")
+            return
+        }
+        checkForUpdates()
+    }
+
+    private func checkForUpdates() {
+        guard updateCheckTask == nil else { return }
+
+        let currentVersion: SemanticVersion
+        do {
+            let value = Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+            ) as? String ?? ""
+            currentVersion = try SemanticVersion(value)
+        } catch {
+            updateStatus = .failed
+            menubar.updateUpdateStatus(updateStatus)
+            reporter.error("Update check failed: current app version is invalid")
+            showOperatorFeedback("Update check failed", tone: .error)
+            return
+        }
+
+        updateStatus = .checking
+        menubar.updateUpdateStatus(updateStatus)
+        reporter.info("Checking for updates")
+        updateCheckTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let release = try await updateChecker.latestRelease()
+                guard !Task.isCancelled else { return }
+                switch updateAvailability(
+                    current: currentVersion,
+                    latest: release.version,
+                    pageURL: release.pageURL
+                ) {
+                case .current:
+                    updateStatus = .current
+                    reporter.info("Narwhal is up to date")
+                    showOperatorFeedback("Narwhal is up to date", tone: .success)
+                case .newer(let version, let pageURL):
+                    updateStatus = .available(version: version, pageURL: pageURL)
+                    reporter.info("Narwhal update \(version.description) is available")
+                    showOperatorFeedback("Narwhal \(version.description) is available", tone: .success)
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                updateStatus = .failed
+                reporter.error("Update check failed: \(String(describing: error))")
+                showOperatorFeedback("Update check failed", tone: .error)
+            }
+            menubar.updateUpdateStatus(updateStatus)
+            updateCheckTask = nil
         }
     }
 
