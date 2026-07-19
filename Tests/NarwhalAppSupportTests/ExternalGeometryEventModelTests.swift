@@ -21,7 +21,11 @@ struct ExternalGeometryEventModelTests {
             tolerance: 4
         )
 
-        #expect(selection == ExternalGeometryEventSelection(event: event, usedLiveFrame: false))
+        #expect(selection == ExternalGeometryEventSelection(
+            event: event,
+            usedLiveFrame: false,
+            liveFrame: frame
+        ))
     }
 
     @Test("Incomplete live snapshot keeps the original event")
@@ -60,7 +64,8 @@ struct ExternalGeometryEventModelTests {
 
         #expect(selection == ExternalGeometryEventSelection(
             event: .windowMoved(window, live),
-            usedLiveFrame: true
+            usedLiveFrame: true,
+            liveFrame: live
         ))
     }
 
@@ -81,7 +86,8 @@ struct ExternalGeometryEventModelTests {
 
         #expect(selection == ExternalGeometryEventSelection(
             event: .windowMoved(window, live),
-            usedLiveFrame: true
+            usedLiveFrame: true,
+            liveFrame: live
         ))
     }
 
@@ -135,6 +141,30 @@ struct ExternalGeometryEventModelTests {
         let next = try apply(selection.event.toCommand(), to: world).get()
 
         #expect(next.windows[window]?.frame == liveFrame)
+    }
+
+    @Test("Manual geometry preserves the settled live source frame")
+    func manualGeometryPreservesSettledLiveSourceFrame() {
+        let window = WindowID(raw: 55)
+        let liveFrame = CGRect(x: 112, y: 151, width: 510, height: 390)
+        let selection = ExternalGeometryEventSelection(
+            event: .windowResized(window, liveFrame.size),
+            usedLiveFrame: false,
+            liveFrame: liveFrame
+        )
+        let plan = CommandPlanResult(
+            focusedWindowID: nil,
+            desiredLayout: DesiredLayout(
+                generation: LayoutGeneration(raw: 1),
+                layout: Layout(tiled: [window: liveFrame], floatingZOrder: [], hidden: []),
+                delta: LayoutDelta(moves: [window: liveFrame], raises: [], hides: [], shows: [])
+            ),
+            windows: [window: metadata(window, frame: liveFrame)],
+            plannedWorld: .empty,
+            undoWorld: nil
+        )
+
+        #expect(preservedExternalGeometryFrames(selection: selection, plan: plan) == [window: liveFrame])
     }
 
     @Test("Pending geometry queue drains one latest event per window")

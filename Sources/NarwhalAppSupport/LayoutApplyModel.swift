@@ -132,18 +132,23 @@ public struct LayoutApplyProgress: Equatable, Sendable {
     }
 }
 
-public func layoutFrameWriteIntents(for plan: CommandPlanResult) -> [LayoutFrameWriteIntent] {
-    layoutFrameWriteOrder(for: plan).compactMap { windowID in
-        guard let frame = plan.desiredLayout.layout.tiled[windowID] else { return nil }
-        guard let metadata = plan.windows[windowID] else {
-            return .missingMetadata(windowID: windowID, targetFrame: frame)
+public func layoutFrameWriteIntents(
+    for plan: CommandPlanResult,
+    excluding excludedWindowIDs: Set<WindowID> = []
+) -> [LayoutFrameWriteIntent] {
+    layoutFrameWriteOrder(for: plan)
+        .filter { !excludedWindowIDs.contains($0) }
+        .compactMap { windowID in
+            guard let frame = plan.desiredLayout.delta.moves[windowID] else { return nil }
+            guard let metadata = plan.windows[windowID] else {
+                return .missingMetadata(windowID: windowID, targetFrame: frame)
+            }
+            return .write(windowID: windowID, metadata: metadata, targetFrame: frame)
         }
-        return .write(windowID: windowID, metadata: metadata, targetFrame: frame)
-    }
 }
 
 private func layoutFrameWriteOrder(for plan: CommandPlanResult) -> [WindowID] {
-    let ordered = plan.desiredLayout.layout.tiled.keys.sorted { $0.raw < $1.raw }
+    let ordered = plan.desiredLayout.delta.moves.keys.sorted { $0.raw < $1.raw }
     guard let focusedWindowID = plan.focusedWindowID,
           ordered.contains(focusedWindowID)
     else {

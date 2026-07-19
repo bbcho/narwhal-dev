@@ -210,6 +210,45 @@ struct LayoutApplyModelTests {
         ])
     }
 
+    @Test("Frame writes include only changed windows")
+    func frameWritesIncludeOnlyChangedWindows() {
+        let changed = WindowID(raw: 110)
+        let unchanged = WindowID(raw: 111)
+        let changedFrame = CGRect(x: 0, y: 0, width: 420, height: 600)
+        let unchangedFrame = CGRect(x: 420, y: 0, width: 380, height: 600)
+        let changedMetadata = windowMetadata(id: changed, frame: changedFrame)
+        let unchangedMetadata = windowMetadata(id: unchanged, frame: unchangedFrame)
+        let plan = commandPlanFixture(
+            focused: changed,
+            tiled: [changed: changedFrame, unchanged: unchangedFrame],
+            moves: [changed: changedFrame],
+            windows: [changed: changedMetadata, unchanged: unchangedMetadata]
+        )
+
+        #expect(layoutFrameWriteIntents(for: plan) == [
+            .write(windowID: changed, metadata: changedMetadata, targetFrame: changedFrame)
+        ])
+    }
+
+    @Test("Preserved manual source window is excluded from frame writes")
+    func preservedManualSourceIsExcludedFromFrameWrites() {
+        let source = WindowID(raw: 120)
+        let sibling = WindowID(raw: 121)
+        let sourceFrame = CGRect(x: 0, y: 0, width: 500, height: 600)
+        let siblingFrame = CGRect(x: 500, y: 0, width: 300, height: 600)
+        let sourceMetadata = windowMetadata(id: source, frame: sourceFrame)
+        let siblingMetadata = windowMetadata(id: sibling, frame: siblingFrame)
+        let plan = commandPlanFixture(
+            focused: source,
+            tiled: [source: sourceFrame, sibling: siblingFrame],
+            windows: [source: sourceMetadata, sibling: siblingMetadata]
+        )
+
+        #expect(layoutFrameWriteIntents(for: plan, excluding: [source]) == [
+            .write(windowID: sibling, metadata: siblingMetadata, targetFrame: siblingFrame)
+        ])
+    }
+
     @Test("Planned layout apply decision clears missing focused frame")
     func plannedLayoutApplyDecisionClearsMissingFocusedFrame() {
         let focused = WindowID(raw: 60)
@@ -275,6 +314,7 @@ struct LayoutApplyModelTests {
     private func commandPlanFixture(
         focused: WindowID?,
         tiled: [WindowID: CGRect],
+        moves: [WindowID: CGRect]? = nil,
         shows: Set<WindowID> = [],
         windows: [WindowID: WindowMetadata] = [:]
     ) -> CommandPlanResult {
@@ -283,7 +323,7 @@ struct LayoutApplyModelTests {
             desiredLayout: DesiredLayout(
                 generation: LayoutGeneration(raw: 1),
                 layout: Layout(tiled: tiled, floatingZOrder: [], hidden: []),
-                delta: LayoutDelta(moves: tiled, raises: [], hides: [], shows: shows)
+                delta: LayoutDelta(moves: moves ?? tiled, raises: [], hides: [], shows: shows)
             ),
             windows: windows,
             plannedWorld: .empty,

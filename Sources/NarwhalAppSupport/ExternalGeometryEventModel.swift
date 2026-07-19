@@ -4,10 +4,12 @@ import NarwhalCore
 public struct ExternalGeometryEventSelection: Equatable, Sendable {
     public let event: AXEvent
     public let usedLiveFrame: Bool
+    public let liveFrame: CGRect?
 
-    public init(event: AXEvent, usedLiveFrame: Bool) {
+    public init(event: AXEvent, usedLiveFrame: Bool, liveFrame: CGRect? = nil) {
         self.event = event
         self.usedLiveFrame = usedLiveFrame
+        self.liveFrame = liveFrame
     }
 }
 
@@ -79,10 +81,21 @@ public func externalGeometryEventSelection(
     }
 
     guard !matchesLiveFrame else {
-        return ExternalGeometryEventSelection(event: event, usedLiveFrame: false)
+        return ExternalGeometryEventSelection(event: event, usedLiveFrame: false, liveFrame: live.frame)
     }
     return ExternalGeometryEventSelection(
         event: .windowMoved(windowID, live.frame),
-        usedLiveFrame: true
+        usedLiveFrame: true,
+        liveFrame: live.frame
     )
+}
+
+public func preservedExternalGeometryFrames(
+    selection: ExternalGeometryEventSelection,
+    plan: CommandPlanResult
+) -> [WindowID: CGRect] {
+    guard let windowID = externalGeometryWindowID(for: selection.event),
+          let frame = selection.liveFrame ?? plan.plannedWorld.windows[windowID]?.frame
+    else { return [:] }
+    return [windowID: frame]
 }

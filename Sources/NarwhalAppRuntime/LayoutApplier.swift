@@ -14,11 +14,14 @@ struct LayoutApplier {
         self.echoSuppressor = echoSuppressor
     }
 
-    func apply(_ result: CommandPlanResult) async -> LayoutApplyResult {
-        var applyResult = LayoutApplyResult.empty
+    func apply(
+        _ result: CommandPlanResult,
+        preserving preservedFrames: [WindowID: CGRect] = [:]
+    ) async -> LayoutApplyResult {
+        var applyResult = LayoutApplyResult(applied: preservedFrames, clamps: [], failures: [])
         reporter.info("Applying layout generation=\(result.desiredLayout.generation.raw) tiledCount=\(result.desiredLayout.layout.tiled.count)")
 
-        applyLoop: for intent in layoutFrameWriteIntents(for: result) {
+        applyLoop: for intent in layoutFrameWriteIntents(for: result, excluding: Set(preservedFrames.keys)) {
             switch intent {
             case .missingMetadata(let windowID, let frame):
                 reporter.error("No metadata for \(windowID.description); skipping frame write")

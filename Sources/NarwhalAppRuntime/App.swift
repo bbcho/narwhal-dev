@@ -2010,9 +2010,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         persistReason: String,
         retryOnClamp: Bool,
         showFocusBorder: Bool = true,
+        preserving preservedFrames: [WindowID: CGRect] = [:],
         replanAfterClamp: () async -> Result<CommandPlanResult, CommandError>
     ) async -> Bool {
-        let applyResult = await LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
+        let applyResult = await LayoutApplier(
+            axClient: axClient,
+            reporter: reporter,
+            echoSuppressor: echoSuppressor
+        ).apply(result, preserving: preservedFrames)
         switch plannedLayoutApplyDecision(plan: result, applyResult: applyResult, retryOnClamp: retryOnClamp) {
         case .commit(let appliedFrames, let focusUpdate):
             await worldActor.commit(result, appliedFrames: appliedFrames)
@@ -2066,6 +2071,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     operation: operation,
                     persistReason: persistReason,
                     retryOnClamp: false,
+                    preserving: preservedFrames,
                     replanAfterClamp: replanAfterClamp
                 )
             case .failure(let error):
@@ -2248,12 +2254,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch await worldActor.planExternalGeometry(selectedEvent.event) {
         case .success(let result?):
+            let preservedFrames = preservedExternalGeometryFrames(
+                selection: selectedEvent,
+                plan: result
+            )
             let completed = await applyPlannedLayout(
                 result,
                 operation: "Manual resize",
                 persistReason: "manual resize",
                 retryOnClamp: true,
-                showFocusBorder: snapshot != nil
+                showFocusBorder: snapshot != nil,
+                preserving: preservedFrames
             ) {
                 await self.replanExternalGeometryAfterClamp(result)
             }
