@@ -27,6 +27,8 @@ Use this page as the map for Narwhal documentation.
 - [Design notes](../design.md): product semantics and detailed layout rules.
 - [Runtime maturity design](runtime-maturity-design.md): event observation,
   instrumentation, background I/O, diagnostics, and verification contracts.
+- [Production readiness design](production-readiness-design.md): recovery,
+  lifecycle, privacy, release, update, and production verification contracts.
 - [Layout sequences 0-6](../layout-sequences-0-6.md): accepted layout sequence
   behavior.
 - [Layout sequences 0-4](../layout-sequences-0-4.md): earlier sequence
