@@ -66,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let activeSpaceSettledRefreshDelays: [TimeInterval] = [0.35, 0.80]
     private static let displaySettledRefreshDelay: TimeInterval = 6.0
     private static let restoreSaveDebounceInterval: TimeInterval = 0.25
+    private static let terminationFlushTimeoutNanoseconds: UInt64 = 2_000_000_000
 
     private let runtimeMetrics = RuntimeMetrics()
     private lazy var axClient = AXClient(runtimeMetrics: runtimeMetrics)
@@ -110,6 +111,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var configWarning: RuntimeReadinessIssue?
     private var restoreWarning: RuntimeReadinessIssue?
     private var runtimeReadiness: RuntimeReadiness = .starting
+    private var terminationFlushState: TerminationFlushState = .idle
+    private var terminationFlushTask: Task<Void, Never>?
+    private var terminationTimeoutTask: Task<Void, Never>?
     // AX raise failures survive environment refreshes, so exclusions are session-scoped.
     private var axRaiseBlocklist: Set<WindowID> = []
 
@@ -208,6 +212,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        terminationFlushTask?.cancel()
+        terminationFlushTask = nil
+        terminationTimeoutTask?.cancel()
+        terminationTimeoutTask = nil
         accessibilityPollTimer?.invalidate()
         accessibilityPollTimer = nil
         environmentRefreshCoalescingTimer?.invalidate()
@@ -221,6 +229,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.stop()
         reporter.info("NarwhalApp stopped")
         reporter.flush()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let transition = NarwhalAppSupport.requestTermination(in: terminationFlushState)
+        terminationFlushState = transition.state
+
+        switch transition.decision {
+        case .startFlushAndDefer:
+            reporter.info("Termination requested; flushing restore state")
+            terminationFlushTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                await restorePersistence.flushPending()
+                resolveTermination(.persisted)
+            }
+            terminationTimeoutTask = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(nanoseconds: Self.terminationFlushTimeoutNanoseconds)
+                } catch {
+                    return
+                }
+                self?.resolveTermination(.timedOut)
+            }
+            return .terminateLater
+        case .deferExistingFlush:
+            return .terminateLater
+        case .terminateNow:
+            return .terminateNow
+        }
+    }
+
+    private func resolveTermination(_ completion: TerminationFlushCompletion) {
+        let transition = completeTerminationFlush(completion, in: terminationFlushState)
+        terminationFlushState = transition.state
+        guard transition.decision == .replyToTerminate else { return }
+
+        switch completion {
+        case .persisted:
+            reporter.info("Termination restore flush completed")
+            terminationTimeoutTask?.cancel()
+        case .timedOut:
+            terminationFlushTask?.cancel()
+            reporter.error("Termination restore flush timed out; allowing shutdown")
+        }
+        terminationFlushTask = nil
+        terminationTimeoutTask = nil
+        NSApplication.shared.reply(toApplicationShouldTerminate: true)
     }
 
     private func updateOperatingStatus(_ update: (inout MenubarOperatingStatus) -> Void) {
@@ -2983,7 +3037,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func requestTermination() async {
+        reporter.info("Termination requested; flushing restore state")
         await restorePersistence.flushPending()
+        reporter.info("Termination restore flush completed")
+        terminationFlushState = .approved
         NSApplication.shared.terminate(nil)
     }
 
