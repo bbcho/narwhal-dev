@@ -80,7 +80,8 @@ let package = Package(
                 "NarwhalCore",
                 "NarwhalAppSupport",
                 .product(name: "Testing", package: "swift-testing")
-            ]
+            ],
+            resources: [.copy("Fixtures")]
         ),
         .testTarget(
             name: "NarwhalAppRuntimeTests",

@@ -34,8 +34,8 @@ Mac App Store.
 
 Pure values are added only where they name recovery or release decisions:
 
-- `RestoreLoadOutcome`: missing, loaded, recovered from backup, or recovered
-  empty after quarantining invalid state.
+- `RestoreLoadOutcome`: missing, loaded, recovered from backup, recovered empty
+  after quarantining invalid state, or incompatible with a future schema.
 - `RestoreRecovery`: the primary failure, optional backup failure, and
   quarantined filename without a user directory path.
 - `RuntimeReadiness`: operational, waiting for Accessibility, or degraded with
@@ -106,7 +106,7 @@ validates the result. Released fixture files are permanent compatibility tests.
 Before replacing a valid primary snapshot, the current valid primary is copied
 atomically to `state.json.previous`. If primary loading fails, Narwhal attempts
 the backup. An invalid primary is renamed to a unique quarantine filename. A
-future-schema file is quarantined but never overwritten during that launch.
+future-schema file is left untouched and keeps the app in recovery mode.
 
 ## Observability and privacy
 

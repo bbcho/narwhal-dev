@@ -126,6 +126,179 @@ struct RestoreManagerTests {
         }
     }
 
+    @Test("Schema one restore migrates to the current schema before validation")
+    func schemaOneRestoreMigratesToCurrentSchema() throws {
+        let legacy = storedWorldFixture(title: "legacy", schemaVersion: 1)
+        let current = storedWorldFixture(title: "legacy")
+
+        #expect(migrateStoredWorldToCurrent(legacy) == .success(current))
+        #expect(try decodeStoredWorldRestoreData(try encodeStoredWorldRestoreData(legacy)).get() == current)
+        #expect(migrateStoredWorldToCurrent(current) == .success(current))
+    }
+
+    @Test("Released schema one fixture remains readable")
+    func releasedSchemaOneFixtureRemainsReadable() throws {
+        let fixture = try #require(Bundle.module.url(
+            forResource: "v1-empty",
+            withExtension: "json",
+            subdirectory: "Fixtures/Restore"
+        ))
+        let decoded = try decodeStoredWorldRestoreData(Data(contentsOf: fixture)).get()
+
+        #expect(decoded == StoredWorld(
+            schemaVersion: StoredWorld.currentSchemaVersion,
+            activeSpace: nil,
+            workspaces: nil,
+            pendingRules: []
+        ))
+    }
+
+    @Test("Save retains the previous valid snapshot with private permissions")
+    func saveRetainsPreviousValidSnapshot() throws {
+        let paths = temporaryRestorePath()
+        defer { removeTemporaryRestoreRoot(paths.root) }
+        let manager = RestoreManager(url: paths.file)
+        let first = storedWorldFixture(title: "first")
+        let second = storedWorldFixture(title: "second")
+
+        try manager.save(first)
+        #expect(FileManager.default.fileExists(atPath: manager.backupURL.path) == false)
+        try manager.save(second)
+
+        #expect(try manager.load() == second)
+        let backupData = try Data(contentsOf: manager.backupURL)
+        #expect(try decodeStoredWorldRestoreData(backupData).get() == first)
+        #expect(posixPermissions(at: paths.file) == 0o600)
+        #expect(posixPermissions(at: manager.backupURL) == 0o600)
+        #expect(posixPermissions(at: paths.file.deletingLastPathComponent()) == 0o700)
+    }
+
+    @Test("Corrupt primary is quarantined and recovered from valid backup")
+    func corruptPrimaryRecoversFromBackup() throws {
+        let paths = temporaryRestorePath()
+        defer { removeTemporaryRestoreRoot(paths.root) }
+        let manager = RestoreManager(url: paths.file)
+        let backup = storedWorldFixture(title: "backup")
+
+        try manager.save(backup)
+        try manager.save(storedWorldFixture(title: "newest"))
+        try writeText("not-json", to: paths.file)
+
+        let outcome = try manager.loadRecovering(quarantineID: "test")
+
+        guard case .recoveredFromBackup(let loaded, let recovery) = outcome else {
+            Issue.record("Expected backup recovery, got \(outcome)")
+            return
+        }
+        #expect(loaded == backup)
+        #expect(recovery.backupError == nil)
+        #expect(recovery.quarantinedFilenames == ["state.json.corrupt-test"])
+        #expect(try manager.load() == backup)
+        #expect(try String(contentsOf: quarantinedURL(named: "state.json.corrupt-test", paths: paths), encoding: .utf8) == "not-json")
+    }
+
+    @Test("Corrupt primary and backup are both quarantined before empty recovery")
+    func corruptPrimaryAndBackupRecoverEmpty() throws {
+        let paths = temporaryRestorePath()
+        defer { removeTemporaryRestoreRoot(paths.root) }
+        let manager = RestoreManager(url: paths.file)
+        try writeText("bad-primary", to: paths.file)
+        try writeText("bad-backup", to: manager.backupURL)
+
+        let outcome = try manager.loadRecovering(quarantineID: "both")
+
+        guard case .recoveredEmpty(let recovery) = outcome else {
+            Issue.record("Expected empty recovery, got \(outcome)")
+            return
+        }
+        #expect(recovery.backupError != nil)
+        #expect(recovery.quarantinedFilenames == [
+            "state.json.corrupt-both",
+            "state.json.previous.corrupt-both"
+        ])
+        #expect(FileManager.default.fileExists(atPath: paths.file.path) == false)
+        #expect(FileManager.default.fileExists(atPath: manager.backupURL.path) == false)
+        #expect(try String(contentsOf: quarantinedURL(named: "state.json.corrupt-both", paths: paths), encoding: .utf8) == "bad-primary")
+        #expect(try String(contentsOf: quarantinedURL(named: "state.json.previous.corrupt-both", paths: paths), encoding: .utf8) == "bad-backup")
+    }
+
+    @Test("Future schema remains untouched for recovery by a newer app")
+    func futureSchemaRemainsUntouched() throws {
+        let paths = temporaryRestorePath()
+        defer { removeTemporaryRestoreRoot(paths.root) }
+        let manager = RestoreManager(url: paths.file)
+        let future = StoredWorld(
+            schemaVersion: StoredWorld.currentSchemaVersion + 1,
+            activeSpace: nil,
+            pendingRules: []
+        )
+        try writeStoredWorld(future, to: paths.file)
+        let original = try Data(contentsOf: paths.file)
+
+        let outcome = try manager.loadRecovering(quarantineID: "future")
+
+        guard case .incompatible(let recovery) = outcome else {
+            Issue.record("Expected incompatible recovery, got \(outcome)")
+            return
+        }
+        #expect(recovery.primaryError == .unsupportedSchemaVersion(
+            found: StoredWorld.currentSchemaVersion + 1,
+            supported: StoredWorld.currentSchemaVersion
+        ))
+        #expect(recovery.quarantinedFilenames == [])
+        #expect(try Data(contentsOf: paths.file) == original)
+    }
+
+    @Test("Save refuses to overwrite invalid existing state")
+    func saveRefusesToOverwriteInvalidExistingState() throws {
+        let paths = temporaryRestorePath()
+        defer { removeTemporaryRestoreRoot(paths.root) }
+        let manager = RestoreManager(url: paths.file)
+        try writeText("not-json", to: paths.file)
+        let original = try Data(contentsOf: paths.file)
+
+        do {
+            try manager.save(storedWorldFixture(title: "replacement"))
+            Issue.record("Expected save to reject invalid existing state")
+        } catch let error as RestoreManagerError {
+            guard case .decodeFailed = error else {
+                Issue.record("Expected decode failure, got \(error)")
+                return
+            }
+        }
+
+        #expect(try Data(contentsOf: paths.file) == original)
+        #expect(FileManager.default.fileExists(atPath: manager.backupURL.path) == false)
+    }
+
+    @Test("Future-schema backup remains untouched after corrupt primary")
+    func futureSchemaBackupRemainsUntouched() throws {
+        let paths = temporaryRestorePath()
+        defer { removeTemporaryRestoreRoot(paths.root) }
+        let manager = RestoreManager(url: paths.file)
+        let future = StoredWorld(
+            schemaVersion: StoredWorld.currentSchemaVersion + 1,
+            activeSpace: nil,
+            pendingRules: []
+        )
+        try writeText("bad-primary", to: paths.file)
+        try writeStoredWorld(future, to: manager.backupURL)
+        let originalBackup = try Data(contentsOf: manager.backupURL)
+
+        let outcome = try manager.loadRecovering(quarantineID: "future-backup")
+
+        guard case .incompatible(let recovery) = outcome else {
+            Issue.record("Expected incompatible recovery, got \(outcome)")
+            return
+        }
+        #expect(recovery.backupError == .unsupportedSchemaVersion(
+            found: StoredWorld.currentSchemaVersion + 1,
+            supported: StoredWorld.currentSchemaVersion
+        ))
+        #expect(recovery.quarantinedFilenames == ["state.json.corrupt-future-backup"])
+        #expect(try Data(contentsOf: manager.backupURL) == originalBackup)
+    }
+
     @Test("Restore save events are pure request projections")
     func restoreSaveEventsArePureRequestProjections() {
         let request = RestoreSaveRequest(generation: 42, stored: storedWorldFixture(), reason: "manual")
@@ -355,7 +528,10 @@ struct RestoreManagerTests {
         #expect(durations.values().allSatisfy { $0 >= 0 })
     }
 
-    private func storedWorldFixture(title: String = "Window") -> StoredWorld {
+    private func storedWorldFixture(
+        title: String = "Window",
+        schemaVersion: Int = StoredWorld.currentSchemaVersion
+    ) -> StoredWorld {
         let ref = StoredWindowRef(
             bundleID: BundleID(raw: "com.example"),
             title: title,
@@ -364,7 +540,7 @@ struct RestoreManagerTests {
             lastKnownFrame: CGRect(x: 10, y: 20, width: 300, height: 200)
         )
         return StoredWorld(
-            schemaVersion: StoredWorld.currentSchemaVersion,
+            schemaVersion: schemaVersion,
             activeSpace: StoredSpace(
                 layouts: [
                     StoredDisplayLayout(
@@ -379,6 +555,18 @@ struct RestoreManagerTests {
             pendingRules: [StoredPendingRule(window: ref, action: .pinToDisplay(displaySlot: 0))]
         )
     }
+}
+
+private func quarantinedURL(
+    named filename: String,
+    paths: (root: URL, file: URL)
+) -> URL {
+    paths.file.deletingLastPathComponent().appendingPathComponent(filename)
+}
+
+private func posixPermissions(at url: URL) -> Int? {
+    let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+    return (attributes?[.posixPermissions] as? NSNumber)?.intValue
 }
 
 private func temporaryRestorePath() -> (root: URL, file: URL) {

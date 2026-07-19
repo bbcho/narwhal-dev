@@ -1,7 +1,7 @@
 import Foundation
 import NarwhalCore
 
-public enum RestoreManagerError: Error, CustomStringConvertible, Equatable {
+public enum RestoreManagerError: Error, CustomStringConvertible, Equatable, Sendable {
     case decodeFailed(String)
     case invalidStoredWorld(String)
     case unsupportedSchemaVersion(found: Int, supported: Int)
@@ -18,6 +18,30 @@ public enum RestoreManagerError: Error, CustomStringConvertible, Equatable {
     }
 }
 
+public struct RestoreRecovery: Equatable, Sendable {
+    public let primaryError: RestoreManagerError
+    public let backupError: RestoreManagerError?
+    public let quarantinedFilenames: [String]
+
+    public init(
+        primaryError: RestoreManagerError,
+        backupError: RestoreManagerError?,
+        quarantinedFilenames: [String]
+    ) {
+        self.primaryError = primaryError
+        self.backupError = backupError
+        self.quarantinedFilenames = quarantinedFilenames
+    }
+}
+
+public enum RestoreLoadOutcome: Equatable, Sendable {
+    case missing
+    case loaded(StoredWorld)
+    case recoveredFromBackup(StoredWorld, recovery: RestoreRecovery)
+    case recoveredEmpty(RestoreRecovery)
+    case incompatible(RestoreRecovery)
+}
+
 public struct RestoreManager: Sendable {
     public static let defaultURL = FileManager.default
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -26,6 +50,10 @@ public struct RestoreManager: Sendable {
 
     public let url: URL
 
+    public var backupURL: URL {
+        url.appendingPathExtension("previous")
+    }
+
     public init(url: URL = RestoreManager.defaultURL) {
         self.url = url
     }
@@ -33,21 +61,115 @@ public struct RestoreManager: Sendable {
     public func load() throws -> StoredWorld? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
 
-        let data = try Data(contentsOf: url)
-        return try decodeStoredWorldRestoreData(data).get()
+        return try loadStoredWorld(at: url)
+    }
+
+    public func loadRecovering(quarantineID: String = UUID().uuidString) throws -> RestoreLoadOutcome {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
+
+        do {
+            return .loaded(try loadStoredWorld(at: url))
+        } catch let primaryError as RestoreManagerError {
+            if case .unsupportedSchemaVersion = primaryError {
+                return .incompatible(RestoreRecovery(
+                    primaryError: primaryError,
+                    backupError: nil,
+                    quarantinedFilenames: []
+                ))
+            }
+            let quarantinedPrimary = try quarantine(url, id: quarantineID)
+
+            guard FileManager.default.fileExists(atPath: backupURL.path) else {
+                return .recoveredEmpty(RestoreRecovery(
+                    primaryError: primaryError,
+                    backupError: nil,
+                    quarantinedFilenames: [quarantinedPrimary.lastPathComponent]
+                ))
+            }
+
+            do {
+                let stored = try loadStoredWorld(at: backupURL)
+                try encodeStoredWorldRestoreData(stored).write(to: url, options: [.atomic])
+                try restrictPermissions(of: url)
+                return .recoveredFromBackup(
+                    stored,
+                    recovery: RestoreRecovery(
+                        primaryError: primaryError,
+                        backupError: nil,
+                        quarantinedFilenames: [quarantinedPrimary.lastPathComponent]
+                    )
+                )
+            } catch let backupError as RestoreManagerError {
+                if case .unsupportedSchemaVersion = backupError {
+                    return .incompatible(RestoreRecovery(
+                        primaryError: primaryError,
+                        backupError: backupError,
+                        quarantinedFilenames: [quarantinedPrimary.lastPathComponent]
+                    ))
+                }
+                let quarantinedBackup = try quarantine(backupURL, id: quarantineID)
+                return .recoveredEmpty(RestoreRecovery(
+                    primaryError: primaryError,
+                    backupError: backupError,
+                    quarantinedFilenames: [
+                        quarantinedPrimary.lastPathComponent,
+                        quarantinedBackup.lastPathComponent
+                    ]
+                ))
+            }
+        }
     }
 
     public func save(_ stored: StoredWorld) throws {
+        let current = try migrateStoredWorldToCurrent(stored).get()
+        let validated = try validateCurrentStoredWorld(current).get()
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: url.deletingLastPathComponent().path
         )
 
-        try encodeStoredWorldRestoreData(stored).write(to: url, options: [.atomic])
+        let encoded = try encodeStoredWorldRestoreData(validated)
+        if FileManager.default.fileExists(atPath: url.path) {
+            let currentData = try Data(contentsOf: url)
+            switch decodeStoredWorldRestoreData(currentData) {
+            case .success:
+                try currentData.write(to: backupURL, options: [.atomic])
+                try restrictPermissions(of: backupURL)
+            case .failure(let error):
+                throw error
+            }
+        }
+        try encoded.write(to: url, options: [.atomic])
+        try restrictPermissions(of: url)
+    }
+
+    private func loadStoredWorld(at fileURL: URL) throws -> StoredWorld {
+        let data = try Data(contentsOf: fileURL)
+        return try decodeStoredWorldRestoreData(data).get()
+    }
+
+    private func quarantine(_ fileURL: URL, id: String) throws -> URL {
+        let destination = fileURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("\(fileURL.lastPathComponent).corrupt-\(id)")
+        try FileManager.default.moveItem(at: fileURL, to: destination)
+        return destination
+    }
+
+    private func restrictPermissions(of fileURL: URL) throws {
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: fileURL.path
+        )
     }
 }
 
-func decodeStoredWorldRestoreData(_ data: Data) -> Result<StoredWorld?, RestoreManagerError> {
+func decodeStoredWorldRestoreData(_ data: Data) -> Result<StoredWorld, RestoreManagerError> {
     let stored: StoredWorld
     do {
         stored = try JSONDecoder().decode(StoredWorld.self, from: data)
@@ -55,12 +177,43 @@ func decodeStoredWorldRestoreData(_ data: Data) -> Result<StoredWorld?, RestoreM
         return .failure(.decodeFailed(String(describing: error)))
     }
 
-    guard stored.schemaVersion == StoredWorld.currentSchemaVersion else {
+    switch migrateStoredWorldToCurrent(stored) {
+    case .failure(let error):
+        return .failure(error)
+    case .success(let migrated):
+        return validateCurrentStoredWorld(migrated)
+    }
+}
+
+func migrateStoredWorldToCurrent(_ stored: StoredWorld) -> Result<StoredWorld, RestoreManagerError> {
+    guard (1...StoredWorld.currentSchemaVersion).contains(stored.schemaVersion) else {
         return .failure(.unsupportedSchemaVersion(
             found: stored.schemaVersion,
             supported: StoredWorld.currentSchemaVersion
         ))
     }
+
+    var migrated = stored
+    while migrated.schemaVersion < StoredWorld.currentSchemaVersion {
+        switch migrated.schemaVersion {
+        case 1:
+            migrated = StoredWorld(
+                schemaVersion: 2,
+                activeSpace: migrated.activeSpace,
+                workspaces: migrated.workspaces,
+                pendingRules: migrated.pendingRules
+            )
+        default:
+            return .failure(.unsupportedSchemaVersion(
+                found: migrated.schemaVersion,
+                supported: StoredWorld.currentSchemaVersion
+            ))
+        }
+    }
+    return .success(migrated)
+}
+
+private func validateCurrentStoredWorld(_ stored: StoredWorld) -> Result<StoredWorld, RestoreManagerError> {
     switch validateStoredWorld(stored) {
     case .success(let validated):
         return .success(validated)
@@ -345,6 +498,10 @@ public final class RestorePersistence {
         try await store.load()
     }
 
+    public func loadRecovering() async throws -> RestoreLoadOutcome {
+        try await store.loadRecovering()
+    }
+
     public func scheduleSave(_ stored: StoredWorld, reason: String) {
         scheduler.scheduleSave(stored, reason: reason)
     }
@@ -367,6 +524,10 @@ private actor RestoreFileStore {
 
     func load() throws -> StoredWorld? {
         try manager.load()
+    }
+
+    func loadRecovering() throws -> RestoreLoadOutcome {
+        try manager.loadRecovering()
     }
 
     func save(_ stored: StoredWorld) throws {
