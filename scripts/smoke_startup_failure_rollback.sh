@@ -48,29 +48,6 @@ assert_log_absent() {
   fi
 }
 
-wait_for_process_exit() {
-  local pid="$1"
-  local timeout_seconds="$2"
-  local timeout_marker="$tmp_root/process-exit-timeout"
-  rm -f "$timeout_marker"
-  (
-    sleep "$timeout_seconds"
-    if kill -0 "$pid" 2>/dev/null; then
-      touch "$timeout_marker"
-      kill "$pid" 2>/dev/null || true
-    fi
-  ) &
-  local watchdog_pid="$!"
-
-  wait "$pid" 2>/dev/null || true
-  kill "$watchdog_pid" 2>/dev/null || true
-  wait "$watchdog_pid" 2>/dev/null || true
-
-  if [ -f "$timeout_marker" ]; then
-    fail "timed out waiting for NarwhalApp to exit"
-  fi
-}
-
 wait_for_socket_absent() {
   local timeout_seconds="$1"
   local deadline=$((SECONDS + timeout_seconds))
@@ -102,13 +79,16 @@ bin_path="$(swift build --disable-sandbox --show-bin-path)"
 app_pid="$!"
 
 wait_for_log "IPC server ready at $socket_path" 20
-wait_for_log "service startup failed at dragZones after starting menubar, hotkeys, axObserver, displayObserver, configWatcher, ipcServer: injected startup failure at service dragZones" 20
-wait_for_log "Runtime service startup failed; terminating" 20
-wait_for_log "NarwhalApp stopped" 20
-wait_for_process_exit "$app_pid" 10
+wait_for_log "service startup failed at dragZones after starting hotkeys, axObserver, displayObserver, configWatcher, ipcServer: injected startup failure at service dragZones" 20
+wait_for_log "Runtime service startup failed; recovery menu remains available" 20
+if ! kill -0 "$app_pid" 2>/dev/null; then
+  fail "NarwhalApp exited instead of preserving the recovery menu"
+fi
+assert_log_absent "NarwhalApp stopped"
+wait_for_socket_absent 5
+kill "$app_pid" 2>/dev/null || true
 wait "$app_pid" 2>/dev/null || true
 app_pid=""
-wait_for_socket_absent 5
 assert_log_absent "Drag zones ready"
 assert_log_absent "Layout command loop ready"
 

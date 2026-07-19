@@ -48,6 +48,11 @@ struct LiveAppKitVerifierTests {
         try expectPassed(DiagnosticsMenuVerification.verifyCopyDiagnosticsAction())
     }
 
+    @Test("Degraded runtime recovery menu")
+    func degradedRuntimeRecoveryMenu() throws {
+        try expectPassed(RecoveryMenuVerification.verifyDegradedRuntimeActions())
+    }
+
     @Test("Observation replay")
     func observationReplay() throws {
         try expectPassed(ObservationReplayVerification.verifyPartialTopologyReplay())

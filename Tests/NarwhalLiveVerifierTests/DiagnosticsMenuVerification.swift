@@ -11,8 +11,12 @@ enum DiagnosticsMenuVerification {
         let diagnostics = diagnosticsFixture()
         let menubar = Menubar()
         var copyError: Error?
-        menubar.start(
-            reload: {},
+        menubar.start(actions: MenubarActions(
+            reloadConfig: {},
+            retryStartup: {},
+            openConfig: {},
+            openAccessibilitySettings: {},
+            revealLogs: {},
             copyDiagnostics: {
                 do {
                     try copyRuntimeDiagnostics(diagnostics, to: pasteboard)
@@ -20,9 +24,9 @@ enum DiagnosticsMenuVerification {
                     copyError = error
                 }
             },
-            reset: {},
+            resetLayout: {},
             quit: {}
-        )
+        ))
         defer {
             menubar.stop()
             pasteboard.releaseGlobally()

@@ -106,6 +106,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var servicesStarted = false
     private var isPaused = false
     private var configHealthy = true
+    private var startupConfigFailure: StartupConfigError?
+    private var configWarning: RuntimeReadinessIssue?
+    private var restoreWarning: RuntimeReadinessIssue?
+    private var runtimeReadiness: RuntimeReadiness = .starting
     // AX raise failures survive environment refreshes, so exclusions are session-scoped.
     private var axRaiseBlocklist: Set<WindowID> = []
 
@@ -177,7 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             break
         }
 
-        guard loadStartupConfigOrTerminate() else { return }
+        loadNormalStartupConfig()
 
         // Start the menubar BEFORE the Accessibility check so the user always has a
         // visible indicator that Narwhal is alive, even while waiting for permission.
@@ -186,6 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let status = reportAccessibilityStatus(prompt: true)
         guard status.isTrusted else {
             reporter.info("Waiting for Accessibility permission before starting AX work")
+            updateRuntimeReadiness(.waitingForAccessibility)
             showOperatorFeedback("Narwhal needs Accessibility permission", tone: .warning, showsHUD: false)
             accessibilityPollTimer = Timer.scheduledTimer(
                 timeInterval: 2.0,
@@ -223,6 +228,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar.updateOperatingStatus(operatingStatus)
     }
 
+    private func updateRuntimeReadiness(_ readiness: RuntimeReadiness) {
+        runtimeReadiness = readiness
+        menubar.updateRuntimeReadiness(readiness)
+    }
+
     private func showOperatorFeedback(_ message: String, tone: OverlayTone, showsHUD: Bool = true) {
         updateOperatingStatus { status in
             status.lastCommand = message
@@ -255,6 +265,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timer.invalidate()
         accessibilityPollTimer = nil
         reporter.info("Accessibility trusted")
+        updateOperatingStatus { $0.accessibilityTrusted = true }
+        updateRuntimeReadiness(.starting)
         Task { @MainActor in
             await startAfterAccessibilityTrusted()
         }
@@ -263,13 +275,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func startAfterAccessibilityTrusted() async {
         guard !servicesStarted else { return }
+        updateRuntimeReadiness(.starting)
         reporter.info("Rung 1 complete: AppKit run loop is active and Accessibility is trusted")
         let focused = reportFocusedWindowSnapshot()
         let environment = await refreshEnvironment(reason: "startup")
         guard environment.activeSpace != nil else {
             reporter.error("Window manager services not started: active Space unavailable")
+            updateRuntimeReadiness(.degraded(.activeSpaceUnavailable))
             return
         }
+        restoreWarning = nil
         guard await loadRestoreState(using: environment.snapshot) else { return }
         if let focused {
             await worldActor.recordExternalFocus(focused.id)
@@ -459,15 +474,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func loadStartupConfig() -> Bool {
         switch startupConfigLoad() {
         case .success(let loaded):
-            config = loaded.config
-            worldActor = WorldActor(config: loaded.config, runtimeMetrics: runtimeMetrics)
-            overlay.updateConfig(border: loaded.config.border, hud: loaded.config.hud)
+            activateStartupConfig(loaded.config)
             logStartupConfig(loaded)
             return true
         case .failure(let error):
             reporter.error("Startup config failed: \(error.description)")
             return false
         }
+    }
+
+    private func loadNormalStartupConfig() {
+        switch startupConfigLoad() {
+        case .success(let loaded):
+            activateStartupConfig(loaded.config)
+            configHealthy = true
+            startupConfigFailure = nil
+            configWarning = nil
+            logStartupConfig(loaded)
+        case .failure(let error):
+            activateStartupConfig(.default)
+            configHealthy = false
+            startupConfigFailure = error
+            configWarning = .configFallback
+            reporter.error("Startup config failed; using built-in defaults: \(error.description)")
+        }
+    }
+
+    private func activateStartupConfig(_ activeConfig: Config) {
+        config = activeConfig
+        worldActor = WorldActor(config: activeConfig, runtimeMetrics: runtimeMetrics)
+        overlay.updateConfig(border: activeConfig.border, hud: activeConfig.hud)
     }
 
     private func startupConfigLoad() -> Result<StartupConfigLoad, StartupConfigError> {
@@ -524,8 +560,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             steps = value
         case .failure(let error):
             reporter.error(error.description)
-            reporter.info("Runtime service startup failed; terminating")
-            NSApplication.shared.terminate(nil)
+            reporter.info("Runtime service startup failed; recovery menu remains available")
+            updateRuntimeReadiness(.degraded(.serviceStartupFailed(service: "startup request")))
             return
         }
 
@@ -534,23 +570,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runningServices = services
             servicesStarted = true
             reporter.info("Layout command loop ready")
+            updateRuntimeReadiness(operationalReadiness)
         case .failure(let error):
             runningServices = nil
             servicesStarted = false
             reporter.error(error.description)
-            reporter.info("Runtime service startup failed; terminating")
-            NSApplication.shared.terminate(nil)
+            reporter.info("Runtime service startup failed; recovery menu remains available")
+            updateRuntimeReadiness(.degraded(.serviceStartupFailed(service: error.service)))
         }
     }
 
     private func serviceStartSteps() -> [ServiceStartStep] {
         [
-            ServiceStartStep(name: "menubar") {
-                self.startMenubar()
-                return { [weak self] in
-                    self?.menubar.stop()
-                }
-            },
             ServiceStartStep(name: "hotkeys") {
                 try self.installHotkeys()
             },
@@ -574,18 +605,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func startMenubar() {
-        menubar.start(
-            reload: { [weak self] in
+        menubar.start(actions: MenubarActions(
+            reloadConfig: { [weak self] in
                 Task { @MainActor in
                     await self?.reloadConfig(reason: "menubar")
                 }
+            },
+            retryStartup: { [weak self] in
+                self?.retryStartupFromMenu()
+            },
+            openConfig: { [weak self] in
+                self?.openConfigFromMenu()
+            },
+            openAccessibilitySettings: { [weak self] in
+                self?.openAccessibilitySettingsFromMenu()
+            },
+            revealLogs: { [weak self] in
+                self?.revealLogsFromMenu()
             },
             copyDiagnostics: { [weak self] in
                 Task { @MainActor in
                     await self?.copyDiagnosticsToPasteboard()
                 }
             },
-            reset: { [weak self] in
+            resetLayout: { [weak self] in
                 Task { @MainActor in
                     await self?.performHotkey(.command(.resetLayout))
                 }
@@ -595,9 +638,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     await self?.requestTermination()
                 }
             }
-        )
-        menubar.updateConfigStatus(.loaded)
+        ))
+        if let startupConfigFailure {
+            menubar.updateConfigStatus(.failed(startupConfigFailure.description))
+        } else {
+            menubar.updateConfigStatus(.loaded)
+        }
+        menubar.updateRuntimeReadiness(runtimeReadiness)
         menubar.updateOperatingStatus(operatingStatus)
+    }
+
+    private var operationalReadiness: RuntimeReadiness {
+        if let restoreWarning {
+            return .operationalWithWarning(restoreWarning)
+        }
+        if let configWarning {
+            return .operationalWithWarning(configWarning)
+        }
+        return .operational
+    }
+
+    private func retryStartupFromMenu() {
+        guard !servicesStarted, runtimeReadiness.canRetryStartup else { return }
+
+        let status = reportAccessibilityStatus(prompt: true)
+        guard status.isTrusted else {
+            updateRuntimeReadiness(.waitingForAccessibility)
+            return
+        }
+
+        accessibilityPollTimer?.invalidate()
+        accessibilityPollTimer = nil
+        updateRuntimeReadiness(.starting)
+        Task { @MainActor in
+            await startAfterAccessibilityTrusted()
+        }
+    }
+
+    private func openConfigFromMenu() {
+        let url: URL
+        switch startupArguments.startupConfigRequest {
+        case .success(let request):
+            url = request.url
+        case .failure:
+            url = StartupConfigLoader.defaultUserConfigURL
+        }
+
+        do {
+            if !FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try DefaultConfigLua.render().write(to: url, atomically: true, encoding: .utf8)
+                reporter.info("Created default user config")
+            }
+            guard NSWorkspace.shared.open(url) else {
+                reporter.error("Open Config failed: workspace rejected the file")
+                showOperatorFeedback("Could not open config", tone: .error)
+                return
+            }
+        } catch {
+            reporter.error("Open Config failed: \(String(describing: error))")
+            showOperatorFeedback("Could not open config", tone: .error)
+        }
+    }
+
+    private func openAccessibilitySettingsFromMenu() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"),
+              NSWorkspace.shared.open(url)
+        else {
+            reporter.error("Accessibility Settings could not be opened")
+            showOperatorFeedback("Could not open Accessibility Settings", tone: .error)
+            return
+        }
+        reporter.info("Opened Accessibility Settings")
+    }
+
+    private func revealLogsFromMenu() {
+        let logURL = URL(fileURLWithPath: StartupReporter.defaultLogPath)
+        NSWorkspace.shared.activateFileViewerSelecting([logURL])
+        reporter.info("Revealed runtime log")
     }
 
     @MainActor
@@ -2107,17 +2228,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         do {
-            guard let stored = try await restorePersistence.load() else {
+            switch try await restorePersistence.loadRecovering() {
+            case .missing:
                 reporter.info("Restore state not found at \(restorePersistence.url.path)")
                 return true
+            case .loaded(let stored):
+                let restoredCount = await worldActor.restore(stored, from: snapshot)
+                reporter.info("Restore state loaded; restored tiled windows=\(restoredCount)")
+                await updateTiledBordersFromWorld()
+                return true
+            case .recoveredFromBackup(let stored, let recovery):
+                restoreWarning = .restoreRecovered(
+                    quarantinedFilenames: recovery.quarantinedFilenames
+                )
+                let restoredCount = await worldActor.restore(stored, from: snapshot)
+                reporter.error(
+                    "Invalid restore state quarantined as \(recovery.quarantinedFilenames.joined(separator: ", ")); recovered from backup"
+                )
+                reporter.info("Restore backup loaded; restored tiled windows=\(restoredCount)")
+                await updateTiledBordersFromWorld()
+                return true
+            case .recoveredEmpty(let recovery):
+                restoreWarning = .restoreReset(
+                    quarantinedFilenames: recovery.quarantinedFilenames
+                )
+                reporter.error(
+                    "Invalid restore state quarantined as \(recovery.quarantinedFilenames.joined(separator: ", ")); starting with empty layout"
+                )
+                return true
+            case .incompatible(let recovery):
+                let schemaError = recovery.backupError ?? recovery.primaryError
+                reporter.error("Restore state is from an unsupported future schema: \(schemaError.description)")
+                updateRuntimeReadiness(.degraded(.restoreIncompatible))
+                return false
             }
-            let restoredCount = await worldActor.restore(stored, from: snapshot)
-            reporter.info("Restore state loaded from \(restorePersistence.url.path); restored tiled windows=\(restoredCount)")
-            await updateTiledBordersFromWorld()
-            return true
         } catch {
             reporter.error("Restore state failed: \(String(describing: error))")
-            NSApplication.shared.terminate(nil)
+            updateRuntimeReadiness(.degraded(.restoreUnavailable))
             return false
         }
     }
@@ -2166,7 +2313,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .failure(let error):
             reporter.error("Config reload failed (\(reason)): \(error.description)")
             configHealthy = false
+            configWarning = .configReloadFailed
             menubar.updateConfigStatus(.failed(error.description))
+            if servicesStarted {
+                updateRuntimeReadiness(operationalReadiness)
+            }
             showOperatorFeedback("Config reload failed", tone: .error)
             return
         }
@@ -2177,18 +2328,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let message = String(describing: error)
             reporter.error("Config reload failed rebinding hotkeys (\(reason)): \(message)")
             configHealthy = false
+            configWarning = .configReloadFailed
             menubar.updateConfigStatus(.failed(message))
+            if servicesStarted {
+                updateRuntimeReadiness(operationalReadiness)
+            }
             showOperatorFeedback("Hotkey rebind failed", tone: .error)
             return
         }
 
         config = loaded.config
         configHealthy = true
+        startupConfigFailure = nil
+        configWarning = nil
         await worldActor.reloadConfig(loaded.config)
         overlay.updateConfig(border: loaded.config.border, hud: loaded.config.hud)
         eventTapClient?.updateModifier(loaded.config.dragModifier)
         logStartupConfig(loaded)
         menubar.updateConfigStatus(.loaded)
+        if servicesStarted {
+            updateRuntimeReadiness(operationalReadiness)
+        }
         reporter.info("Config reload completed (\(reason))")
         showOperatorFeedback("Config reloaded", tone: .success)
     }

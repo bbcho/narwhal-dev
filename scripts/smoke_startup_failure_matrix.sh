@@ -30,13 +30,12 @@ fail() {
 
 expected_started_services() {
   case "$1" in
-    menubar) echo "nothing" ;;
-    hotkeys) echo "menubar" ;;
-    axObserver) echo "menubar, hotkeys" ;;
-    displayObserver) echo "menubar, hotkeys, axObserver" ;;
-    configWatcher) echo "menubar, hotkeys, axObserver, displayObserver" ;;
-    ipcServer) echo "menubar, hotkeys, axObserver, displayObserver, configWatcher" ;;
-    dragZones) echo "menubar, hotkeys, axObserver, displayObserver, configWatcher, ipcServer" ;;
+    hotkeys) echo "nothing" ;;
+    axObserver) echo "hotkeys" ;;
+    displayObserver) echo "hotkeys, axObserver" ;;
+    configWatcher) echo "hotkeys, axObserver, displayObserver" ;;
+    ipcServer) echo "hotkeys, axObserver, displayObserver, configWatcher" ;;
+    dragZones) echo "hotkeys, axObserver, displayObserver, configWatcher, ipcServer" ;;
     *) fail "unknown matrix service: $1" ;;
   esac
 }
@@ -58,29 +57,6 @@ assert_log_absent() {
   local pattern="$1"
   if [ -f "$log_path" ] && grep -Fq "$pattern" "$log_path"; then
     fail "unexpected log pattern found: $pattern"
-  fi
-}
-
-wait_for_process_exit() {
-  local pid="$1"
-  local timeout_seconds="$2"
-  local timeout_marker="$tmp_root/process-exit-timeout"
-  rm -f "$timeout_marker"
-  (
-    sleep "$timeout_seconds"
-    if kill -0 "$pid" 2>/dev/null; then
-      touch "$timeout_marker"
-      kill "$pid" 2>/dev/null || true
-    fi
-  ) &
-  local watchdog_pid="$!"
-
-  wait "$pid" 2>/dev/null || true
-  kill "$watchdog_pid" 2>/dev/null || true
-  wait "$watchdog_pid" 2>/dev/null || true
-
-  if [ -f "$timeout_marker" ]; then
-    fail "timed out waiting for NarwhalApp to exit"
   fi
 }
 
@@ -114,12 +90,15 @@ run_case() {
   fi
 
   wait_for_log "service startup failed at $service after starting $started: injected startup failure at service $service" 20
-  wait_for_log "Runtime service startup failed; terminating" 20
-  wait_for_log "NarwhalApp stopped" 20
-  wait_for_process_exit "$app_pid" 10
+  wait_for_log "Runtime service startup failed; recovery menu remains available" 20
+  if ! kill -0 "$app_pid" 2>/dev/null; then
+    fail "NarwhalApp exited instead of preserving the recovery menu"
+  fi
+  assert_log_absent "NarwhalApp stopped"
+  wait_for_socket_absent 5
+  kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
-  wait_for_socket_absent 5
 
   assert_log_absent "Drag zones ready"
   assert_log_absent "Layout command loop ready"
@@ -137,7 +116,7 @@ export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/narwhal-
 swift build --disable-sandbox --product NarwhalApp
 bin_path="$(swift build --disable-sandbox --show-bin-path)"
 
-for service in menubar hotkeys axObserver displayObserver configWatcher ipcServer dragZones; do
+for service in hotkeys axObserver displayObserver configWatcher ipcServer dragZones; do
   run_case "$service"
 done
 

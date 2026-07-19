@@ -6,7 +6,7 @@ import AppKit
 enum MenubarIconVerification {
     static func verifyStatusItemUsesToolbarIcon() -> (passed: Bool, message: String) {
         let menubar = Menubar()
-        menubar.start(reload: {}, copyDiagnostics: {}, reset: {}, quit: {})
+        menubar.start(actions: .noOp)
         defer { menubar.stop() }
 
         guard let snapshot = menubar.debugStatusButtonSnapshot() else {

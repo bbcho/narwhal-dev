@@ -1,5 +1,28 @@
 import AppKit
+import NarwhalAppSupport
 import NarwhalCore
+
+struct MenubarActions {
+    let reloadConfig: () -> Void
+    let retryStartup: () -> Void
+    let openConfig: () -> Void
+    let openAccessibilitySettings: () -> Void
+    let revealLogs: () -> Void
+    let copyDiagnostics: () -> Void
+    let resetLayout: () -> Void
+    let quit: () -> Void
+
+    static let noOp = MenubarActions(
+        reloadConfig: {},
+        retryStartup: {},
+        openConfig: {},
+        openAccessibilitySettings: {},
+        revealLogs: {},
+        copyDiagnostics: {},
+        resetLayout: {},
+        quit: {}
+    )
+}
 
 struct MenubarOperatingStatus: Equatable {
     var accessibilityTrusted: Bool?
@@ -27,32 +50,24 @@ struct MenubarOperatingStatus: Equatable {
 final class Menubar {
     private var statusItem: NSStatusItem?
     private var configStatus: ConfigStatus = .loaded
+    private var runtimeReadiness: RuntimeReadiness = .starting
     private var operatingStatus = MenubarOperatingStatus.empty
     private let statusMenuItem = NSMenuItem(title: "Config: loaded", action: nil, keyEquivalent: "")
+    private let runtimeMenuItem = NSMenuItem(title: "Runtime: starting", action: nil, keyEquivalent: "")
     private let accessibilityMenuItem = NSMenuItem(title: "AX: unknown", action: nil, keyEquivalent: "")
     private let scopeMenuItem = NSMenuItem(title: "Scope: unknown", action: nil, keyEquivalent: "")
     private let focusMenuItem = NSMenuItem(title: "Focus: unknown", action: nil, keyEquivalent: "")
     private let lastCommandMenuItem = NSMenuItem(title: "Last: none", action: nil, keyEquivalent: "")
-    private var reload: (() -> Void)?
-    private var copyDiagnostics: (() -> Void)?
-    private var reset: (() -> Void)?
-    private var quit: (() -> Void)?
+    private let retryMenuItem = NSMenuItem(title: "Retry Startup", action: #selector(retryStartup), keyEquivalent: "")
+    private var actions: MenubarActions?
     private let lightIcon = NarwhalIconResources.statusItemIcon(variant: .light)
     private let darkIcon = NarwhalIconResources.statusItemIcon(variant: .dark)
     private var appearanceObservation: NSKeyValueObservation?
 
-    func start(
-        reload: @escaping () -> Void,
-        copyDiagnostics: @escaping () -> Void,
-        reset: @escaping () -> Void,
-        quit: @escaping () -> Void
-    ) {
+    func start(actions: MenubarActions) {
         guard statusItem == nil else { return }
 
-        self.reload = reload
-        self.copyDiagnostics = copyDiagnostics
-        self.reset = reset
-        self.quit = quit
+        self.actions = actions
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         configureStatusButton(item.button)
@@ -60,18 +75,25 @@ final class Menubar {
         let menu = NSMenu()
         [
             statusMenuItem,
+            runtimeMenuItem,
             accessibilityMenuItem,
             scopeMenuItem,
             focusMenuItem,
             lastCommandMenuItem
         ].forEach { $0.isEnabled = false }
         menu.addItem(statusMenuItem)
+        menu.addItem(runtimeMenuItem)
         menu.addItem(accessibilityMenuItem)
         menu.addItem(scopeMenuItem)
         menu.addItem(focusMenuItem)
         menu.addItem(lastCommandMenuItem)
         menu.addItem(.separator())
+        retryMenuItem.target = self
+        menu.addItem(retryMenuItem)
         menu.addItem(menuItem(title: "Reload Config", action: #selector(reloadConfig)))
+        menu.addItem(menuItem(title: "Open Config", action: #selector(openConfig)))
+        menu.addItem(menuItem(title: "Accessibility Settings", action: #selector(openAccessibilitySettings)))
+        menu.addItem(menuItem(title: "Reveal Logs", action: #selector(revealLogs)))
         menu.addItem(menuItem(title: "Copy Diagnostics", action: #selector(copyRuntimeDiagnostics)))
         menu.addItem(menuItem(title: "Reset Layout", action: #selector(resetLayout)))
         menu.addItem(.separator())
@@ -87,6 +109,11 @@ final class Menubar {
         renderStatus()
     }
 
+    func updateRuntimeReadiness(_ readiness: RuntimeReadiness) {
+        runtimeReadiness = readiness
+        renderStatus()
+    }
+
     func updateOperatingStatus(_ status: MenubarOperatingStatus) {
         operatingStatus = status
         renderStatus()
@@ -99,6 +126,8 @@ final class Menubar {
         case .failed(let message):
             statusMenuItem.title = "Config: failed - \(truncate(message, maxLength: 72))"
         }
+        runtimeMenuItem.title = "Runtime: \(runtimeReadiness.summary)"
+        retryMenuItem.isEnabled = runtimeReadiness.canRetryStartup
         accessibilityMenuItem.title = "AX: \(accessibilityDescription)"
         scopeMenuItem.title = scopeDescription
         focusMenuItem.title = focusDescription
@@ -125,16 +154,21 @@ final class Menubar {
         else { return false }
         return NSApp.sendAction(action, to: item.target, from: item)
     }
+
+    func debugMenuItem(titled title: String) -> (title: String, isEnabled: Bool)? {
+        statusItem?.menu?.items.first(where: { $0.title == title }).map { ($0.title, $0.isEnabled) }
+    }
+
+    func debugMenuTitles() -> [String] {
+        statusItem?.menu?.items.map(\.title) ?? []
+    }
 #endif
 
     func stop() {
         guard let statusItem else { return }
         NSStatusBar.system.removeStatusItem(statusItem)
         self.statusItem = nil
-        reload = nil
-        copyDiagnostics = nil
-        reset = nil
-        quit = nil
+        actions = nil
     }
 
     private func menuItem(title: String, action: Selector) -> NSMenuItem {
@@ -166,6 +200,7 @@ final class Menubar {
 
     private var needsAttention: Bool {
         if case .failed = configStatus { return true }
+        if runtimeReadiness != .operational { return true }
         if operatingStatus.accessibilityTrusted == false { return true }
         if let quality = operatingStatus.snapshotQuality,
            quality != .complete {
@@ -204,22 +239,42 @@ final class Menubar {
 
     @objc
     private func reloadConfig() {
-        reload?()
+        actions?.reloadConfig()
+    }
+
+    @objc
+    private func retryStartup() {
+        actions?.retryStartup()
+    }
+
+    @objc
+    private func openConfig() {
+        actions?.openConfig()
+    }
+
+    @objc
+    private func openAccessibilitySettings() {
+        actions?.openAccessibilitySettings()
+    }
+
+    @objc
+    private func revealLogs() {
+        actions?.revealLogs()
     }
 
     @objc
     private func copyRuntimeDiagnostics() {
-        copyDiagnostics?()
+        actions?.copyDiagnostics()
     }
 
     @objc
     private func resetLayout() {
-        reset?()
+        actions?.resetLayout()
     }
 
     @objc
     private func quitApp() {
-        quit?()
+        actions?.quit()
     }
 }
 
