@@ -25,6 +25,8 @@ Use this page as the map for Narwhal documentation.
 - [Developer guide](development.md): setup, build/test commands, coding
   guidelines, and change checklists.
 - [Design notes](../design.md): product semantics and detailed layout rules.
+- [Runtime maturity design](runtime-maturity-design.md): event observation,
+  instrumentation, background I/O, diagnostics, and verification contracts.
 - [Layout sequences 0-6](../layout-sequences-0-6.md): accepted layout sequence
   behavior.
 - [Layout sequences 0-4](../layout-sequences-0-4.md): earlier sequence
