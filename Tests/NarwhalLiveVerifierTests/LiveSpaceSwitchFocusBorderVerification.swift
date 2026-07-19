@@ -15,15 +15,22 @@ enum LiveSpaceSwitchFocusBorderVerification {
         let spaceClient = SpaceClient()
         do {
             let displays = DisplayClient().currentDisplays()
-            guard let display = displays.values.sorted(by: { $0.slot < $1.slot }).first else {
+            let sortedDisplays = displays.values.sorted(by: { $0.slot < $1.slot })
+            guard !sortedDisplays.isEmpty else {
                 return (false, "live Space-switch focus border verification requires at least one display")
             }
-            guard display.visibleFrame.width >= 480,
-                  display.visibleFrame.height >= 320
-            else {
+            let rows = spaceClient.managedDisplaySpaceRows(displays: displays)
+            guard let display = sortedDisplays.first(where: { display in
+                display.visibleFrame.width >= 480
+                    && display.visibleFrame.height >= 320
+                    && (rows[display.id]?.spaces.count ?? 0) >= 2
+            }) else {
+                let spaceCounts = sortedDisplays
+                    .map { "\($0.id.raw):\(rows[$0.id]?.spaces.count ?? 0)" }
+                    .joined(separator: ",")
                 return (
                     false,
-                    "live Space-switch focus border verification requires a usable display; visible=\(display.visibleFrame.debugDescription)"
+                    "live Space-switch focus border verification requires a usable display with at least two Spaces; displaySpaceCounts=\(spaceCounts)"
                 )
             }
 
