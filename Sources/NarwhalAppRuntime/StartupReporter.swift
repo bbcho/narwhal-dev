@@ -40,10 +40,17 @@ struct StartupReporter {
         write(level: .error, message: message)
     }
 
+    func flush() {
+        sink.flush()
+    }
+
+    var droppedLogLineCount: UInt64 {
+        sink.droppedLineCount
+    }
+
     private func write(level: LogLineLevel, message: String) {
         let line = formattedLogLine(timestamp: timestamp(), level: level, message: message)
         guard let data = line.data(using: .utf8) else { return }
-        FileHandle.standardError.write(data)
         sink.write(data, synchronizing: level == .error)
     }
 
@@ -52,31 +59,95 @@ struct StartupReporter {
     }
 }
 
-final class FileLogSink {
-    private let lock = NSLock()
-    private let handle: FileHandle?
+final class FileLogSink: @unchecked Sendable {
+    private static let defaultMaximumFileBytes: UInt64 = 5 * 1_024 * 1_024
+    private static let defaultRetainedGenerations = 3
+    private static let defaultMaximumPendingBytes = 1 * 1_024 * 1_024
+
+    private let stateLock = NSLock()
+    private let queue = DispatchQueue(label: "ca.quantim.narwhal.file-log")
+    private let queueKey = DispatchSpecificKey<UInt8>()
+    private let path: String
+    private let maximumFileBytes: UInt64
+    private let retainedGenerations: Int
+    private let maximumPendingBytes: Int
+    private var handle: FileHandle?
+    private var available = false
+    private var pendingByteCount = 0
+    private var droppedLines: UInt64 = 0
     private var reportedFailure = false
 
     var isAvailable: Bool {
-        handle != nil
+        withStateLock { available }
     }
 
-    init(path: String) {
-        handle = Self.openAppendOnlyLog(path: path)
-        if handle == nil {
-            writeStderr("Log file unavailable at \(path)\n")
+    var droppedLineCount: UInt64 {
+        withStateLock { droppedLines }
+    }
+
+    init(
+        path: String,
+        maximumFileBytes: UInt64 = FileLogSink.defaultMaximumFileBytes,
+        retainedGenerations: Int = FileLogSink.defaultRetainedGenerations,
+        maximumPendingBytes: Int = FileLogSink.defaultMaximumPendingBytes
+    ) {
+        precondition(maximumFileBytes > 0, "Log rotation size must be positive")
+        precondition(retainedGenerations >= 0, "Log generations cannot be negative")
+        precondition(maximumPendingBytes > 0, "Log pending-byte limit must be positive")
+        self.path = path
+        self.maximumFileBytes = maximumFileBytes
+        self.retainedGenerations = retainedGenerations
+        self.maximumPendingBytes = maximumPendingBytes
+        queue.setSpecific(key: queueKey, value: 1)
+        queue.async { [self] in
+            handle = prepareLogFile()
+            withStateLock { available = handle != nil }
+            if handle == nil {
+                writeStderr("Log file unavailable at \(path)\n")
+            }
         }
     }
 
-    deinit {
-        try? handle?.close()
+    func write(_ data: Data, synchronizing: Bool = false) {
+        if synchronizing {
+            onWriterQueue {
+                self.writeOnQueue(data, synchronizing: true)
+            }
+            return
+        }
+
+        let admitted = withStateLock { () -> Bool in
+            guard data.count <= maximumPendingBytes - pendingByteCount else {
+                if droppedLines < UInt64.max {
+                    droppedLines += 1
+                }
+                return false
+            }
+            pendingByteCount += data.count
+            return true
+        }
+        guard admitted else { return }
+
+        queue.async { [self] in
+            writeOnQueue(data, synchronizing: false)
+            withStateLock { pendingByteCount -= data.count }
+        }
     }
 
-    func write(_ data: Data, synchronizing: Bool = false) {
-        guard let handle else { return }
+    func flush() {
+        onWriterQueue {
+            guard let handle = self.handle else { return }
+            do {
+                try handle.synchronize()
+            } catch {
+                self.reportFailureOnce(error)
+            }
+        }
+    }
 
-        lock.lock()
-        defer { lock.unlock() }
+    private func writeOnQueue(_ data: Data, synchronizing: Bool) {
+        FileHandle.standardError.write(data)
+        guard let handle else { return }
         do {
             try handle.write(contentsOf: data)
             if synchronizing {
@@ -87,13 +158,21 @@ final class FileLogSink {
         }
     }
 
+    private func onWriterQueue(_ operation: () -> Void) {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            operation()
+        } else {
+            queue.sync(execute: operation)
+        }
+    }
+
     private func reportFailureOnce(_ error: Error) {
         guard !reportedFailure else { return }
         reportedFailure = true
         writeStderr("Log file write failed: \(String(describing: error))\n")
     }
 
-    private static func openAppendOnlyLog(path: String) -> FileHandle? {
+    private func prepareLogFile() -> FileHandle? {
         let url = URL(fileURLWithPath: path)
         let directory = url.deletingLastPathComponent()
         do {
@@ -111,6 +190,73 @@ final class FileLogSink {
             return nil
         }
 
+        rotateIfNeeded()
+        return Self.openAppendOnlyLog(path: path)
+    }
+
+    private func rotateIfNeeded() {
+        var fileStatus = stat()
+        guard Darwin.lstat(path, &fileStatus) == 0,
+              fileStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG)
+        else { return }
+
+        let currentByteCount = UInt64(max(0, fileStatus.st_size))
+        let operations = logRotationPlan(
+            currentByteCount: currentByteCount,
+            maximumByteCount: maximumFileBytes,
+            retainedGenerationCount: retainedGenerations
+        )
+        for operation in operations {
+            switch operation {
+            case .remove(let generation):
+                removeArchiveIfSafe(generation: generation)
+            case .move(let source, let destination):
+                moveArchiveIfSafe(from: source, to: destination)
+            }
+        }
+    }
+
+    private func removeArchiveIfSafe(generation: Int) {
+        let archivePath = pathForGeneration(generation)
+        var fileStatus = stat()
+        guard Darwin.lstat(archivePath, &fileStatus) == 0 else { return }
+        let kind = fileStatus.st_mode & mode_t(S_IFMT)
+        guard kind == mode_t(S_IFREG) || kind == mode_t(S_IFLNK) else {
+            writeStderr("Log rotation refused non-file archive at \(archivePath)\n")
+            return
+        }
+        if Darwin.unlink(archivePath) != 0 {
+            writeStderr("Log rotation could not remove \(archivePath): errno=\(errno)\n")
+        }
+    }
+
+    private func moveArchiveIfSafe(from sourceGeneration: Int, to destinationGeneration: Int) {
+        let source = pathForGeneration(sourceGeneration)
+        let destination = pathForGeneration(destinationGeneration)
+        var fileStatus = stat()
+        guard Darwin.lstat(source, &fileStatus) == 0 else { return }
+        let kind = fileStatus.st_mode & mode_t(S_IFMT)
+        if kind == mode_t(S_IFLNK) {
+            _ = Darwin.unlink(source)
+            return
+        }
+        guard kind == mode_t(S_IFREG) else {
+            writeStderr("Log rotation refused non-file archive at \(source)\n")
+            return
+        }
+        guard Darwin.rename(source, destination) == 0 else {
+            writeStderr("Log rotation could not move \(source) to \(destination): errno=\(errno)\n")
+            return
+        }
+        _ = Darwin.chmod(destination, mode_t(S_IRUSR | S_IWUSR))
+    }
+
+    private func pathForGeneration(_ generation: Int) -> String {
+        generation == 0 ? path : "\(path).\(generation)"
+    }
+
+    private static func openAppendOnlyLog(path: String) -> FileHandle? {
+
         let flags = O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW
         let descriptor = Darwin.open(path, flags, mode_t(S_IRUSR | S_IWUSR))
         guard descriptor >= 0 else { return nil }
@@ -124,6 +270,12 @@ final class FileLogSink {
             return nil
         }
         return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    }
+
+    private func withStateLock<Result>(_ operation: () -> Result) -> Result {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return operation()
     }
 }
 

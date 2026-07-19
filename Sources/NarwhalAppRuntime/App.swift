@@ -17,6 +17,7 @@ public enum NarwhalApplication {
 
     private static func runHeadlessCheckConfig(_ startupArguments: StartupArguments) -> Bool {
         let reporter = StartupReporter()
+        defer { reporter.flush() }
         reporter.info("NarwhalApp started")
         reporter.info("Log file: \(StartupReporter.defaultLogPath)")
 
@@ -104,7 +105,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var runningServices: RunningServices?
     private var servicesStarted = false
     private var isPaused = false
-    private var isPreparingToTerminate = false
     // AX raise failures survive environment refreshes, so exclusions are session-scoped.
     private var axRaiseBlocklist: Set<WindowID> = []
 
@@ -129,17 +129,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .checkConfig:
             let ok = loadStartupConfig()
             reporter.info("NarwhalApp stopped")
-            Darwin.exit(ok ? 0 : 1)
+            exitAfterFlushing(ok ? 0 : 1)
         case .checkEnvironment:
             guard loadStartupConfig() else {
                 reporter.info("NarwhalApp stopped")
-                Darwin.exit(1)
+                exitAfterFlushing(1)
             }
             let status = reportAccessibilityStatus(prompt: false)
             guard status.isTrusted else {
                 reporter.error("Environment check skipped because Accessibility is not trusted")
                 reporter.info("NarwhalApp stopped")
-                Darwin.exit(1)
+                exitAfterFlushing(1)
             }
             Task { @MainActor in
                 let focused = reportFocusedWindowSnapshot()
@@ -147,13 +147,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard environment.activeSpace != nil else {
                     reporter.error("Environment check failed: active Space unavailable")
                     reporter.info("NarwhalApp stopped")
-                    Darwin.exit(1)
+                    exitAfterFlushing(1)
                 }
                 if let focused {
                     await worldActor.recordExternalFocus(focused.id)
                 }
                 reporter.info("NarwhalApp stopped")
-                Darwin.exit(0)
+                exitAfterFlushing(0)
             }
             return
         case .pushLeft:
@@ -214,16 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         servicesStarted = false
         overlay.stop()
         reporter.info("NarwhalApp stopped")
-    }
-
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard !isPreparingToTerminate else { return .terminateLater }
-        isPreparingToTerminate = true
-        Task { @MainActor in
-            await restorePersistence.flushPending()
-            sender.reply(toApplicationShouldTerminate: true)
-        }
-        return .terminateLater
+        reporter.flush()
     }
 
     private func updateOperatingStatus(_ update: (inout MenubarOperatingStatus) -> Void) {
@@ -447,7 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .failure(let error):
             reporter.error(error.description)
             reporter.info("NarwhalApp stopped")
-            Darwin.exit(1)
+            exitAfterFlushing(1)
         }
     }
 
@@ -519,7 +510,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             await performPush(direction)
-            requestTermination()
+            await requestTermination()
         }
     }
 
@@ -595,7 +586,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             quit: { [weak self] in
                 Task { @MainActor in
-                    self?.requestTermination()
+                    await self?.requestTermination()
                 }
             }
         )
@@ -2513,7 +2504,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.info("IPC quit requested")
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 100_000_000)
-                self?.requestTermination()
+                await self?.requestTermination()
             }
             return .ok(commandID: commandID)
         case .pushFocused(let direction):
@@ -2820,8 +2811,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func requestTermination() {
+    private func requestTermination() async {
+        await restorePersistence.flushPending()
         NSApplication.shared.terminate(nil)
+    }
+
+    private func exitAfterFlushing(_ status: Int32) -> Never {
+        reporter.flush()
+        Darwin.exit(status)
     }
 
     private func logDisplays(_ displays: [DisplayID: DisplayInfo]) {

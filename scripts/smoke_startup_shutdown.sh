@@ -97,7 +97,7 @@ app_pid="$!"
 wait_for_log "Using restore state path $state_path" 20
 wait_for_log "Accessibility trusted" 20
 wait_for_log "Registered hotkeys:" 20
-wait_for_log "AX focus observer ready" 20
+wait_for_log "AX observer ready; notification fast path active" 20
 wait_for_log "Display observer ready" 20
 wait_for_log "Config watcher ready" 20
 wait_for_log "IPC server ready at $socket_path" 20

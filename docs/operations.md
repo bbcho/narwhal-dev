@@ -135,7 +135,9 @@ tail -f "$HOME/Library/Logs/Narwhal/narwhal.log"
 ```
 
 `NARWHAL_LOG_PATH` overrides this path for isolated smoke-test runs. Normal user
-launches should use the default private log directory.
+launches should use the default private log directory. Narwhal rotates the log
+at 5 MiB and retains three owner-readable archives (`narwhal.log.1` through
+`narwhal.log.3`).
 
 Expected healthy startup sequence:
 
@@ -144,7 +146,7 @@ Expected healthy startup sequence:
 - `Environment refreshed (startup)`
 - `Restore state loaded` or `Restore state not found`
 - `Registered hotkeys`
-- `AX focus observer ready`
+- `AX observer ready; notification fast path active`
 - `Display observer ready`
 - `Config watcher ready` or skipped because config directory is absent
 - `IPC server ready`
