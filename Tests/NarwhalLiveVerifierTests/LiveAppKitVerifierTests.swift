@@ -53,6 +53,11 @@ struct LiveAppKitVerifierTests {
         try expectPassed(RecoveryMenuVerification.verifyDegradedRuntimeActions())
     }
 
+    @Test("Support bundle save panel")
+    func supportBundleSavePanel() throws {
+        try expectPassed(SupportBundlePanelVerification.verifyConfiguration())
+    }
+
     @Test("Observation replay")
     func observationReplay() throws {
         try expectPassed(ObservationReplayVerification.verifyPartialTopologyReplay())

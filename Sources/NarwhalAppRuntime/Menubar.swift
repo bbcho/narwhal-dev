@@ -10,6 +10,7 @@ struct MenubarActions {
     let revealLogs: () -> Void
     let toggleLaunchAtLogin: () -> Void
     let checkForUpdates: () -> Void
+    let exportSupportBundle: () -> Void
     let copyDiagnostics: () -> Void
     let resetLayout: () -> Void
     let quit: () -> Void
@@ -22,6 +23,7 @@ struct MenubarActions {
         revealLogs: {},
         toggleLaunchAtLogin: {},
         checkForUpdates: {},
+        exportSupportBundle: {},
         copyDiagnostics: {},
         resetLayout: {},
         quit: {}
@@ -114,6 +116,7 @@ final class Menubar {
         menu.addItem(loginItemMenuItem)
         updateMenuItem.target = self
         menu.addItem(updateMenuItem)
+        menu.addItem(menuItem(title: "Export Support Bundle…", action: #selector(exportSupportBundle)))
         menu.addItem(menuItem(title: "Copy Diagnostics", action: #selector(copyRuntimeDiagnostics)))
         menu.addItem(menuItem(title: "Reset Layout", action: #selector(resetLayout)))
         menu.addItem(.separator())
@@ -309,6 +312,11 @@ final class Menubar {
     @objc
     private func checkForUpdates() {
         actions?.checkForUpdates()
+    }
+
+    @objc
+    private func exportSupportBundle() {
+        actions?.exportSupportBundle()
     }
 
     @objc

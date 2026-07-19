@@ -4,6 +4,7 @@ import Darwin
 import NarwhalAppSupport
 import NarwhalCore
 import NarwhalIPC
+import UniformTypeIdentifiers
 
 @MainActor
 public enum NarwhalApplication {
@@ -700,6 +701,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             checkForUpdates: { [weak self] in
                 self?.handleUpdateMenuAction()
             },
+            exportSupportBundle: { [weak self] in
+                self?.exportSupportBundleFromMenu()
+            },
             copyDiagnostics: { [weak self] in
                 Task { @MainActor in
                     await self?.copyDiagnosticsToPasteboard()
@@ -884,6 +888,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             menubar.updateUpdateStatus(updateStatus)
             updateCheckTask = nil
+        }
+    }
+
+    private func exportSupportBundleFromMenu() {
+        let panel = supportBundleSavePanel()
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        panel.begin { [weak self] response in
+            guard response == .OK,
+                  let destination = panel.url,
+                  let self
+            else { return }
+            Task { @MainActor in
+                let diagnostics = await self.runtimeDiagnostics()
+                self.reporter.flush()
+                let builder = SupportBundleBuilder(
+                    logURL: URL(fileURLWithPath: StartupReporter.defaultLogPath)
+                )
+                let result = await Task.detached(priority: .userInitiated) {
+                    Result {
+                        try builder.write(diagnostics: diagnostics, to: destination)
+                    }
+                }.value
+                switch result {
+                case .success:
+                    self.reporter.info("Support bundle exported")
+                    self.showOperatorFeedback("Support bundle exported", tone: .success)
+                case .failure(let error):
+                    self.reporter.error("Support bundle export failed: \(String(describing: error))")
+                    self.showOperatorFeedback("Support bundle export failed", tone: .error)
+                }
+            }
         }
     }
 

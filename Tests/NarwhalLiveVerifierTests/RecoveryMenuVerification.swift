@@ -16,6 +16,7 @@ enum RecoveryMenuVerification {
             revealLogs: {},
             toggleLaunchAtLogin: { retryCount += 10 },
             checkForUpdates: { retryCount += 100 },
+            exportSupportBundle: { retryCount += 1_000 },
             copyDiagnostics: {},
             resetLayout: {},
             quit: {}
@@ -42,6 +43,7 @@ enum RecoveryMenuVerification {
             "Reveal Logs",
             "Launch at Login",
             "Get Narwhal 2.0.0…",
+            "Export Support Bundle…",
             "Copy Diagnostics",
             "Reset Layout",
             "Quit Narwhal"
@@ -64,6 +66,9 @@ enum RecoveryMenuVerification {
         }
         guard menubar.debugPerformMenuItem(titled: "Get Narwhal 2.0.0…"), retryCount == 111 else {
             return (false, "available update menu item did not invoke its action")
+        }
+        guard menubar.debugPerformMenuItem(titled: "Export Support Bundle…"), retryCount == 1_111 else {
+            return (false, "Export Support Bundle did not invoke its action")
         }
         menubar.updateUpdateStatus(.checking)
         guard menubar.debugMenuItem(titled: "Checking for Updates…")?.isEnabled == false else {

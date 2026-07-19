@@ -19,6 +19,7 @@ enum DiagnosticsMenuVerification {
             revealLogs: {},
             toggleLaunchAtLogin: {},
             checkForUpdates: {},
+            exportSupportBundle: {},
             copyDiagnostics: {
                 do {
                     try copyRuntimeDiagnostics(diagnostics, to: pasteboard)
