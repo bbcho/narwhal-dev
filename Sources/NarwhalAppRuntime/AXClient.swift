@@ -118,12 +118,51 @@ enum AXSettleStrategy: Sendable {
     case servicingRunLoop
 }
 
+enum AXFrameWriteOrder: Equatable {
+    case sizeThenPosition
+    case positionThenSize
+}
+
+func axFrameWriteOrder(
+    current: CGRect?,
+    target: CGRect,
+    tolerance: CGFloat = frameWriteSettleTolerance
+) -> AXFrameWriteOrder {
+    guard let current else { return .sizeThenPosition }
+    let shrinksWidth = target.width < current.width - tolerance
+    let shrinksHeight = target.height < current.height - tolerance
+    guard !shrinksWidth, !shrinksHeight else { return .sizeThenPosition }
+
+    let expandsLeft = target.width > current.width + tolerance
+        && target.minX < current.minX - tolerance
+    let expandsUp = target.height > current.height + tolerance
+        && target.minY < current.minY - tolerance
+    return expandsLeft || expandsUp ? .positionThenSize : .sizeThenPosition
+}
+
+func confirmedObservedConstraints(
+    target: CGRect,
+    actualFrames: [CGRect],
+    tolerance: CGFloat = frameWriteSettleTolerance
+) -> WindowConstraints? {
+    guard actualFrames.count >= 2,
+          let previous = actualFrames.dropLast().last,
+          let actual = actualFrames.last,
+          previous.narwhalApproximatelyEquals(actual, tolerance: tolerance)
+    else { return nil }
+    return inferObservedConstraints(
+        target: target,
+        actual: actual,
+        tolerance: Double(tolerance)
+    )
+}
+
 @MainActor
 private struct CoordinatedFrameWrite {
     let windowID: WindowID
     let element: AXUIElement
     let target: CGRect
-    var lastFrame: CGRect
+    var observedFrames: [CGRect]
     var positionFirst: Bool
 }
 
@@ -133,6 +172,7 @@ struct AXClient {
     private let runtimeMetrics: RuntimeMetrics?
     private static let messagingTimeout: Float = 1.0
     private static let frameWriteSettleInterval: TimeInterval = 0.08
+    private static let constraintConfirmationInterval: TimeInterval = 0.20
 
     init(
         processID: pid_t = getpid(),
@@ -386,7 +426,7 @@ struct AXClient {
                     windowID: request.window.id,
                     element: element,
                     target: request.frame,
-                    lastFrame: .null,
+                    observedFrames: [],
                     positionFirst: false
                 ))
             case .failure(let error):
@@ -399,12 +439,11 @@ struct AXClient {
             for var write in pending {
                 switch focusedWindowFrame(write.element) {
                 case .success(let current):
-                    write.lastFrame = current
                     if current.narwhalApproximatelyEquals(write.target, tolerance: frameWriteSettleTolerance) {
                         outcomes[write.windowID] = .converged(actual: current)
                         continue
                     }
-                    write.positionFirst = write.target.minX < current.minX || write.target.minY < current.minY
+                    write.positionFirst = axFrameWriteOrder(current: current, target: write.target) == .positionThenSize
                 case .failure:
                     write.positionFirst = false
                 }
@@ -465,10 +504,10 @@ struct AXClient {
             for var write in pending {
                 switch focusedWindowFrame(write.element) {
                 case .success(let actual):
-                    write.lastFrame = actual
                     if actual.narwhalApproximatelyEquals(write.target, tolerance: frameWriteSettleTolerance) {
                         outcomes[write.windowID] = .converged(actual: actual)
                     } else {
+                        write.observedFrames.append(actual)
                         unsettled.append(write)
                     }
                 case .failure(let error):
@@ -478,16 +517,23 @@ struct AXClient {
             pending = unsettled
         }
 
-        for write in pending {
-            if write.lastFrame.isNull {
-                switch focusedWindowFrame(write.element) {
-                case .success(let actual):
-                    outcomes[write.windowID] = frameWriteDidNotConverge(target: write.target, actual: actual)
-                case .failure(let error):
-                    outcomes[write.windowID] = .failed(error)
+        if !pending.isEmpty {
+            await settle(for: Self.constraintConfirmationInterval)
+        }
+        for var write in pending {
+            switch focusedWindowFrame(write.element) {
+            case .success(let actual):
+                if actual.narwhalApproximatelyEquals(write.target, tolerance: frameWriteSettleTolerance) {
+                    outcomes[write.windowID] = .converged(actual: actual)
+                } else {
+                    write.observedFrames.append(actual)
+                    outcomes[write.windowID] = frameWriteDidNotConverge(
+                        target: write.target,
+                        actualFrames: write.observedFrames
+                    )
                 }
-            } else {
-                outcomes[write.windowID] = frameWriteDidNotConverge(target: write.target, actual: write.lastFrame)
+            case .failure(let error):
+                outcomes[write.windowID] = .failed(error)
             }
         }
 
@@ -827,7 +873,7 @@ struct AXClient {
 
     @MainActor
     private func setFrame(_ window: AXUIElement, to frame: CGRect) async -> AXFrameWriteOutcome {
-        var lastFrame = CGRect.null
+        var observedFrames: [CGRect] = []
 
         for _ in 0..<3 {
             let currentFrame: CGRect?
@@ -838,9 +884,7 @@ struct AXClient {
                 currentFrame = nil
             }
 
-            let positionFirst = currentFrame.map {
-                frame.minX < $0.minX || frame.minY < $0.minY
-            } ?? false
+            let positionFirst = axFrameWriteOrder(current: currentFrame, target: frame) == .positionThenSize
 
             if positionFirst {
                 switch setPosition(frame.origin, on: window) {
@@ -867,43 +911,39 @@ struct AXClient {
 
             switch focusedWindowFrame(window) {
             case .success(let actual):
-                lastFrame = actual
                 if actual.narwhalApproximatelyEquals(frame, tolerance: frameWriteSettleTolerance) {
                     return .converged(actual: actual)
                 }
+                observedFrames.append(actual)
             case .failure(let error):
                 return .failed(error)
             }
         }
 
-        if lastFrame.isNull {
-            switch focusedWindowFrame(window) {
-            case .success(let actual):
-                return frameWriteDidNotConverge(target: frame, actual: actual)
-            case .failure(let error):
-                return .failed(error)
+        await settle(for: Self.constraintConfirmationInterval)
+        switch focusedWindowFrame(window) {
+        case .success(let actual):
+            if actual.narwhalApproximatelyEquals(frame, tolerance: frameWriteSettleTolerance) {
+                return .converged(actual: actual)
             }
+            observedFrames.append(actual)
+            return frameWriteDidNotConverge(target: frame, actualFrames: observedFrames)
+        case .failure(let error):
+            return .failed(error)
         }
-
-        return frameWriteDidNotConverge(target: frame, actual: lastFrame)
     }
 
-    private func frameWriteDidNotConverge(target: CGRect, actual: CGRect) -> AXFrameWriteOutcome {
-        if frameWriteApproximatelySettled(
-            target: target,
-            actual: actual,
-            tolerance: Double(frameWriteSettleTolerance)
-        ) {
-            return .converged(actual: actual)
+    private func frameWriteDidNotConverge(target: CGRect, actualFrames: [CGRect]) -> AXFrameWriteOutcome {
+        guard let actual = actualFrames.last else {
+            return .failed(.frameDidNotConverge(target: target, actual: .null, attempts: 0))
         }
-        if let observed = inferObservedConstraints(
+        if let observed = confirmedObservedConstraints(
             target: target,
-            actual: actual,
-            tolerance: Double(frameWriteSettleTolerance)
+            actualFrames: actualFrames
         ) {
             return .clamped(actual: actual, observed: observed)
         }
-        return .failed(.frameDidNotConverge(target: target, actual: actual, attempts: 3))
+        return .failed(.frameDidNotConverge(target: target, actual: actual, attempts: actualFrames.count))
     }
 
     private func setSize(_ targetSize: CGSize, on window: AXUIElement) -> Result<Void, AXClientError> {
