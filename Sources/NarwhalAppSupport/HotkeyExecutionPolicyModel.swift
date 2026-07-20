@@ -51,6 +51,7 @@ public func workspaceStabilityPolicy(for action: HotkeyAction) -> HotkeyWorkspac
              .cascade,
              .maximizeReset,
              .undoLayout,
+             .redoLayout,
              .moveToNextDisplay,
              .focusDirection,
              .focusCycle,

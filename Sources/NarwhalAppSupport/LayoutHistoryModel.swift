@@ -25,6 +25,13 @@ public struct LayoutHistoryEntry: Equatable, Sendable {
     }
 }
 
+public enum LayoutHistoryAction: Equatable, Sendable {
+    case none
+    case record(LayoutHistoryEntry)
+    case undo(SpaceID)
+    case redo(SpaceID)
+}
+
 public struct SpaceLayoutHistory: Equatable, Sendable {
     public let undo: [LayoutHistoryEntry]
     public let redo: [LayoutHistoryEntry]

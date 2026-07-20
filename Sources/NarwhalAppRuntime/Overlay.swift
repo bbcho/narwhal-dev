@@ -1782,7 +1782,7 @@ private func commandOverlayCategory(for action: HotkeyAction) -> CommandOverlayC
             return .movement
         case .push, .center, .eject, .toggleFloat, .moveToNextDisplay, .maximizeReset:
             return .placement
-        case .swap, .resizeSplit, .balance, .shuffle, .cascade, .undoLayout:
+        case .swap, .resizeSplit, .balance, .shuffle, .cascade, .undoLayout, .redoLayout:
             return .arrangement
         case .togglePause, .resetLayout:
             return .system
@@ -1848,6 +1848,8 @@ private func commandOverlayCommand(for template: CommandTemplate) -> String {
         return "Max reset"
     case .undoLayout:
         return "Undo layout"
+    case .redoLayout:
+        return "Redo layout"
     case .moveToNextDisplay:
         return "Move display"
     case .togglePause:
@@ -1913,6 +1915,8 @@ private func commandOverlayDescription(for template: CommandTemplate) -> String 
         return "Maximize focused window and clear the rest of tile memory"
     case .undoLayout:
         return "Restore the previous tiled layout"
+    case .redoLayout:
+        return "Reapply the next tiled layout after an undo"
     case .moveToNextDisplay:
         return "Move focused window to the next display and tile it in the center"
     case .togglePause:

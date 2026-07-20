@@ -6,6 +6,7 @@ actor WorldActor {
     private var world: World
     private var nextGeneration: UInt64 = 1
     private var runtimeState = WorldRuntimeState.empty
+    private var layoutHistory = LayoutHistoryState.empty
     private let runtimeMetrics: RuntimeMetrics?
 
     init(config: Config = .default, runtimeMetrics: RuntimeMetrics? = nil) {
@@ -43,6 +44,7 @@ actor WorldActor {
             ),
             config: world.config
         )
+        layoutHistory = .empty
         return world.spaces.values.reduce(0) { total, space in
             total + space.displays.values.reduce(0) { displayTotal, state in
                 displayTotal + occupiedWindows(in: state.tree).count
@@ -82,13 +84,16 @@ actor WorldActor {
                 pruneRuntimeState()
                 return .success(nil)
             }
-            return makePlan(
+            return recordingHistory(
+                makePlan(
                 from: oldWorld,
                 to: newWorld,
                 focusedWindowID: nil,
                 undoWorld: oldWorld
-            )
-            .map(Optional.some)
+                ),
+                label: externalGeometryHistoryLabel(event),
+                beforeWorld: oldWorld
+            ).map(Optional.some)
         case .failure(let error):
             return .failure(error)
         }
@@ -104,7 +109,9 @@ actor WorldActor {
             to: constrainedWorld,
             focusedWindowID: nil,
             undoWorld: previous.undoWorld
-        )
+        ).map { replanned in
+            replanned.withHistoryAction(replannedHistoryAction(previous.historyAction, result: replanned))
+        }
     }
 
     func reloadConfig(_ config: Config) {
@@ -141,27 +148,27 @@ actor WorldActor {
     }
 
     func planPush(_ windowID: WindowID, direction: Direction) -> Result<CommandPlanResult, CommandError> {
-        planLayoutCommand(.push(windowID, direction), focusedWindowID: windowID)
+        planLayoutCommand(.push(windowID, direction), focusedWindowID: windowID, historyLabel: "Push \(direction.rawValue)")
     }
 
     func planCenter(_ windowID: WindowID) -> Result<CommandPlanResult, CommandError> {
-        planLayoutCommand(.center(windowID), focusedWindowID: windowID)
+        planLayoutCommand(.center(windowID), focusedWindowID: windowID, historyLabel: "Center")
     }
 
     func planEject(_ windowID: WindowID) -> Result<CommandPlanResult, CommandError> {
-        planLayoutCommand(.eject(windowID), focusedWindowID: windowID)
+        planLayoutCommand(.eject(windowID), focusedWindowID: windowID, historyLabel: "Eject")
     }
 
     func planToggleFloat(_ windowID: WindowID) -> Result<CommandPlanResult, CommandError> {
-        planLayoutCommand(.toggleFloat(windowID), focusedWindowID: windowID)
+        planLayoutCommand(.toggleFloat(windowID), focusedWindowID: windowID, historyLabel: "Toggle Float")
     }
 
     func planMoveToNextDisplay(_ windowID: WindowID) -> Result<CommandPlanResult, CommandError> {
-        planLayoutCommand(.moveToNextDisplay(windowID), focusedWindowID: windowID)
+        planLayoutCommand(.moveToNextDisplay(windowID), focusedWindowID: windowID, historyLabel: "Move Display")
     }
 
     func planSwap(_ windowID: WindowID, direction: Direction) -> Result<CommandPlanResult, CommandError> {
-        planLayoutCommand(.swapInTree(windowID, direction), focusedWindowID: windowID)
+        planLayoutCommand(.swapInTree(windowID, direction), focusedWindowID: windowID, historyLabel: "Swap \(direction.rawValue)")
     }
 
     func planResize(
@@ -177,7 +184,8 @@ actor WorldActor {
         direction: Direction,
         deltas: [Double]
     ) -> Result<CommandPlanResult, CommandError> {
-        measureLayoutPlan {
+        let beforeWorld = world
+        let result = measureLayoutPlan {
             advanceLayoutGeneration(onSuccess: resizeSequenceCommandPlan(
                 in: world,
                 windowID: windowID,
@@ -186,6 +194,7 @@ actor WorldActor {
                 generation: LayoutGeneration(raw: nextGeneration)
             ))
         }
+        return recordingHistory(result, label: "Resize \(direction.rawValue)", beforeWorld: beforeWorld)
     }
 
     func planBalanceActiveSpace() -> Result<CommandPlanResult, CommandError> {
@@ -194,13 +203,13 @@ actor WorldActor {
         }
         switch apply(.balance(activeSpace), to: world) {
         case .success(let newWorld):
-            return makePlan(
+            return recordingHistory(makePlan(
                 from: world,
                 to: newWorld,
                 focusedWindowID: world.spaces[activeSpace]?.focused,
                 undoWorld: world,
                 scope: .activeWorkspaces
-            )
+            ), label: "Balance", beforeWorld: world, spaceID: activeSpace)
         case .failure(let error):
             return .failure(error)
         }
@@ -212,79 +221,97 @@ actor WorldActor {
         }
         switch worldByBalancingWorkspace(key, in: world) {
         case .success(let newWorld):
-            return makePlan(
+            return recordingHistory(makePlan(
                 from: world,
                 to: newWorld,
                 focusedWindowID: windowID,
                 undoWorld: world,
                 scope: .workspace(key)
-            )
+            ), label: "Balance", beforeWorld: world, spaceID: key.spaceID)
         case .failure(let error):
             return .failure(error)
         }
     }
 
     func planShuffleActiveSpace() -> Result<CommandPlanResult, CommandError> {
+        let beforeWorld = world
         var generator = SystemRandomNumberGenerator()
         switch shuffledResetLayout(in: world, using: &generator) {
         case .success(let layout):
-            return makeCustomLayoutPlan(
+            return recordingHistory(makeCustomLayoutPlan(
                 from: world,
                 to: resetActiveSpaceTilingState(in: world),
                 layout: layout,
                 focusedWindowID: nil,
-                undoWorld: nil
-            )
+                undoWorld: world
+            ), label: "Shuffle", beforeWorld: beforeWorld)
         case .failure(let error):
             return .failure(error)
         }
     }
 
     func planCascadeActiveSpace() -> Result<CommandPlanResult, CommandError> {
+        let beforeWorld = world
         switch cascadeResetLayout(in: world) {
         case .success(let layout):
-            return makeCustomLayoutPlan(
+            return recordingHistory(makeCustomLayoutPlan(
                 from: world,
                 to: resetActiveSpaceTilingState(in: world),
                 layout: layout,
                 focusedWindowID: nil,
-                undoWorld: nil
-            )
+                undoWorld: world
+            ), label: "Cascade", beforeWorld: beforeWorld)
         case .failure(let error):
             return .failure(error)
         }
     }
 
     func planMaximizeReset(_ windowID: WindowID) -> Result<CommandPlanResult, CommandError> {
+        let beforeWorld = world
         switch maximizeResetLayout(windowID: windowID, in: world) {
         case .success(let layout):
-            return makeCustomLayoutPlan(
+            return recordingHistory(makeCustomLayoutPlan(
                 from: world,
                 to: worldBySettingFocus(windowID, in: resetActiveSpaceTilingState(in: world)),
                 layout: layout,
                 focusedWindowID: windowID,
-                undoWorld: nil
-            )
+                undoWorld: world
+            ), label: "Maximize", beforeWorld: beforeWorld)
         case .failure(let error):
             return .failure(error)
         }
     }
 
     func planDrop(windowID: WindowID, displayID: DisplayID, zoneID: ZoneID) -> Result<CommandPlanResult, CommandError> {
-        planLayoutCommand(.dropAtZone(windowID, displayID, zoneID), focusedWindowID: windowID)
+        planLayoutCommand(
+            .dropAtZone(windowID, displayID, zoneID),
+            focusedWindowID: windowID,
+            historyLabel: "Drop in \(zoneID.raw)"
+        )
     }
 
     func planUndoLastLayout() -> Result<CommandPlanResult?, CommandError> {
-        guard let undoWorld = runtimeState.undoWorld else { return .success(nil) }
-        return makePlan(from: world, to: undoWorld, focusedWindowID: undoWorld.spaces[undoWorld.activeSpace ?? SpaceID(raw: 0)]?.focused, undoWorld: world)
-            .map(Optional.some)
+        guard let spaceID = world.activeSpace,
+              let entry = layoutHistoryUndoEntry(for: spaceID, in: layoutHistory)
+        else { return .success(nil) }
+        return historyPlan(entry, useBefore: true, action: .undo(spaceID)).map(Optional.some)
+    }
+
+    func planRedoLastLayout() -> Result<CommandPlanResult?, CommandError> {
+        guard let spaceID = world.activeSpace,
+              let entry = layoutHistoryRedoEntry(for: spaceID, in: layoutHistory)
+        else { return .success(nil) }
+        return historyPlan(entry, useBefore: false, action: .redo(spaceID)).map(Optional.some)
     }
 
     func planPendingTileRules() -> Result<CommandPlanResult?, CommandError> {
         switch applyingPendingTileRules(in: world) {
         case .success(.some(let plan)):
-            return makePlan(from: world, to: plan.world, focusedWindowID: plan.focusedWindowID, undoWorld: world)
-                .map(Optional.some)
+            return recordingHistory(
+                makePlan(from: world, to: plan.world, focusedWindowID: plan.focusedWindowID, undoWorld: world),
+                label: "Apply Window Rule",
+                beforeWorld: world
+            ).map(Optional.some)
         case .success(nil):
             return .success(nil)
         case .failure(let error):
@@ -294,11 +321,17 @@ actor WorldActor {
 
     private func planLayoutCommand(
         _ command: Command,
-        focusedWindowID: WindowID?
+        focusedWindowID: WindowID?,
+        historyLabel: String
     ) -> Result<CommandPlanResult, CommandError> {
+        let beforeWorld = world
         switch apply(command, to: world) {
         case .success(let newWorld):
-            return makePlan(from: world, to: newWorld, focusedWindowID: focusedWindowID, undoWorld: world)
+            return recordingHistory(
+                makePlan(from: world, to: newWorld, focusedWindowID: focusedWindowID, undoWorld: world),
+                label: historyLabel,
+                beforeWorld: beforeWorld
+            )
         case .failure(let error):
             return .failure(error)
         }
@@ -408,14 +441,27 @@ actor WorldActor {
         world = worldByRecordingObservedConstraints(observations, in: world)
     }
 
-    func resetLayoutMemory() {
-        switch apply(.resetLayout, to: world) {
-        case .success(let resetWorld):
-            world = resetWorld
-        case .failure:
-            world = resetTilingState(in: world)
+    func planResetLayoutMemory() -> Result<CommandPlanResult, CommandError> {
+        guard let activeSpace = world.activeSpace else {
+            return .failure(.activeSpaceUnavailable)
         }
-        runtimeState = .empty
+        switch flattenedLayout(of: world) {
+        case .success(let currentLayout):
+            return recordingHistory(
+                makeCustomLayoutPlan(
+                    from: world,
+                    to: resetActiveSpaceTilingState(in: world),
+                    layout: currentLayout,
+                    focusedWindowID: nil,
+                    undoWorld: world
+                ),
+                label: "Reset",
+                beforeWorld: world,
+                spaceID: activeSpace
+            )
+        case .failure(let error):
+            return .failure(.layoutUnsatisfiable(error))
+        }
     }
 
     func restoreSnapshot() -> StoredWorld {
@@ -424,6 +470,16 @@ actor WorldActor {
 
     func commit(_ result: CommandPlanResult, appliedFrames: [WindowID: CGRect]) {
         runtimeState = worldRuntimeBySettingUndo(result.undoWorld, in: runtimeState)
+        switch result.historyAction {
+        case .none:
+            break
+        case .record(let entry):
+            layoutHistory = layoutHistoryByRecording(entry, in: layoutHistory)
+        case .undo(let spaceID):
+            layoutHistory = layoutHistoryByCommittingUndo(for: spaceID, in: layoutHistory)
+        case .redo(let spaceID):
+            layoutHistory = layoutHistoryByCommittingRedo(for: spaceID, in: layoutHistory)
+        }
         if let focusedWindowID = result.focusedWindowID {
             recordFocus(focusedWindowID)
         }
@@ -448,6 +504,92 @@ actor WorldActor {
     private func pruneRuntimeState() {
         let liveWindowIDs = Set(world.windows.keys)
         runtimeState = prunedWorldRuntimeState(liveWindowIDs: liveWindowIDs, in: runtimeState)
+        layoutHistory = prunedLayoutHistoryState(liveWindowIDs: liveWindowIDs, in: layoutHistory)
+    }
+
+    private func recordingHistory(
+        _ result: Result<CommandPlanResult, CommandError>,
+        label: String,
+        beforeWorld: World,
+        spaceID explicitSpaceID: SpaceID? = nil
+    ) -> Result<CommandPlanResult, CommandError> {
+        result.flatMap { plan in
+            let spaceID = explicitSpaceID
+                ?? plan.focusedWindowID.flatMap { workspaceKey(forWindow: $0, in: plan.plannedWorld)?.spaceID }
+                ?? plan.plannedWorld.activeSpace
+                ?? beforeWorld.activeSpace
+            guard let spaceID else { return .failure(.activeSpaceUnavailable) }
+            switch flattenedLayout(of: beforeWorld) {
+            case .success(let beforeLayout):
+                let entry = LayoutHistoryEntry(
+                    label: label,
+                    spaceID: spaceID,
+                    beforeWorld: beforeWorld,
+                    afterWorld: plan.plannedWorld,
+                    beforeLayout: beforeLayout,
+                    afterLayout: plan.desiredLayout.layout
+                )
+                return .success(plan.withHistoryAction(.record(entry)))
+            case .failure(let error):
+                return .failure(.layoutUnsatisfiable(error))
+            }
+        }
+    }
+
+    private func historyPlan(
+        _ entry: LayoutHistoryEntry,
+        useBefore: Bool,
+        action: LayoutHistoryAction
+    ) -> Result<CommandPlanResult, CommandError> {
+        let historicalWorld = useBefore ? entry.beforeWorld : entry.afterWorld
+        let historicalLayout = useBefore ? entry.beforeLayout : entry.afterLayout
+        let targetWorld = worldByRestoringHistorySpace(
+            from: historicalWorld,
+            spaceID: entry.spaceID,
+            onto: world
+        )
+        switch flattenedLayout(of: world) {
+        case .success(let currentLayout):
+            let targetLayout = layoutByRestoringHistorySpace(
+                historicalLayout,
+                historicalWorld: historicalWorld,
+                spaceID: entry.spaceID,
+                currentLayout: currentLayout,
+                currentWorld: world
+            )
+            return makeCustomLayoutPlan(
+                from: world,
+                to: targetWorld,
+                layout: targetLayout,
+                focusedWindowID: targetWorld.spaces[entry.spaceID]?.focused,
+                undoWorld: nil
+            ).map { $0.withHistoryAction(action) }
+        case .failure(let error):
+            return .failure(.layoutUnsatisfiable(error))
+        }
+    }
+
+    private func replannedHistoryAction(
+        _ action: LayoutHistoryAction,
+        result: CommandPlanResult
+    ) -> LayoutHistoryAction {
+        guard case .record(let entry) = action else { return action }
+        return .record(LayoutHistoryEntry(
+            label: entry.label,
+            spaceID: entry.spaceID,
+            beforeWorld: entry.beforeWorld,
+            afterWorld: result.plannedWorld,
+            beforeLayout: entry.beforeLayout,
+            afterLayout: result.desiredLayout.layout
+        ))
+    }
+
+    private func externalGeometryHistoryLabel(_ event: AXEvent) -> String {
+        switch event {
+        case .windowMoved: return "Manual Move"
+        case .windowResized: return "Manual Resize"
+        case .windowOpened, .windowClosed, .windowFocused: return "Window Change"
+        }
     }
 
     private func advanceLayoutGeneration<T>(

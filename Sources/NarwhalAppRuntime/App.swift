@@ -1161,6 +1161,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await performFocusPrevious()
         case .command(.undoLayout):
             await performUndoLayout()
+        case .command(.redoLayout):
+            await performRedoLayout()
         case .command(.moveToNextDisplay):
             await performMoveToNextDisplay()
         case .command(.togglePause):
@@ -1213,7 +1215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch action {
         case .command(let template):
             switch template {
-            case .push, .center, .eject, .swap, .resizeSplit, .toggleFloat, .balance, .shuffle, .cascade, .maximizeReset, .undoLayout, .moveToNextDisplay:
+            case .push, .center, .eject, .swap, .resizeSplit, .toggleFloat, .balance, .shuffle, .cascade, .maximizeReset, .undoLayout, .redoLayout, .moveToNextDisplay:
                 return true
             case .focusDirection, .focusCycle, .focusPrevious, .togglePause, .resetLayout:
                 return false
@@ -1265,20 +1267,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        await worldActor.resetLayoutMemory()
-        reporter.info("\(logPrefix) layout memory: cleared BSP trees, floating lists, focus, pending rules, and observed window minimums")
-        clearBorderOverlays()
-        updateOperatingStatus { $0.focusedWindowID = nil }
-        showOperatorFeedback("Layout memory reset", tone: .warning)
-        await persistRestore(reason: persistReason)
-        return true
+        switch await worldActor.planResetLayoutMemory() {
+        case .success(let result):
+            let completed = await applyPlannedLayout(
+                result,
+                operation: logPrefix,
+                persistReason: persistReason,
+                retryOnClamp: false,
+                showFocusBorder: false
+            ) {
+                await self.worldActor.planResetLayoutMemory()
+            }
+            if completed {
+                reporter.info("\(logPrefix) layout memory cleared for the active Space; undo remains available")
+                updateOperatingStatus { $0.focusedWindowID = nil }
+            }
+            return completed
+        case .failure(let error):
+            reporter.error("\(logPrefix) rejected: \(error.message)")
+            showOperatorFeedback("Reset failed: \(error.message)", tone: .error)
+            return false
+        }
     }
 
     @MainActor
     private func confirmResetLayout() -> Bool {
         let alert = NSAlert()
         alert.messageText = "Reset Narwhal layout memory?"
-        alert.informativeText = "This clears tracked tiling state, floating order, focus memory, pending rules, and observed window minimums for the current stored world."
+        alert.informativeText = "This clears tracked tiling state, floating order, focus memory, pending rules, and observed window minimums for the active Space. You can undo it."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Reset")
         alert.addButton(withTitle: "Cancel")
@@ -1573,6 +1589,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .failure(let error):
             reporter.error("Undo rejected by core: \(error.message)")
             showOperatorFeedback("Undo failed: \(error.message)", tone: .error)
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performRedoLayout() async -> Bool {
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            reporter.error("Redo skipped because Accessibility is not trusted")
+            showOperatorFeedback("Redo failed: Accessibility not trusted", tone: .error)
+            return false
+        }
+
+        let environment = await refreshEnvironment(reason: "pre-redo", reconciliationMode: .observeOnly)
+        guard environment.activeSpace != nil else {
+            reporter.error("Redo rejected before planning: active Space unavailable")
+            showOperatorFeedback("Redo failed: active Space unavailable", tone: .error)
+            return false
+        }
+        guard case .complete = environment.quality else {
+            reporter.error("Redo rejected before planning: environment snapshot is \(AppDelegateText.describe(environment.quality))")
+            showOperatorFeedback("Redo failed: incomplete snapshot", tone: .error)
+            return false
+        }
+
+        switch await worldActor.planRedoLastLayout() {
+        case .success(nil):
+            reporter.info("Redo skipped: no later layout")
+            showOperatorFeedback("Nothing to redo", tone: .warning, showsHUD: false)
+            return false
+        case .success(let result?):
+            return await applyPlannedRedo(result, retryOnClamp: true)
+        case .failure(let error):
+            reporter.error("Redo rejected by core: \(error.message)")
+            showOperatorFeedback("Redo failed: \(error.message)", tone: .error)
             return false
         }
     }
@@ -2270,6 +2321,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
+    private func applyPlannedRedo(_ result: CommandPlanResult, retryOnClamp: Bool) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: "Redo",
+            persistReason: "redo",
+            retryOnClamp: retryOnClamp
+        ) {
+            await self.requireRedoLayoutPlan()
+        }
+    }
+
+    @MainActor
     private func applyPlannedPendingTileRules(
         _ result: CommandPlanResult,
         reason: String,
@@ -2291,6 +2354,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .success(result)
         case .success(nil):
             return .failure(.configInvalid("nothing to undo"))
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    private func requireRedoLayoutPlan() async -> Result<CommandPlanResult, CommandError> {
+        switch await worldActor.planRedoLastLayout() {
+        case .success(let result?):
+            return .success(result)
+        case .success(nil):
+            return .failure(.configInvalid("nothing to redo"))
         case .failure(let error):
             return .failure(error)
         }

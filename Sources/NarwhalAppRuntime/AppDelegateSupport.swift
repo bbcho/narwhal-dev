@@ -128,6 +128,8 @@ enum AppDelegateText {
             return "max reset"
         case .undoLayout:
             return "undo layout"
+        case .redoLayout:
+            return "redo layout"
         case .moveToNextDisplay:
             return "move display"
         case .togglePause:

@@ -7,19 +7,33 @@ public struct CommandPlanResult: Equatable, Sendable {
     public let windows: [WindowID: WindowMetadata]
     public let plannedWorld: World
     public let undoWorld: World?
+    public let historyAction: LayoutHistoryAction
 
     public init(
         focusedWindowID: WindowID?,
         desiredLayout: DesiredLayout,
         windows: [WindowID: WindowMetadata],
         plannedWorld: World,
-        undoWorld: World?
+        undoWorld: World?,
+        historyAction: LayoutHistoryAction = .none
     ) {
         self.focusedWindowID = focusedWindowID
         self.desiredLayout = desiredLayout
         self.windows = windows
         self.plannedWorld = plannedWorld
         self.undoWorld = undoWorld
+        self.historyAction = historyAction
+    }
+
+    public func withHistoryAction(_ action: LayoutHistoryAction) -> CommandPlanResult {
+        CommandPlanResult(
+            focusedWindowID: focusedWindowID,
+            desiredLayout: desiredLayout,
+            windows: windows,
+            plannedWorld: plannedWorld,
+            undoWorld: undoWorld,
+            historyAction: action
+        )
     }
 }
 

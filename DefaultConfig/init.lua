@@ -14,6 +14,7 @@ return {
     { key = "k", modifiers = { "control", "option", "shift" }, action = { type = "swap", direction = "up" } },
     { key = "j", modifiers = { "control", "option", "shift" }, action = { type = "swap", direction = "down" } },
     { key = "z", modifiers = { "control", "option" }, action = { type = "undo_layout" } },
+    { key = "z", modifiers = { "control", "option", "shift" }, action = { type = "redo_layout" } },
     { key = "h", modifiers = { "control", "option", "command" }, action = { type = "push", direction = "left" } },
     { key = "l", modifiers = { "control", "option", "command" }, action = { type = "push", direction = "right" } },
     { key = "k", modifiers = { "control", "option", "command" }, action = { type = "push", direction = "up" } },

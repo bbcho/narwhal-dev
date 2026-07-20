@@ -70,6 +70,7 @@ public enum CommandTemplate: Equatable, Sendable {
     case cascade
     case maximizeReset
     case undoLayout
+    case redoLayout
     case moveToNextDisplay
     case togglePause
     case resetLayout
@@ -172,6 +173,7 @@ public enum DefaultKeymap {
         HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .shift]), action: .command(.swap(.up))),
         HotkeyBinding(key: KeySpec(key: "j", modifiers: [.control, .option, .shift]), action: .command(.swap(.down))),
         HotkeyBinding(key: KeySpec(key: "z", modifiers: [.control, .option]), action: .command(.undoLayout)),
+        HotkeyBinding(key: KeySpec(key: "z", modifiers: [.control, .option, .shift]), action: .command(.redoLayout)),
         HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .command]), action: .command(.push(.left))),
         HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .command]), action: .command(.push(.right))),
         HotkeyBinding(key: KeySpec(key: "k", modifiers: [.control, .option, .command]), action: .command(.push(.up))),
@@ -277,6 +279,8 @@ public enum DefaultConfigLua {
             return "{ type = \"maximize_reset\" }"
         case .undoLayout:
             return "{ type = \"undo_layout\" }"
+        case .redoLayout:
+            return "{ type = \"redo_layout\" }"
         case .moveToNextDisplay:
             return "{ type = \"move_to_next_display\" }"
         case .togglePause:

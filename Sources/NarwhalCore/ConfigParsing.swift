@@ -87,6 +87,8 @@ private struct ConfigParser {
             return .command(.maximizeReset)
         case "undo_layout":
             return .command(.undoLayout)
+        case "redo_layout":
+            return .command(.redoLayout)
         case "move_to_next_display":
             return .command(.moveToNextDisplay)
         case "toggle_pause":
