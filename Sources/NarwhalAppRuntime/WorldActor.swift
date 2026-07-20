@@ -2,6 +2,11 @@ import CoreGraphics
 import NarwhalAppSupport
 import NarwhalCore
 
+enum NamedLayoutPlanError: Error, Equatable, Sendable {
+    case application(NamedLayoutApplicationError)
+    case command(CommandError)
+}
+
 actor WorldActor {
     private var world: World
     private var nextGeneration: UInt64 = 1
@@ -317,6 +322,64 @@ actor WorldActor {
         case .failure(let error):
             return .failure(error)
         }
+    }
+
+    func planNamedLayout(
+        _ namedLayout: NamedLayout,
+        spaceID: SpaceID,
+        allowPartial: Bool
+    ) -> Result<CommandPlanResult, NamedLayoutPlanError> {
+        let application: NamedLayoutApplication
+        switch applyNamedLayout(
+            namedLayout,
+            to: spaceID,
+            in: world,
+            allowPartial: allowPartial
+        ) {
+        case .success(let planned):
+            application = planned
+        case .failure(let error):
+            return .failure(.application(error))
+        }
+
+        let result = recordingHistory(
+            makeCustomLayoutPlan(
+                from: world,
+                to: application.world,
+                layout: application.layout,
+                focusedWindowID: world.spaces[spaceID]?.focused,
+                undoWorld: world
+            ),
+            label: "Apply \(namedLayout.name)",
+            beforeWorld: world,
+            spaceID: spaceID
+        )
+        return result.mapError(NamedLayoutPlanError.command)
+    }
+
+    func captureNamedLayout(
+        id: NamedLayoutID,
+        name: String,
+        revision: Int,
+        spaceID: SpaceID,
+        includeTitleHints: Set<WindowID>
+    ) -> Result<NamedLayout, NamedLayoutValidationError> {
+        NarwhalCore.namedLayout(
+            id: id,
+            name: name,
+            revision: revision,
+            from: spaceID,
+            in: world,
+            includeTitleHints: includeTitleHints
+        )
+    }
+
+    func workbenchPresentation(snapshotQuality: AXSnapshotQuality?) -> WorkbenchPresentation {
+        NarwhalAppSupport.workbenchPresentation(
+            in: world,
+            runtime: runtimeState,
+            snapshotQuality: snapshotQuality
+        )
     }
 
     private func planLayoutCommand(

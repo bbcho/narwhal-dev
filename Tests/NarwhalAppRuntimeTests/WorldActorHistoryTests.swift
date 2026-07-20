@@ -65,6 +65,42 @@ struct WorldActorHistoryTests {
         #expect(try await actor.planEject(window.id).get().historyAction != .none)
     }
 
+    @Test("Named layouts use the regular plan, commit, and history path")
+    func namedLayoutPlanUsesCommitGate() async throws {
+        let actor = WorldActor()
+        let first = metadata(1)
+        let second = metadata(2)
+        _ = await actor.refreshEnvironment(snapshot(windows: [first, second]))
+        let firstPush = try await actor.planPush(first.id, direction: .left).get()
+        await actor.commit(firstPush, appliedFrames: firstPush.desiredLayout.delta.moves)
+        let secondPush = try await actor.planPush(second.id, direction: .right).get()
+        await actor.commit(secondPush, appliedFrames: secondPush.desiredLayout.delta.moves)
+        let saved = try await actor.captureNamedLayout(
+            id: NamedLayoutID(rawValue: "saved"),
+            name: "Saved",
+            revision: 1,
+            spaceID: SpaceID(raw: 1),
+            includeTitleHints: []
+        ).get()
+        let eject = try await actor.planEject(second.id).get()
+        await actor.commit(eject, appliedFrames: eject.desiredLayout.delta.moves)
+
+        let plan = try await actor.planNamedLayout(
+            saved,
+            spaceID: SpaceID(raw: 1),
+            allowPartial: false
+        ).get()
+
+        guard case .record(let entry) = plan.historyAction else {
+            Issue.record("Expected named layout history")
+            return
+        }
+        #expect(entry.label == "Apply Saved")
+        #expect(Set(plan.desiredLayout.layout.tiled.keys) == [first.id, second.id])
+        await actor.commit(plan, appliedFrames: plan.desiredLayout.delta.moves)
+        #expect(try await actor.planUndoLastLayout().get() != nil)
+    }
+
     private func snapshot(windows: [WindowMetadata]) -> EnvironmentSnapshot {
         let displayID = DisplayID(raw: 1)
         let spaceID = SpaceID(raw: 1)
