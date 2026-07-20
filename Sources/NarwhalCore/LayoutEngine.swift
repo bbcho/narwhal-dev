@@ -64,6 +64,28 @@ public func workspaceLayout(
     }
 }
 
+public func spaceLayout(
+    for spaceID: SpaceID,
+    in world: World
+) -> Result<Layout, UnsatisfiableLayout> {
+    guard let space = world.spaces[spaceID] else {
+        return .success(Layout(tiled: [:], floatingZOrder: [], hidden: []))
+    }
+    return space.displays.keys.sorted(by: { $0.raw < $1.raw }).reduce(
+        Result<Layout, UnsatisfiableLayout>.success(Layout(tiled: [:], floatingZOrder: [], hidden: []))
+    ) { result, displayID in
+        result.flatMap { accumulated in
+            workspaceLayout(for: WorkspaceKey(displayID: displayID, spaceID: spaceID), in: world).map { current in
+                Layout(
+                    tiled: accumulated.tiled.merging(current.tiled) { _, replacement in replacement },
+                    floatingZOrder: accumulated.floatingZOrder + current.floatingZOrder,
+                    hidden: accumulated.hidden.union(current.hidden)
+                )
+            }
+        }
+    }
+}
+
 public func tiledBorderTargets(of world: World) -> Result<[FocusBorderTarget], UnsatisfiableLayout> {
     flattenedLayout(of: world)
         .map { layout in

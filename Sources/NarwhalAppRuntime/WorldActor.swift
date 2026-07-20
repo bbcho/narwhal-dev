@@ -243,33 +243,39 @@ actor WorldActor {
     }
 
     func planShuffleActiveSpace() -> Result<CommandPlanResult, CommandError> {
+        guard let activeSpace = world.activeSpace else { return .failure(.activeSpaceUnavailable) }
         let beforeWorld = world
         var generator = SystemRandomNumberGenerator()
-        switch shuffledResetLayout(in: world, using: &generator) {
-        case .success(let layout):
-            return recordingHistory(makeCustomLayoutPlan(
-                from: world,
-                to: resetActiveSpaceTilingState(in: world),
-                layout: layout,
-                focusedWindowID: nil,
-                undoWorld: world
-            ), label: "Shuffle", beforeWorld: beforeWorld)
+        switch shuffledResetLayout(for: activeSpace, in: world, using: &generator) {
+        case .success(let replacement):
+            return layoutReplacingSpace(replacement, spaceID: activeSpace).flatMap { layout in
+                recordingHistory(makeCustomLayoutPlan(
+                    from: world,
+                    to: resetSpaceTilingState(activeSpace, in: world),
+                    layout: layout,
+                    focusedWindowID: nil,
+                    undoWorld: world
+                ), label: "Shuffle", beforeWorld: beforeWorld, spaceID: activeSpace)
+            }
         case .failure(let error):
             return .failure(error)
         }
     }
 
     func planCascadeActiveSpace() -> Result<CommandPlanResult, CommandError> {
+        guard let activeSpace = world.activeSpace else { return .failure(.activeSpaceUnavailable) }
         let beforeWorld = world
-        switch cascadeResetLayout(in: world) {
-        case .success(let layout):
-            return recordingHistory(makeCustomLayoutPlan(
-                from: world,
-                to: resetActiveSpaceTilingState(in: world),
-                layout: layout,
-                focusedWindowID: nil,
-                undoWorld: world
-            ), label: "Cascade", beforeWorld: beforeWorld)
+        switch cascadeResetLayout(for: activeSpace, in: world) {
+        case .success(let replacement):
+            return layoutReplacingSpace(replacement, spaceID: activeSpace).flatMap { layout in
+                recordingHistory(makeCustomLayoutPlan(
+                    from: world,
+                    to: resetSpaceTilingState(activeSpace, in: world),
+                    layout: layout,
+                    focusedWindowID: nil,
+                    undoWorld: world
+                ), label: "Cascade", beforeWorld: beforeWorld, spaceID: activeSpace)
+            }
         case .failure(let error):
             return .failure(error)
         }
@@ -277,15 +283,20 @@ actor WorldActor {
 
     func planMaximizeReset(_ windowID: WindowID) -> Result<CommandPlanResult, CommandError> {
         let beforeWorld = world
+        guard let spaceID = workspaceKey(forWindow: windowID, in: world)?.spaceID else {
+            return .failure(.activeSpaceUnavailable)
+        }
         switch maximizeResetLayout(windowID: windowID, in: world) {
-        case .success(let layout):
-            return recordingHistory(makeCustomLayoutPlan(
-                from: world,
-                to: worldBySettingFocus(windowID, in: resetActiveSpaceTilingState(in: world)),
-                layout: layout,
-                focusedWindowID: windowID,
-                undoWorld: world
-            ), label: "Maximize", beforeWorld: beforeWorld)
+        case .success(let replacement):
+            return layoutReplacingSpace(replacement, spaceID: spaceID).flatMap { layout in
+                recordingHistory(makeCustomLayoutPlan(
+                    from: world,
+                    to: worldBySettingFocus(windowID, in: resetSpaceTilingState(spaceID, in: world)),
+                    layout: layout,
+                    focusedWindowID: windowID,
+                    undoWorld: world
+                ), label: "Maximize", beforeWorld: beforeWorld, spaceID: spaceID)
+            }
         case .failure(let error):
             return .failure(error)
         }
@@ -528,7 +539,7 @@ actor WorldActor {
             return recordingHistory(
                 makeCustomLayoutPlan(
                     from: world,
-                    to: resetActiveSpaceTilingState(in: world),
+                    to: resetSpaceTilingState(activeSpace, in: world),
                     layout: currentLayout,
                     focusedWindowID: nil,
                     undoWorld: world
@@ -597,18 +608,18 @@ actor WorldActor {
                 ?? plan.plannedWorld.activeSpace
                 ?? beforeWorld.activeSpace
             guard let spaceID else { return .failure(.activeSpaceUnavailable) }
-            switch flattenedLayout(of: beforeWorld) {
-            case .success(let beforeLayout):
+            switch (spaceLayout(for: spaceID, in: beforeWorld), spaceLayout(for: spaceID, in: plan.plannedWorld)) {
+            case (.success(let beforeLayout), .success(let afterLayout)):
                 let entry = LayoutHistoryEntry(
                     label: label,
                     spaceID: spaceID,
                     beforeWorld: beforeWorld,
                     afterWorld: plan.plannedWorld,
                     beforeLayout: beforeLayout,
-                    afterLayout: plan.desiredLayout.layout
+                    afterLayout: afterLayout
                 )
                 return .success(plan.withHistoryAction(.record(entry)))
-            case .failure(let error):
+            case (.failure(let error), _), (_, .failure(let error)):
                 return .failure(.layoutUnsatisfiable(error))
             }
         }
@@ -652,14 +663,36 @@ actor WorldActor {
         result: CommandPlanResult
     ) -> LayoutHistoryAction {
         guard case .record(let entry) = action else { return action }
+        let afterLayout = (try? spaceLayout(for: entry.spaceID, in: result.plannedWorld).get())
+            ?? result.desiredLayout.layout
         return .record(LayoutHistoryEntry(
             label: entry.label,
             spaceID: entry.spaceID,
             beforeWorld: entry.beforeWorld,
             afterWorld: result.plannedWorld,
             beforeLayout: entry.beforeLayout,
-            afterLayout: result.desiredLayout.layout
+            afterLayout: afterLayout
         ))
+    }
+
+    private func layoutReplacingSpace(
+        _ replacement: Layout,
+        spaceID: SpaceID
+    ) -> Result<Layout, CommandError> {
+        switch flattenedLayout(of: world) {
+        case .failure(let error):
+            return .failure(.layoutUnsatisfiable(error))
+        case .success(let current):
+            let affected = world.spaces[spaceID].map(windowIDs(in:)) ?? []
+            return .success(Layout(
+                tiled: current.tiled
+                    .filter { !affected.contains($0.key) }
+                    .merging(replacement.tiled) { _, target in target },
+                floatingZOrder: current.floatingZOrder.filter { !affected.contains($0) }
+                    + replacement.floatingZOrder,
+                hidden: current.hidden.subtracting(affected).union(replacement.hidden)
+            ))
+        }
     }
 
     private func externalGeometryHistoryLabel(_ event: AXEvent) -> String {

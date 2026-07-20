@@ -101,6 +101,36 @@ struct WorldActorHistoryTests {
         #expect(try await actor.planUndoLastLayout().get() != nil)
     }
 
+    @Test("Reset and undo preserve another display's distinct active Space")
+    func perSpaceResetPreservesOtherActiveSpace() async throws {
+        let actor = WorldActor()
+        let first = metadata(1)
+        let second = WindowMetadata(
+            id: WindowID(raw: 2),
+            bundleID: BundleID(raw: "com.example.2"),
+            title: "Window 2",
+            role: "AXWindow",
+            pid: 2,
+            frame: CGRect(x: 1_000, y: 0, width: 1_000, height: 800),
+            isResizable: true,
+            isMinimized: false
+        )
+        _ = await actor.refreshEnvironment(dualSpaceSnapshot(first: first, second: second))
+        let firstPush = try await actor.planPush(first.id, direction: .left).get()
+        await actor.commit(firstPush, appliedFrames: firstPush.desiredLayout.delta.moves)
+        let secondPush = try await actor.planPush(second.id, direction: .right).get()
+        await actor.commit(secondPush, appliedFrames: secondPush.desiredLayout.delta.moves)
+        let secondSpaceTree = secondPush.plannedWorld.spaces[SpaceID(raw: 2)]?.displays[DisplayID(raw: 2)]?.tree
+
+        let reset = try await actor.planResetLayoutMemory().get()
+
+        #expect(reset.plannedWorld.spaces[SpaceID(raw: 2)]?.displays[DisplayID(raw: 2)]?.tree == secondSpaceTree)
+        #expect(reset.desiredLayout.layout.tiled[second.id] != nil)
+        await actor.commit(reset, appliedFrames: reset.desiredLayout.delta.moves)
+        let undo = try #require(try await actor.planUndoLastLayout().get())
+        #expect(undo.desiredLayout.layout.tiled[second.id] != nil)
+    }
+
     private func snapshot(windows: [WindowMetadata]) -> EnvironmentSnapshot {
         let displayID = DisplayID(raw: 1)
         let spaceID = SpaceID(raw: 1)
@@ -133,6 +163,41 @@ struct WorldActorHistoryTests {
             frame: CGRect(x: CGFloat(raw - 1) * 500, y: 0, width: 500, height: 800),
             isResizable: true,
             isMinimized: false
+        )
+    }
+
+    private func dualSpaceSnapshot(
+        first: WindowMetadata,
+        second: WindowMetadata
+    ) -> EnvironmentSnapshot {
+        let firstDisplay = DisplayID(raw: 1)
+        let secondDisplay = DisplayID(raw: 2)
+        let firstSpace = SpaceID(raw: 1)
+        let secondSpace = SpaceID(raw: 2)
+        return EnvironmentSnapshot(
+            activeSpace: firstSpace,
+            displays: [
+                firstDisplay: DisplayInfo(
+                    id: firstDisplay,
+                    slot: 0,
+                    fingerprint: nil,
+                    frame: CGRect(x: 0, y: 0, width: 1_000, height: 800),
+                    visibleFrame: CGRect(x: 0, y: 0, width: 1_000, height: 800)
+                ),
+                secondDisplay: DisplayInfo(
+                    id: secondDisplay,
+                    slot: 1,
+                    fingerprint: nil,
+                    frame: CGRect(x: 1_000, y: 0, width: 1_000, height: 800),
+                    visibleFrame: CGRect(x: 1_000, y: 0, width: 1_000, height: 800)
+                )
+            ],
+            axSnapshot: AXWindowSnapshot(windows: [first, second], quality: .complete),
+            spaceTopology: SpaceTopology(
+                activeSpaceByDisplay: [firstDisplay: firstSpace, secondDisplay: secondSpace],
+                windowSpace: [first.id: firstSpace, second.id: secondSpace],
+                quality: .managedDisplaySpaces
+            )
         )
     }
 }

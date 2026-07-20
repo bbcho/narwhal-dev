@@ -24,6 +24,19 @@ public func shuffledResetLayout<Generator: RandomNumberGenerator>(
     return .success(Layout(tiled: tiled, floatingZOrder: [], hidden: []))
 }
 
+public func shuffledResetLayout<Generator: RandomNumberGenerator>(
+    for spaceID: SpaceID,
+    in world: World,
+    using generator: inout Generator
+) -> Result<Layout, CommandError> {
+    guard world.spaces[spaceID] != nil else { return .failure(.spaceNotFound(spaceID)) }
+    return .success(shuffledResetLayout(
+        windowsByDisplay: resizableVisibleWindowsByDisplay(in: world, spaceID: spaceID),
+        world: world,
+        using: &generator
+    ))
+}
+
 public func cascadeResetLayout(in world: World) -> Result<Layout, CommandError> {
     guard world.activeSpace != nil else {
         return .failure(.activeSpaceUnavailable)
@@ -37,6 +50,14 @@ public func cascadeResetLayout(in world: World) -> Result<Layout, CommandError> 
     }
 
     return .success(Layout(tiled: tiled, floatingZOrder: [], hidden: []))
+}
+
+public func cascadeResetLayout(for spaceID: SpaceID, in world: World) -> Result<Layout, CommandError> {
+    guard world.spaces[spaceID] != nil else { return .failure(.spaceNotFound(spaceID)) }
+    return .success(cascadeResetLayout(
+        windowsByDisplay: resizableVisibleWindowsByDisplay(in: world, spaceID: spaceID),
+        world: world
+    ))
 }
 
 public func maximizeResetLayout(windowID: WindowID, in world: World) -> Result<Layout, CommandError> {
@@ -80,6 +101,49 @@ private func resizableVisibleWindowsByDisplay(in world: World) -> [DisplayID: [W
     return Dictionary(grouping: displayWindows, by: \.0).mapValues { entries in
         entries.map(\.1)
     }
+}
+
+private func resizableVisibleWindowsByDisplay(
+    in world: World,
+    spaceID: SpaceID
+) -> [DisplayID: [WindowMetadata]] {
+    guard let space = world.spaces[spaceID] else { return [:] }
+    let tracked = windowIDs(in: space)
+    let entries = world.windows.values.compactMap { window -> (DisplayID, WindowMetadata)? in
+        guard tracked.contains(window.id),
+              window.isResizable,
+              !window.isMinimized,
+              let displayID = world.windowDisplay[window.id],
+              space.displays[displayID] != nil
+        else { return nil }
+        return (displayID, window)
+    }
+    return Dictionary(grouping: entries, by: \.0).mapValues { $0.map(\.1) }
+}
+
+private func shuffledResetLayout<Generator: RandomNumberGenerator>(
+    windowsByDisplay: [DisplayID: [WindowMetadata]],
+    world: World,
+    using generator: inout Generator
+) -> Layout {
+    let tiled = resetLayoutTiledFrames(in: world, windowsByDisplay: windowsByDisplay) { windows, frame, innerGap in
+        let shuffled = randomScreenOrder(windows, using: &generator)
+        let frames = randomQuarterFrames(count: shuffled.count, in: frame, innerGap: innerGap, using: &generator)
+        return resetFrameAssignments(windows: shuffled, frames: frames)
+    }
+    return Layout(tiled: tiled, floatingZOrder: [], hidden: [])
+}
+
+private func cascadeResetLayout(
+    windowsByDisplay: [DisplayID: [WindowMetadata]],
+    world: World
+) -> Layout {
+    let tiled = resetLayoutTiledFrames(in: world, windowsByDisplay: windowsByDisplay) { windows, frame, innerGap in
+        let ordered = screenOrdered(windows)
+        let frames = cascadedQuarterFrames(count: ordered.count, in: frame, innerGap: innerGap)
+        return resetFrameAssignments(windows: ordered, frames: frames)
+    }
+    return Layout(tiled: tiled, floatingZOrder: [], hidden: [])
 }
 
 private func resetLayoutTiledFrames(
