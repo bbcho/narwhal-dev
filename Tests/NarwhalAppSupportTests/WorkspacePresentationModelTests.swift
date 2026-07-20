@@ -58,7 +58,9 @@ struct WorkspacePresentationModelTests {
         #expect(workspace.windows.count == 2)
         #expect(workspace.windows.first { $0.id == tiled.id }?.state == .manualAdjustment)
         #expect(workspace.windows.first { $0.id == tiled.id }?.isFocused == true)
+        #expect(workspace.windows.first { $0.id == tiled.id }?.ruleSource == .defaultBehavior)
         #expect(workspace.windows.first { $0.id == floating.id }?.state == .floating)
+        #expect(workspace.isActive)
     }
 
     @Test("Permission, partial inventory, and layout conflict remain distinct")

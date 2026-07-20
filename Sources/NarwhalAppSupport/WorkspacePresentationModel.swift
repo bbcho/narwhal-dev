@@ -45,6 +45,7 @@ public struct WindowPresentation: Equatable, Sendable {
     public let state: WindowManagementState
     public let isFocused: Bool
     public let constraints: WindowConstraints
+    public let ruleSource: WindowRuleSource
 
     public init(
         id: WindowID,
@@ -55,7 +56,8 @@ public struct WindowPresentation: Equatable, Sendable {
         workspaceKey: WorkspaceKey,
         state: WindowManagementState,
         isFocused: Bool,
-        constraints: WindowConstraints
+        constraints: WindowConstraints,
+        ruleSource: WindowRuleSource
     ) {
         self.id = id
         self.title = title
@@ -66,6 +68,7 @@ public struct WindowPresentation: Equatable, Sendable {
         self.state = state
         self.isFocused = isFocused
         self.constraints = constraints
+        self.ruleSource = ruleSource
     }
 }
 
@@ -77,6 +80,7 @@ public struct WorkspacePresentation: Equatable, Sendable {
     public let tree: Node
     public let windows: [WindowPresentation]
     public let health: WorkspaceHealth
+    public let isActive: Bool
 
     public init(
         key: WorkspaceKey,
@@ -85,7 +89,8 @@ public struct WorkspacePresentation: Equatable, Sendable {
         visibleFrame: CGRect,
         tree: Node,
         windows: [WindowPresentation],
-        health: WorkspaceHealth
+        health: WorkspaceHealth,
+        isActive: Bool
     ) {
         self.key = key
         self.displaySlot = displaySlot
@@ -94,6 +99,7 @@ public struct WorkspacePresentation: Equatable, Sendable {
         self.tree = tree
         self.windows = windows
         self.health = health
+        self.isActive = isActive
     }
 
     public var tiledCount: Int {
@@ -143,7 +149,12 @@ public func workbenchPresentation(
                         interaction: runtime.windowInteractions[id]
                     ),
                     isFocused: focused == id,
-                    constraints: world.windowConstraints[id] ?? WindowConstraints()
+                    constraints: world.windowConstraints[id] ?? WindowConstraints(),
+                    ruleSource: resolveWindowOpen(
+                        metadata,
+                        managedRules: world.config.managedRules,
+                        luaRules: world.config.rules
+                    ).source
                 )
             }.sorted(by: windowPresentationSort)
             return WorkspacePresentation(
@@ -153,11 +164,26 @@ public func workbenchPresentation(
                 visibleFrame: display.visibleFrame,
                 tree: displayState.tree,
                 windows: windows,
-                health: workspaceHealth(key, in: world, snapshotQuality: snapshotQuality)
+                health: workspaceHealth(key, in: world, snapshotQuality: snapshotQuality),
+                isActive: activeSpaceID(for: displayID, in: world) == spaceID
             )
         }
     }
     return WorkbenchPresentation(activeSpaceID: world.activeSpace, workspaces: presentations)
+}
+
+public struct LayoutHistoryAvailability: Equatable, Sendable {
+    public let canUndo: Bool
+    public let canRedo: Bool
+    public let undoLabel: String?
+    public let redoLabel: String?
+
+    public init(canUndo: Bool, canRedo: Bool, undoLabel: String?, redoLabel: String?) {
+        self.canUndo = canUndo
+        self.canRedo = canRedo
+        self.undoLabel = undoLabel
+        self.redoLabel = redoLabel
+    }
 }
 
 public func windowManagementState(

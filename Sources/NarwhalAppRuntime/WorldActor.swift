@@ -382,6 +382,17 @@ actor WorldActor {
         )
     }
 
+    func layoutHistoryAvailability(spaceID: SpaceID) -> LayoutHistoryAvailability {
+        let undo = layoutHistoryUndoEntry(for: spaceID, in: layoutHistory)
+        let redo = layoutHistoryRedoEntry(for: spaceID, in: layoutHistory)
+        return LayoutHistoryAvailability(
+            canUndo: undo != nil,
+            canRedo: redo != nil,
+            undoLabel: undo?.label,
+            redoLabel: redo?.label
+        )
+    }
+
     private func planLayoutCommand(
         _ command: Command,
         focusedWindowID: WindowID?,
