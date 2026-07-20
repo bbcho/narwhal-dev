@@ -4,20 +4,38 @@ import Testing
 
 @Suite("Shared geometry helpers")
 struct GeometryTests {
-    @Test("Weighted split frames give the final cell the remaining extent")
+    @Test("Weighted split frames quantize shared edges and give the final cell the remaining extent")
     func weightedSplitFramesGiveFinalCellRemainingExtent() {
         let frame = CGRect(x: 10, y: 20, width: 100, height: 50)
 
         let frames = splitFrames(frame, axis: .horizontal, weights: [1, 2, 3])
 
         let expected = [
-            CGRect(x: 10, y: 20, width: CGFloat(100.0 / 6.0), height: 50),
-            CGRect(x: 10 + CGFloat(100.0 / 6.0), y: 20, width: CGFloat(200.0 / 6.0), height: 50),
+            CGRect(x: 10, y: 20, width: 17, height: 50),
+            CGRect(x: 27, y: 20, width: 33, height: 50),
             CGRect(x: 60, y: 20, width: 50, height: 50)
         ]
         #expect(zip(frames, expected).allSatisfy { actual, expected in
             actual.narwhalApproximatelyEquals(expected, tolerance: 0.000_001)
         })
+    }
+
+    @Test("Thirds use representable shared boundaries without losing outer extent")
+    func thirdsUseRepresentableSharedBoundaries() {
+        let frame = CGRect(x: 0, y: 30, width: 3_008, height: 1_562)
+
+        let horizontal = splitFrames(frame, axis: .horizontal, weights: [1, 1, 1])
+        #expect(horizontal == [
+            CGRect(x: 0, y: 30, width: 1_003, height: 1_562),
+            CGRect(x: 1_003, y: 30, width: 1_002.5, height: 1_562),
+            CGRect(x: 2_005.5, y: 30, width: 1_002.5, height: 1_562)
+        ])
+
+        let nested = splitFrames(horizontal[0], axis: .horizontal, weights: [1, 1])
+        #expect(nested == [
+            CGRect(x: 0, y: 30, width: 501.5, height: 1_562),
+            CGRect(x: 501.5, y: 30, width: 501.5, height: 1_562)
+        ])
     }
 
     @Test("Display attribution prefers intersection then nearest center")

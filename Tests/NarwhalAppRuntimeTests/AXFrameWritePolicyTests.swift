@@ -35,8 +35,8 @@ struct AXFrameWritePolicyTests {
         )
     }
 
-    @Test("A browser-chrome offset inside the settle contract is a successful write")
-    func approximateBrowserFrameIsConverged() {
+    @Test("An uncorrected browser-chrome offset that spills outside its cell is rejected")
+    func uncorrectedBrowserFrameSpillIsRejected() {
         let target = CGRect(x: 16, y: 499.36, width: 1_410, height: 1_076.64)
         let actual = CGRect(x: 16, y: 515, width: 1_410, height: 1_076)
 
@@ -44,17 +44,17 @@ struct AXFrameWritePolicyTests {
             target: target,
             actualFrames: [actual, actual]
         ) {
-        case .converged(let settled):
-            #expect(settled == actual)
-        case .clamped, .failed:
-            #expect(Bool(false), "Expected the accepted Firefox chrome offset to converge")
+        case .failed:
+            break
+        case .converged, .clamped:
+            #expect(Bool(false), "Expected the uncorrected Firefox frame spill to fail")
         }
     }
 
-    @Test("Terminal character-grid rounding is a successful write")
-    func terminalCharacterGridRoundingIsConverged() {
-        let target = CGRect(x: 1504, y: 550.666_666_666_7, width: 1504, height: 520.666_666_666_7)
-        let actual = CGRect(x: 1504, y: 551, width: 1507, height: 525)
+    @Test("A corrected browser-chrome frame inside its planned cell is successful")
+    func correctedBrowserFrameIsConverged() {
+        let target = CGRect(x: 16, y: 499.36, width: 1_410, height: 1_076.64)
+        let actual = CGRect(x: 16, y: 515, width: 1_410, height: 1_060)
 
         switch AXClient().frameWriteDidNotConverge(
             target: target,
@@ -63,7 +63,39 @@ struct AXFrameWritePolicyTests {
         case .converged(let settled):
             #expect(settled == actual)
         case .clamped, .failed:
-            #expect(Bool(false), "Expected Terminal character-grid rounding to converge")
+            #expect(Bool(false), "Expected the contained Firefox frame to converge")
+        }
+    }
+
+    @Test("Uncorrected Terminal character-grid spill is not accepted as a successful write")
+    func uncorrectedTerminalCharacterGridSpillIsNotConverged() {
+        let target = CGRect(x: 1504, y: 550.666_666_666_7, width: 1504, height: 520.666_666_666_7)
+        let actual = CGRect(x: 1504, y: 551, width: 1507, height: 525)
+
+        switch AXClient().frameWriteDidNotConverge(
+            target: target,
+            actualFrames: [actual, actual]
+        ) {
+        case .failed:
+            break
+        case .converged, .clamped:
+            #expect(Bool(false), "Expected an uncorrected frame spill to fail")
+        }
+    }
+
+    @Test("A corrected Terminal frame inside its planned cell is successful")
+    func correctedTerminalFrameIsConverged() {
+        let target = CGRect(x: 1504, y: 550.666_666_666_7, width: 1504, height: 520.666_666_666_7)
+        let actual = CGRect(x: 1504, y: 551, width: 1500, height: 511)
+
+        switch AXClient().frameWriteDidNotConverge(
+            target: target,
+            actualFrames: [actual, actual]
+        ) {
+        case .converged(let settled):
+            #expect(settled == actual)
+        case .clamped, .failed:
+            #expect(Bool(false), "Expected the contained Terminal frame to converge")
         }
     }
 }

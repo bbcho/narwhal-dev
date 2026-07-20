@@ -241,6 +241,61 @@ struct LayoutSolverTests {
         let actual = CGRect(x: 1504, y: 551, width: 1507, height: 525)
 
         #expect(frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 4))
+        let correction = frameWriteContainmentCorrection(
+            target: target,
+            actual: actual,
+            tolerance: 4
+        )
+        #expect(correction?.narwhalApproximatelyEquals(CGRect(
+            x: 1504,
+            y: 550.666_666_666_7,
+            width: 1497,
+            height: 512
+        ), tolerance: 0.001) == true)
+    }
+
+    @Test("Containment correction crosses a Terminal row-rounding threshold")
+    func containmentCorrectionCrossesTerminalRowThreshold() {
+        let target = CGRect(x: 0, y: 30, width: 3008, height: 312.4)
+        let actual = CGRect(x: 0, y: 30, width: 3005, height: 315)
+
+        let correction = frameWriteContainmentCorrection(
+            target: target,
+            actual: actual,
+            tolerance: 4
+        )
+        #expect(correction?.narwhalApproximatelyEquals(
+            CGRect(x: 0, y: 30, width: 3008, height: 305.8),
+            tolerance: 0.001
+        ) == true)
+    }
+
+    @Test("Frames already inside their cells need no containment correction")
+    func containedFramesNeedNoCorrection() {
+        let target = CGRect(x: 0, y: 30, width: 1504, height: 781)
+        let actual = CGRect(x: 0, y: 30, width: 1500, height: 777)
+
+        #expect(frameWriteContainmentCorrection(
+            target: target,
+            actual: actual,
+            tolerance: 4
+        ) == nil)
+    }
+
+    @Test("Sub-point leading-edge spill is nudged inside its lane")
+    func subPointLeadingEdgeSpillIsCorrected() {
+        let target = CGRect(x: 1002.666_666_666_7, y: 811, width: 501.333_333_333_3, height: 781)
+        let actual = CGRect(x: 1002, y: 811, width: 492, height: 777)
+
+        let correction = frameWriteContainmentCorrection(
+            target: target,
+            actual: actual,
+            tolerance: 4
+        )
+        #expect(correction?.narwhalApproximatelyEquals(
+            CGRect(x: 1007.333_333_333_4, y: 811, width: 496.666_666_666_6, height: 781),
+            tolerance: 0.001
+        ) == true)
     }
 
     @Test("Expansion beyond edge-rounding slack remains a minimum-size signal")
@@ -253,6 +308,11 @@ struct LayoutSolverTests {
             actual: actual,
             tolerance: 4
         ) == WindowConstraints(minHeight: 506))
+        #expect(frameWriteContainmentCorrection(
+            target: target,
+            actual: actual,
+            tolerance: 4
+        ) == nil)
         #expect(!frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 4))
     }
 

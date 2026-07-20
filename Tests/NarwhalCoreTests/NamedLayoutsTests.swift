@@ -161,16 +161,13 @@ struct NamedLayoutsTests {
                 let actualFrames = application.layout.tiled.values.sorted { lhs, rhs in
                     axis == .horizontal ? lhs.minX < rhs.minX : lhs.minY < rhs.minY
                 }
-                let expectedFrames = equalFrames(
-                    count: count,
-                    axis: axis,
-                    in: world.displays[DisplayID(raw: 1)]!.visibleFrame
-                )
+                let visibleFrame = world.displays[DisplayID(raw: 1)]!.visibleFrame
 
                 #expect(actualFrames.count == count)
-                #expect(zip(actualFrames, expectedFrames).allSatisfy { actual, expected in
-                    actual.narwhalApproximatelyEquals(expected, tolerance: 0.000_001)
-                }, "Uneven \(axis.rawValue) layout at count \(count): \(actualFrames)")
+                #expect(
+                    isEqualRepresentableAxisLayout(actualFrames, axis: axis, in: visibleFrame),
+                    "Uneven \(axis.rawValue) layout at count \(count): \(actualFrames)"
+                )
             }
         }
     }
@@ -301,27 +298,36 @@ struct NamedLayoutsTests {
         )
     }
 
-    private func equalFrames(count: Int, axis: Axis, in frame: CGRect) -> [CGRect] {
-        (0..<count).map { index in
-            let start = CGFloat(index) / CGFloat(count)
-            let end = CGFloat(index + 1) / CGFloat(count)
-            switch axis {
-            case .horizontal:
-                return CGRect(
-                    x: frame.minX + frame.width * start,
-                    y: frame.minY,
-                    width: frame.width * (end - start),
-                    height: frame.height
-                )
-            case .vertical:
-                return CGRect(
-                    x: frame.minX,
-                    y: frame.minY + frame.height * start,
-                    width: frame.width,
-                    height: frame.height * (end - start)
-                )
-            }
+    private func isEqualRepresentableAxisLayout(
+        _ frames: [CGRect],
+        axis: Axis,
+        in outer: CGRect
+    ) -> Bool {
+        guard let first = frames.first, let last = frames.last else { return false }
+        let lengths = frames.map { axis == .horizontal ? $0.width : $0.height }
+        guard let minimumLength = lengths.min(), let maximumLength = lengths.max() else { return false }
+        let coversOuter = axis == .horizontal
+            ? abs(first.minX - outer.minX) <= 0.000_001 && abs(last.maxX - outer.maxX) <= 0.000_001
+            : abs(first.minY - outer.minY) <= 0.000_001 && abs(last.maxY - outer.maxY) <= 0.000_001
+        let sharedEdges = zip(frames, frames.dropFirst()).allSatisfy { leading, trailing in
+            axis == .horizontal
+                ? abs(leading.maxX - trailing.minX) <= 0.000_001
+                : abs(leading.maxY - trailing.minY) <= 0.000_001
         }
+        let crossAxisMatches = frames.allSatisfy { frame in
+            axis == .horizontal
+                ? abs(frame.minY - outer.minY) <= 0.000_001 && abs(frame.height - outer.height) <= 0.000_001
+                : abs(frame.minX - outer.minX) <= 0.000_001 && abs(frame.width - outer.width) <= 0.000_001
+        }
+        let internalBoundariesAreRepresentable = frames.dropFirst().allSatisfy { frame in
+            let boundary = axis == .horizontal ? frame.minX : frame.minY
+            return abs(boundary * 2 - (boundary * 2).rounded()) <= 0.000_001
+        }
+        return coversOuter
+            && sharedEdges
+            && crossAxisMatches
+            && internalBoundariesAreRepresentable
+            && maximumLength - minimumLength <= 0.5
     }
 
     private func slot(

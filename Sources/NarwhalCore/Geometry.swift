@@ -54,33 +54,47 @@ private func splitLengths(extent: CGFloat, weights: [Double], totalWeight: Doubl
 }
 
 private struct SplitFrameAccumulator {
-    let offset: CGFloat
+    let idealOffset: CGFloat
+    let renderedOffset: CGFloat
     let frames: [CGRect]
 }
 
 private func framesFromLengths(_ frame: CGRect, axis: Axis, lengths: [CGFloat]) -> [CGRect] {
-    lengths.enumerated().reduce(SplitFrameAccumulator(offset: 0, frames: [])) { state, entry in
+    lengths.enumerated().reduce(SplitFrameAccumulator(idealOffset: 0, renderedOffset: 0, frames: [])) { state, entry in
         let (index, length) = entry
         let isLast = index == lengths.count - 1
+        let idealBoundaryOffset = state.idealOffset + length
         switch axis {
         case .horizontal:
-            let width = isLast ? frame.width - state.offset : length
+            let renderedBoundaryOffset = isLast
+                ? frame.width
+                : quantizedSplitBoundary(frame.minX + idealBoundaryOffset) - frame.minX
+            let width = max(0, renderedBoundaryOffset - state.renderedOffset)
             return SplitFrameAccumulator(
-                offset: state.offset + width,
+                idealOffset: idealBoundaryOffset,
+                renderedOffset: state.renderedOffset + width,
                 frames: state.frames + [
-                    CGRect(x: frame.minX + state.offset, y: frame.minY, width: width, height: frame.height)
+                    CGRect(x: frame.minX + state.renderedOffset, y: frame.minY, width: width, height: frame.height)
                 ]
             )
         case .vertical:
-            let height = isLast ? frame.height - state.offset : length
+            let renderedBoundaryOffset = isLast
+                ? frame.height
+                : quantizedSplitBoundary(frame.minY + idealBoundaryOffset) - frame.minY
+            let height = max(0, renderedBoundaryOffset - state.renderedOffset)
             return SplitFrameAccumulator(
-                offset: state.offset + height,
+                idealOffset: idealBoundaryOffset,
+                renderedOffset: state.renderedOffset + height,
                 frames: state.frames + [
-                    CGRect(x: frame.minX, y: frame.minY + state.offset, width: frame.width, height: height)
+                    CGRect(x: frame.minX, y: frame.minY + state.renderedOffset, width: frame.width, height: height)
                 ]
             )
         }
     }.frames
+}
+
+private func quantizedSplitBoundary(_ value: CGFloat) -> CGFloat {
+    (value * 2).rounded(.up) / 2
 }
 
 public extension CGRect {

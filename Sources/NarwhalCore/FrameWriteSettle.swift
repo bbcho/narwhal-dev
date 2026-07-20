@@ -29,6 +29,47 @@ public func frameWriteApproximatelySettled(
     return overlapRatio >= CGFloat(min(max(0, minimumOverlapRatio), 1))
 }
 
+public func frameWriteContainmentCorrection(
+    target: CGRect,
+    actual: CGRect,
+    tolerance: Double,
+    containmentTolerance: Double = 0.5
+) -> CGRect? {
+    guard frameWriteApproximatelySettled(
+        target: target,
+        actual: actual,
+        tolerance: tolerance
+    ) else {
+        return nil
+    }
+
+    let containmentTolerance = CGFloat(max(0, containmentTolerance))
+    let leadingX = max(0, target.minX - actual.minX)
+    let trailingX = max(0, actual.maxX - target.maxX)
+    let leadingY = max(0, target.minY - actual.minY)
+    let trailingY = max(0, actual.maxY - target.maxY)
+    guard leadingX > containmentTolerance
+            || trailingX > containmentTolerance
+            || leadingY > containmentTolerance
+            || trailingY > containmentTolerance
+    else {
+        return nil
+    }
+
+    let margin = CGFloat(max(0, tolerance))
+    let leadingXCorrection = leadingX > containmentTolerance ? leadingX + margin : 0
+    let trailingXCorrection = trailingX > containmentTolerance ? trailingX + margin : 0
+    let leadingYCorrection = leadingY > containmentTolerance ? leadingY + margin : 0
+    let trailingYCorrection = trailingY > containmentTolerance ? trailingY + margin : 0
+    let correction = CGRect(
+        x: target.minX + leadingXCorrection,
+        y: target.minY + leadingYCorrection,
+        width: target.width - leadingXCorrection - trailingXCorrection,
+        height: target.height - leadingYCorrection - trailingYCorrection
+    )
+    return correction.narwhalIsFinitePositive ? correction : nil
+}
+
 public func frameSizeApproximatelySettled(
     target: CGSize,
     actual: CGSize,

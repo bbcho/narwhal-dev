@@ -140,6 +140,19 @@ func axFrameWriteOrder(
     return expandsLeft || expandsUp ? .positionThenSize : .sizeThenPosition
 }
 
+func axFrameWriteSettledInsideTarget(target: CGRect, actual: CGRect) -> Bool {
+    frameWriteContainmentCorrection(
+        target: target,
+        actual: actual,
+        tolerance: Double(frameWriteSettleTolerance)
+    ) == nil
+        && frameWriteApproximatelySettled(
+            target: target,
+            actual: actual,
+            tolerance: Double(frameWriteSettleTolerance)
+        )
+}
+
 func confirmedObservedConstraints(
     target: CGRect,
     actualFrames: [CGRect],
@@ -162,6 +175,7 @@ private struct CoordinatedFrameWrite {
     let windowID: WindowID
     let element: AXUIElement
     let target: CGRect
+    var appliedTarget: CGRect
     var observedFrames: [CGRect]
     var positionFirst: Bool
 }
@@ -426,6 +440,7 @@ struct AXClient {
                     windowID: request.window.id,
                     element: element,
                     target: request.frame,
+                    appliedTarget: request.frame,
                     observedFrames: [],
                     positionFirst: false
                 ))
@@ -439,11 +454,19 @@ struct AXClient {
             for var write in pending {
                 switch focusedWindowFrame(write.element) {
                 case .success(let current):
-                    if current.narwhalApproximatelyEquals(write.target, tolerance: frameWriteSettleTolerance) {
+                    if axFrameWriteSettledInsideTarget(target: write.target, actual: current) {
                         outcomes[write.windowID] = .converged(actual: current)
                         continue
                     }
-                    write.positionFirst = axFrameWriteOrder(current: current, target: write.target) == .positionThenSize
+                    write.appliedTarget = frameWriteContainmentCorrection(
+                        target: write.target,
+                        actual: current,
+                        tolerance: Double(frameWriteSettleTolerance)
+                    ) ?? write.target
+                    write.positionFirst = axFrameWriteOrder(
+                        current: current,
+                        target: write.appliedTarget
+                    ) == .positionThenSize
                 case .failure:
                     write.positionFirst = false
                 }
@@ -455,7 +478,7 @@ struct AXClient {
             var didWritePositionFirst = false
             pending = pending.filter { write in
                 guard write.positionFirst else { return true }
-                switch setPosition(write.target.origin, on: write.element) {
+                switch setPosition(write.appliedTarget.origin, on: write.element) {
                 case .success:
                     didWritePositionFirst = true
                     return true
@@ -471,7 +494,7 @@ struct AXClient {
 
             var didWriteSize = false
             pending = pending.filter { write in
-                switch setSize(write.target.size, on: write.element) {
+                switch setSize(write.appliedTarget.size, on: write.element) {
                 case .success:
                     didWriteSize = true
                     return true
@@ -487,7 +510,7 @@ struct AXClient {
 
             var didWritePosition = false
             pending = pending.filter { write in
-                switch setPosition(write.target.origin, on: write.element) {
+                switch setPosition(write.appliedTarget.origin, on: write.element) {
                 case .success:
                     didWritePosition = true
                     return true
@@ -504,7 +527,7 @@ struct AXClient {
             for var write in pending {
                 switch focusedWindowFrame(write.element) {
                 case .success(let actual):
-                    if actual.narwhalApproximatelyEquals(write.target, tolerance: frameWriteSettleTolerance) {
+                    if axFrameWriteSettledInsideTarget(target: write.target, actual: actual) {
                         outcomes[write.windowID] = .converged(actual: actual)
                     } else {
                         write.observedFrames.append(actual)
@@ -523,7 +546,7 @@ struct AXClient {
         for var write in pending {
             switch focusedWindowFrame(write.element) {
             case .success(let actual):
-                if actual.narwhalApproximatelyEquals(write.target, tolerance: frameWriteSettleTolerance) {
+                if axFrameWriteSettledInsideTarget(target: write.target, actual: actual) {
                     outcomes[write.windowID] = .converged(actual: actual)
                 } else {
                     write.observedFrames.append(actual)
@@ -874,20 +897,30 @@ struct AXClient {
     @MainActor
     private func setFrame(_ window: AXUIElement, to frame: CGRect) async -> AXFrameWriteOutcome {
         var observedFrames: [CGRect] = []
+        var appliedFrame = frame
 
         for _ in 0..<3 {
             let currentFrame: CGRect?
             switch focusedWindowFrame(window) {
             case .success(let current):
+                if axFrameWriteSettledInsideTarget(target: frame, actual: current) {
+                    return .converged(actual: current)
+                }
                 currentFrame = current
+                appliedFrame = frameWriteContainmentCorrection(
+                    target: frame,
+                    actual: current,
+                    tolerance: Double(frameWriteSettleTolerance)
+                ) ?? frame
             case .failure:
                 currentFrame = nil
+                appliedFrame = frame
             }
 
-            let positionFirst = axFrameWriteOrder(current: currentFrame, target: frame) == .positionThenSize
+            let positionFirst = axFrameWriteOrder(current: currentFrame, target: appliedFrame) == .positionThenSize
 
             if positionFirst {
-                switch setPosition(frame.origin, on: window) {
+                switch setPosition(appliedFrame.origin, on: window) {
                 case .success:
                     await settle(for: Self.frameWriteSettleInterval)
                 case .failure(let error):
@@ -895,14 +928,14 @@ struct AXClient {
                 }
             }
 
-            switch setSize(frame.size, on: window) {
+            switch setSize(appliedFrame.size, on: window) {
             case .success:
                 await settle(for: Self.frameWriteSettleInterval)
             case .failure(let error):
                 return .failed(error)
             }
 
-            switch setPosition(frame.origin, on: window) {
+            switch setPosition(appliedFrame.origin, on: window) {
             case .success:
                 await settle(for: Self.frameWriteSettleInterval)
             case .failure(let error):
@@ -911,7 +944,7 @@ struct AXClient {
 
             switch focusedWindowFrame(window) {
             case .success(let actual):
-                if actual.narwhalApproximatelyEquals(frame, tolerance: frameWriteSettleTolerance) {
+                if axFrameWriteSettledInsideTarget(target: frame, actual: actual) {
                     return .converged(actual: actual)
                 }
                 observedFrames.append(actual)
@@ -923,7 +956,7 @@ struct AXClient {
         await settle(for: Self.constraintConfirmationInterval)
         switch focusedWindowFrame(window) {
         case .success(let actual):
-            if actual.narwhalApproximatelyEquals(frame, tolerance: frameWriteSettleTolerance) {
+            if axFrameWriteSettledInsideTarget(target: frame, actual: actual) {
                 return .converged(actual: actual)
             }
             observedFrames.append(actual)
@@ -936,6 +969,13 @@ struct AXClient {
     func frameWriteDidNotConverge(target: CGRect, actualFrames: [CGRect]) -> AXFrameWriteOutcome {
         guard let actual = actualFrames.last else {
             return .failed(.frameDidNotConverge(target: target, actual: .null, attempts: 0))
+        }
+        if frameWriteContainmentCorrection(
+            target: target,
+            actual: actual,
+            tolerance: Double(frameWriteSettleTolerance)
+        ) != nil {
+            return .failed(.frameDidNotConverge(target: target, actual: actual, attempts: actualFrames.count))
         }
         if frameWriteApproximatelySettled(
             target: target,
