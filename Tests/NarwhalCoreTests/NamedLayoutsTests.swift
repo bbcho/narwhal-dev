@@ -147,6 +147,34 @@ struct NamedLayoutsTests {
         #expect(Set(application.layout.tiled.keys) == [editor.id, browser.id])
     }
 
+    @Test("Four through eight windows fill equal rows and columns")
+    func fourThroughEightWindowsFillEqualRowsAndColumns() throws {
+        for count in 4...8 {
+            for axis in Axis.allCases {
+                let world = matrixWorld(windowCount: count)
+                let application = try applyNamedLayout(
+                    matrixLayout(windowCount: count, axis: axis),
+                    to: SpaceID(raw: 7),
+                    in: world,
+                    allowPartial: false
+                ).get()
+                let actualFrames = application.layout.tiled.values.sorted { lhs, rhs in
+                    axis == .horizontal ? lhs.minX < rhs.minX : lhs.minY < rhs.minY
+                }
+                let expectedFrames = equalFrames(
+                    count: count,
+                    axis: axis,
+                    in: world.displays[DisplayID(raw: 1)]!.visibleFrame
+                )
+
+                #expect(actualFrames.count == count)
+                #expect(zip(actualFrames, expectedFrames).allSatisfy { actual, expected in
+                    actual.narwhalApproximatelyEquals(expected, tolerance: 0.000_001)
+                }, "Uneven \(axis.rawValue) layout at count \(count): \(actualFrames)")
+            }
+        }
+    }
+
     @Test("Saving a tree never stores a window ID and only includes requested title hints")
     func capturesSemanticTemplate() throws {
         let displayID = DisplayID(raw: 1)
@@ -217,6 +245,83 @@ struct NamedLayoutsTests {
                 )
             ]
         )
+    }
+
+    private func matrixLayout(windowCount: Int, axis: Axis) -> NamedLayout {
+        NamedLayout(
+            id: NamedLayoutID(rawValue: "matrix-\(axis.rawValue)-\(windowCount)"),
+            name: "Matrix \(axis.rawValue) \(windowCount)",
+            displays: [
+                DisplayLayoutTemplate(
+                    displaySlot: 0,
+                    root: .split(
+                        axis: axis,
+                        cells: (1...windowCount).map { index in
+                            LayoutTemplateCell(
+                                weight: 1,
+                                node: .slot(slot("window-\(index)", bundleID: "com.example.editor"))
+                            )
+                        }
+                    )
+                )
+            ]
+        )
+    }
+
+    private func matrixWorld(windowCount: Int) -> World {
+        let displayID = DisplayID(raw: 1)
+        let spaceID = SpaceID(raw: 7)
+        let windows = (1...windowCount).map { index in
+            candidate(id: index, x: Double(index * 20), displaySlot: 0).window
+        }
+        return World(
+            displays: [displayID: DisplayInfo(
+                id: displayID,
+                slot: 0,
+                fingerprint: "display",
+                frame: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                visibleFrame: CGRect(x: 0, y: 0, width: 1200, height: 800)
+            )],
+            activeSpace: spaceID,
+            spaces: [spaceID: SpaceState(
+                id: spaceID,
+                displays: [displayID: DisplaySpaceState(
+                    displayID: displayID,
+                    tree: .void,
+                    floating: windows.map(\.id)
+                )],
+                focused: windows.first?.id
+            )],
+            windows: Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) }),
+            windowDisplay: Dictionary(uniqueKeysWithValues: windows.map { ($0.id, displayID) }),
+            windowSpace: Dictionary(uniqueKeysWithValues: windows.map { ($0.id, spaceID) }),
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+    }
+
+    private func equalFrames(count: Int, axis: Axis, in frame: CGRect) -> [CGRect] {
+        (0..<count).map { index in
+            let start = CGFloat(index) / CGFloat(count)
+            let end = CGFloat(index + 1) / CGFloat(count)
+            switch axis {
+            case .horizontal:
+                return CGRect(
+                    x: frame.minX + frame.width * start,
+                    y: frame.minY,
+                    width: frame.width * (end - start),
+                    height: frame.height
+                )
+            case .vertical:
+                return CGRect(
+                    x: frame.minX,
+                    y: frame.minY + frame.height * start,
+                    width: frame.width,
+                    height: frame.height * (end - start)
+                )
+            }
+        }
     }
 
     private func slot(
