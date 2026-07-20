@@ -310,6 +310,56 @@ struct MVPLayoutTests {
         #expect(result[terminal] == CGRect(x: 600, y: 0, width: 600, height: 800))
     }
 
+    @Test("Apply push compacts the branch vacated before runtime insertion")
+    func applyPushCompactsVacatedBranch() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let leftWindow = WindowID(raw: 1)
+        let terminal = WindowID(raw: 2)
+        let movedWindow = WindowID(raw: 3)
+        let initialTree = pushIntoTree(terminal, .right, pushIntoTree(leftWindow, .left, .void))
+        var world = World(
+            displays: [display: self.display(display, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [
+                        display: DisplaySpaceState(displayID: display, tree: initialTree, floating: [])
+                    ],
+                    focused: leftWindow
+                )
+            ],
+            windows: [
+                leftWindow: metadata(for: leftWindow),
+                terminal: metadata(for: terminal),
+                movedWindow: metadata(for: movedWindow)
+            ],
+            windowDisplay: [leftWindow: display, terminal: display, movedWindow: display],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        for direction in [Direction.left, .right, .left] {
+            world = try requireWorld(
+                apply(.push(movedWindow, direction), to: world),
+                "Expected runtime push \(direction.rawValue) to succeed"
+            )
+            let tree = try #require(world.spaces[space]?.displays[display]?.tree)
+            let result = frames(for: tree)
+            if direction == .right {
+                #expect(result[leftWindow] == CGRect(x: 0, y: 0, width: 600, height: 800))
+                #expect(result[terminal] == CGRect(x: 600, y: 0, width: 600, height: 400))
+                #expect(result[movedWindow] == CGRect(x: 600, y: 400, width: 600, height: 400))
+            } else {
+                #expect(result[leftWindow] == CGRect(x: 0, y: 0, width: 600, height: 400))
+                #expect(result[movedWindow] == CGRect(x: 0, y: 400, width: 600, height: 400))
+                #expect(result[terminal] == CGRect(x: 600, y: 0, width: 600, height: 800))
+            }
+        }
+    }
+
     @Test("Reconciliation preserves a vacated right lane for the next right push")
     func reconciliationPreservesVacatedRightLaneForNextRightPush() throws {
         let first = WindowID(raw: 1)

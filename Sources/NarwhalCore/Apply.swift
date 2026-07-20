@@ -503,6 +503,15 @@ private enum RetileInsertion {
     case center
     case subtree(NodePath)
 
+    func removeWindow(_ windowID: WindowID, from tree: Node) -> Node {
+        switch self {
+        case .edge, .quarter, .center:
+            return removeWindowForRetile(windowID, from: tree)
+        case .subtree:
+            return ejectFromTree(windowID, tree)
+        }
+    }
+
     func insert(_ windowID: WindowID, into tree: Node) -> Result<Node, CommandError> {
         switch self {
         case .edge(let direction):
@@ -559,9 +568,12 @@ private func applyRetile(
 private func worldByRetiling(_ target: RetileTarget, insertion: RetileInsertion, in world: World) -> Result<World, CommandError> {
     let ejectedSpaces = world.spaces.mapValues { space in
         let displays = space.displays.mapValues { displayState in
-            DisplaySpaceState(
+            let isRetiledDisplay = space.id == target.activeSpace && displayState.displayID == target.displayID
+            return DisplaySpaceState(
                 displayID: displayState.displayID,
-                tree: ejectFromTree(target.windowID, displayState.tree),
+                tree: isRetiledDisplay
+                    ? insertion.removeWindow(target.windowID, from: displayState.tree)
+                    : ejectFromTree(target.windowID, displayState.tree),
                 floating: displayState.floating.filter { $0 != target.windowID }
             )
         }
