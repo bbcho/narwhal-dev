@@ -545,6 +545,7 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
             return
         }
         let availability = await worldActor.layoutHistoryAvailability(spaceID: spaceID)
+        guard selectedWorkspace?.key.spaceID == spaceID else { return }
         undoButton.isEnabled = availability.canUndo
         redoButton.isEnabled = availability.canRedo
         undoButton.toolTip = availability.undoLabel.map { "Preview undo: \($0)" } ?? "Nothing to undo in this Space"
@@ -636,7 +637,10 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
                 planned = (result, intent)
                 renderPreviewState()
             case .failure(let failure):
-                let explanation = workbenchExplanation(for: failure)
+                let windowTitles = presentation.workspaces
+                    .flatMap(\.windows)
+                    .reduce(into: [WindowID: String]()) { $0[$1.id] = $1.title }
+                let explanation = workbenchExplanation(for: failure) { windowTitles[$0] }
                 if explanation.canRetryAsPartial,
                    case .namedLayout(let layout, let spaceID, _) = intent {
                     offerPartialPreview(layout: layout, spaceID: spaceID, explanation: explanation)

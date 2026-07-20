@@ -21,14 +21,17 @@ struct WorkbenchPlanningTests {
             missingDisplaySlots: [1]
         )
 
-        let explanation = workbenchExplanation(for: .namedLayout(.partialMatch(result)))
+        let explanation = workbenchExplanation(
+            for: .namedLayout(.partialMatch(result)),
+            windowLabel: { $0 == WindowID(raw: 9) ? "Unassigned Terminal" : nil }
+        )
 
         #expect(explanation.title == "Named layout has unmatched targets")
         #expect(explanation.reason.contains("1 window slot"))
         #expect(explanation.reason.contains("1 display"))
         #expect(explanation.reason.contains("Missing displays: D1"))
         #expect(explanation.reason.contains("• browser on D0: com.example.browser"))
-        #expect(explanation.reason.contains("Unmatched windows: W9"))
+        #expect(explanation.reason.contains("Unmatched windows: Unassigned Terminal"))
         #expect(explanation.canRetryAsPartial)
     }
 

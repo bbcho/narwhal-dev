@@ -93,7 +93,10 @@ func planWorkbenchIntent(
     }
 }
 
-func workbenchExplanation(for failure: WorkbenchPlanFailure) -> WorkbenchPlanExplanation {
+func workbenchExplanation(
+    for failure: WorkbenchPlanFailure,
+    windowLabel: (WindowID) -> String? = { _ in nil }
+) -> WorkbenchPlanExplanation {
     switch failure {
     case .command(let error):
         let explanation = commandExplanation(for: error)
@@ -119,7 +122,12 @@ func workbenchExplanation(for failure: WorkbenchPlanFailure) -> WorkbenchPlanExp
         let displays = result.missingDisplaySlots.count
         return WorkbenchPlanExplanation(
             title: "Named layout has unmatched targets",
-            reason: namedLayoutMismatchReason(result, slotCount: slots, displayCount: displays),
+            reason: namedLayoutMismatchReason(
+                result,
+                slotCount: slots,
+                displayCount: displays,
+                windowLabel: windowLabel
+            ),
             canRetryAsPartial: !result.matches.isEmpty
         )
     case .namedLayout(.noMatchingWindows):
@@ -141,7 +149,8 @@ func workbenchExplanation(for failure: WorkbenchPlanFailure) -> WorkbenchPlanExp
 private func namedLayoutMismatchReason(
     _ result: NamedLayoutMatchResult,
     slotCount: Int,
-    displayCount: Int
+    displayCount: Int,
+    windowLabel: (WindowID) -> String?
 ) -> String {
     var lines = [
         "\(slotCount) window slot\(slotCount == 1 ? "" : "s") and \(displayCount) display\(displayCount == 1 ? "" : "s") are unavailable. Unmatched windows will remain floating."
@@ -156,7 +165,9 @@ private func namedLayoutMismatchReason(
         })
     }
     if !result.unmatchedWindows.isEmpty {
-        lines.append("Unmatched windows: " + result.unmatchedWindows.map { "W\($0.raw)" }.joined(separator: ", "))
+        lines.append("Unmatched windows: " + result.unmatchedWindows.map { windowID in
+            windowLabel(windowID) ?? "W\(windowID.raw)"
+        }.joined(separator: ", "))
     }
     return lines.joined(separator: "\n")
 }
