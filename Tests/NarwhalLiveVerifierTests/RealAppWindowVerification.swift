@@ -66,6 +66,13 @@ struct RealAppWindowVerificationTests {
         try expectPassed(await RealAppWindowVerification.verifyThreeChromeVerticalStack())
     }
 
+    @Test("Outlook side transfers keep equal halves and expand Terminal")
+    func outlookSideTransfersKeepEqualHalvesAndExpandTerminal() async throws {
+        _ = NSApplication.shared
+        VerifierAppDelegate.installIfNeeded()
+        try expectPassed(await RealAppWindowVerification.verifyOutlookTerminalSideTransfer())
+    }
+
     private func expectPassed(_ result: (passed: Bool, message: String)) throws {
         guard result.passed else {
             throw RealAppWindowVerifierFailure(result.message)
@@ -166,6 +173,67 @@ enum RealAppWindowVerification {
         await verifyThreeWindowVerticalStack(spec: chromeSpec(), label: "Google Chrome")
     }
 
+    static func verifyOutlookTerminalSideTransfer() async -> (passed: Bool, message: String) {
+        let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
+        var originals: [RealAppOriginal] = []
+        do {
+            try waitForUnlockedSession()
+            let displays = DisplayClient().currentDisplays()
+            let targetDisplay = try manualResizeVerificationDisplay(displays)
+
+            let leftTerminal = try launchTrackedWindow(
+                spec: terminalSpec(),
+                using: axClient,
+                requiringNewWindow: true,
+                token: "outlook-left"
+            )
+            originals.append(leftTerminal)
+
+            let rightTerminal = try launchTrackedWindow(
+                spec: terminalSpec(),
+                using: axClient,
+                requiringNewWindow: true,
+                excluding: [leftTerminal.metadata.id],
+                token: "outlook-right"
+            )
+            originals.append(rightTerminal)
+
+            let outlook = try launchTrackedWindow(
+                spec: outlookSpec(),
+                using: axClient,
+                requiringNewWindow: false,
+                token: "side-transfer"
+            )
+            originals.append(outlook)
+
+            try await stageOutlookSideTransferWindows(
+                leftTerminal: leftTerminal,
+                rightTerminal: rightTerminal,
+                outlook: outlook,
+                on: targetDisplay,
+                using: axClient
+            )
+            let summary = try await verifyOutlookSideTransferWorkflow(
+                leftTerminal: leftTerminal,
+                rightTerminal: rightTerminal,
+                outlook: outlook,
+                targetDisplay: targetDisplay,
+                axClient: axClient,
+                displays: displays
+            )
+
+            try await cleanupApps(originals, using: axClient)
+            originals.removeAll()
+            return (true, summary)
+        } catch let error as RealAppWindowVerifierFailure {
+            await cleanupAppsBestEffort(originals, using: axClient, context: "REAL OUTLOOK SIDE TRANSFER VERIFY")
+            return (false, error.message)
+        } catch {
+            await cleanupAppsBestEffort(originals, using: axClient, context: "REAL OUTLOOK SIDE TRANSFER VERIFY")
+            return (false, "Outlook side-transfer verification failed: \(String(describing: error))")
+        }
+    }
+
     private static func verifyThreeWindowVerticalStack(
         spec: RealAppSpec,
         label: String
@@ -227,6 +295,90 @@ enum RealAppWindowVerification {
             await cleanupAppsBestEffort(originals, using: axClient, context: "REAL \(label.uppercased()) STACK VERIFY")
             return (false, "three \(label) vertical stack verification failed: \(String(describing: error))")
         }
+    }
+
+    private static func verifyOutlookSideTransferWorkflow(
+        leftTerminal: RealAppOriginal,
+        rightTerminal: RealAppOriginal,
+        outlook: RealAppOriginal,
+        targetDisplay: DisplayInfo,
+        axClient: AXClient,
+        displays: [DisplayID: DisplayInfo]
+    ) async throws -> String {
+        let worldActor = WorldActor(config: .default)
+        let reporter = StartupReporter(logPath: "/tmp/narwhal-real-outlook-side-transfer.log")
+        let applier = LayoutApplier(axClient: axClient, reporter: reporter)
+        let originals = [leftTerminal, rightTerminal, outlook]
+
+        try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+        var current = try currentWorkflowMetadata(for: leftTerminal, using: axClient)
+        try await focusIfPossible(current, appName: "Outlook transfer left Terminal", using: axClient)
+        try await applyWorkflowCommand(
+            "Outlook transfer stage left Terminal",
+            plan: { await worldActor.planPush(current.id, direction: .left) },
+            worldActor: worldActor,
+            applier: applier,
+            allowConstraintRetry: false
+        )
+
+        try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+        current = try currentWorkflowMetadata(for: rightTerminal, using: axClient)
+        try await focusIfPossible(current, appName: "Outlook transfer right Terminal", using: axClient)
+        try await applyWorkflowCommand(
+            "Outlook transfer stage right Terminal",
+            plan: { await worldActor.planPush(current.id, direction: .right) },
+            worldActor: worldActor,
+            applier: applier,
+            allowConstraintRetry: false
+        )
+
+        for direction in [Direction.left, .right, .left] {
+            let frames = try await pushOutlook(
+                outlook,
+                direction: direction,
+                worldActor: worldActor,
+                applier: applier,
+                axClient: axClient,
+                displays: displays
+            )
+            try requireOutlookSideTransferLayout(
+                frames,
+                outlookOn: direction,
+                leftTerminalID: leftTerminal.metadata.id,
+                rightTerminalID: rightTerminal.metadata.id,
+                outlookID: outlook.metadata.id,
+                visibleFrame: targetDisplay.visibleFrame
+            )
+            try requirePlannedRealFramesVisible(
+                originals,
+                plannedFrames: frames,
+                using: axClient,
+                context: "Outlook \(direction.rawValue) transfer"
+            )
+        }
+
+        let finalTerminal = try currentWorkflowMetadata(for: rightTerminal, using: axClient)
+        return "Outlook left-right-left kept 50/50 stacks; Terminal expanded to \(finalTerminal.frame.shortDescription)"
+    }
+
+    private static func pushOutlook(
+        _ outlook: RealAppOriginal,
+        direction: Direction,
+        worldActor: WorldActor,
+        applier: LayoutApplier,
+        axClient: AXClient,
+        displays: [DisplayID: DisplayInfo]
+    ) async throws -> [WindowID: CGRect] {
+        try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
+        let current = try currentWorkflowMetadata(for: outlook, using: axClient)
+        try await focusIfPossible(current, appName: "Microsoft Outlook push \(direction.rawValue)", using: axClient)
+        return try await applyWorkflowCommand(
+            "Microsoft Outlook push \(direction.rawValue)",
+            plan: { await worldActor.planPush(current.id, direction: direction) },
+            worldActor: worldActor,
+            applier: applier,
+            allowConstraintRetry: false
+        )
     }
 
     private static func launchChromeVerificationWindow(token: String) throws {
@@ -929,6 +1081,148 @@ enum RealAppWindowVerification {
         return display
     }
 
+    private static func stageOutlookSideTransferWindows(
+        leftTerminal: RealAppOriginal,
+        rightTerminal: RealAppOriginal,
+        outlook: RealAppOriginal,
+        on display: DisplayInfo,
+        using axClient: AXClient
+    ) async throws {
+        let visible = display.visibleFrame
+        let terminalWidth = max(CGFloat(480), visible.width * 0.28)
+        let terminalHeight = max(CGFloat(320), visible.height * 0.34)
+        let margin: CGFloat = 24
+        let placements: [(RealAppOriginal, CGRect)] = [
+            (
+                leftTerminal,
+                CGRect(
+                    x: visible.minX + margin,
+                    y: visible.minY + margin,
+                    width: terminalWidth,
+                    height: terminalHeight
+                )
+            ),
+            (
+                rightTerminal,
+                CGRect(
+                    x: visible.maxX - margin - terminalWidth,
+                    y: visible.minY + margin,
+                    width: terminalWidth,
+                    height: terminalHeight
+                )
+            ),
+            (
+                outlook,
+                CGRect(
+                    x: visible.minX + visible.width * 0.23,
+                    y: visible.minY + visible.height * 0.13,
+                    width: visible.width * 0.73,
+                    height: visible.height * 0.86
+                )
+            )
+        ]
+
+        for (index, placement) in placements.enumerated() {
+            let metadata = try currentWorkflowMetadata(for: placement.0, using: axClient)
+            try await focusIfPossible(metadata, appName: "\(placement.0.spec.name) Outlook-transfer staging", using: axClient)
+            _ = try await verifyFrameWrite(
+                placement.1.standardized,
+                metadata: metadata,
+                appName: "\(placement.0.spec.name) Outlook-transfer staging",
+                step: index + 1,
+                using: axClient
+            )
+        }
+        await settleLiveVerifier(for: 0.16)
+    }
+
+    private static func requireOutlookSideTransferLayout(
+        _ frames: [WindowID: CGRect],
+        outlookOn side: Direction,
+        leftTerminalID: WindowID,
+        rightTerminalID: WindowID,
+        outlookID: WindowID,
+        visibleFrame: CGRect
+    ) throws {
+        let (leftHalf, rightHalf) = visibleFrame.divided(
+            atDistance: visibleFrame.width / 2,
+            from: .minXEdge
+        )
+        let (leftTop, leftBottom) = leftHalf.divided(
+            atDistance: leftHalf.height / 2,
+            from: .minYEdge
+        )
+        let (rightTop, rightBottom) = rightHalf.divided(
+            atDistance: rightHalf.height / 2,
+            from: .minYEdge
+        )
+        let expected: [WindowID: CGRect]
+        switch side {
+        case .left:
+            expected = [
+                leftTerminalID: leftTop,
+                outlookID: leftBottom,
+                rightTerminalID: rightHalf
+            ]
+        case .right:
+            expected = [
+                leftTerminalID: leftHalf,
+                rightTerminalID: rightTop,
+                outlookID: rightBottom
+            ]
+        case .up, .down:
+            throw RealAppWindowVerifierFailure("Outlook side transfer requires a horizontal direction")
+        }
+
+        for (windowID, expectedFrame) in expected {
+            guard let actualFrame = frames[windowID] else {
+                throw RealAppWindowVerifierFailure(
+                    "Outlook \(side.rawValue) transfer omitted planned frame for \(windowID.description)"
+                )
+            }
+            guard actualFrame.matches(expectedFrame, tolerance: frameWriteSettleTolerance) else {
+                throw RealAppWindowVerifierFailure(
+                    "Outlook \(side.rawValue) transfer was not an exact half layout for \(windowID.description): "
+                        + "expected=\(expectedFrame.debugDescription) actual=\(actualFrame.debugDescription)"
+                )
+            }
+        }
+    }
+
+    private static func requirePlannedRealFramesVisible(
+        _ originals: [RealAppOriginal],
+        plannedFrames: [WindowID: CGRect],
+        using axClient: AXClient,
+        context: String
+    ) throws {
+        for original in originals {
+            let metadata = try currentWorkflowMetadata(for: original, using: axClient)
+            guard let plannedFrame = plannedFrames[metadata.id] else {
+                throw RealAppWindowVerifierFailure(
+                    "\(context) omitted \(original.spec.name) from the planned layout"
+                )
+            }
+            guard frameSettledOnPlan(metadata.frame, plannedFrame) else {
+                throw RealAppWindowVerifierFailure(
+                    "\(context) AX frame mismatch for \(original.spec.name): "
+                        + "expected=\(plannedFrame.debugDescription) actual=\(metadata.frame.debugDescription)"
+                )
+            }
+            let serverFrame = LiveWindowServerVerification.waitForFrame(
+                windowNumber: Int(metadata.id.raw),
+                matching: plannedFrame,
+                tolerance: frameWriteSettleTolerance
+            )
+            guard serverFrame?.matches(plannedFrame, tolerance: frameWriteSettleTolerance) == true else {
+                throw RealAppWindowVerifierFailure(
+                    "\(context) WindowServer frame mismatch for \(original.spec.name): "
+                        + "expected=\(plannedFrame.debugDescription) "
+                        + "actual=\(serverFrame?.debugDescription ?? "nil")"
+                )
+            }
+        }
+    }
+
     private static func stageManualResizeWindows(
         _ originals: [RealAppOriginal],
         on display: DisplayInfo,
@@ -1105,6 +1399,7 @@ enum RealAppWindowVerification {
         worldActor: WorldActor,
         applier: LayoutApplier,
         allowNoMove: Bool = false,
+        allowConstraintRetry: Bool = true,
         strategy: LayoutFrameWriteStrategy = .sequential
     ) async throws -> [WindowID: CGRect] {
         let first = try await requireWorkflowPlan(name, plan(), allowNoMove: allowNoMove)
@@ -1113,7 +1408,11 @@ enum RealAppWindowVerification {
             return first.desiredLayout.layout.tiled
         }
         let firstResult = await applier.apply(first, strategy: strategy)
-        switch plannedLayoutApplyDecision(plan: first, applyResult: firstResult, retryOnClamp: true) {
+        switch plannedLayoutApplyDecision(
+            plan: first,
+            applyResult: firstResult,
+            retryOnClamp: allowConstraintRetry
+        ) {
         case .commit(let appliedFrames, _):
             await worldActor.commit(first, appliedFrames: appliedFrames)
             try requireAppliedFramesVisible(appliedFrames, plan: first, context: name)
@@ -1123,6 +1422,11 @@ enum RealAppWindowVerification {
             throw RealAppWindowVerifierFailure("\(name) failed applying \(failureCount) real app window(s): \(summary)")
 
         case .clamp(let appliedFrames, let observedConstraints, let shouldRetry, let summary):
+            guard allowConstraintRetry else {
+                throw RealAppWindowVerifierFailure(
+                    "\(name) changed the intended geometry instead of applying the original plan: \(summary)"
+                )
+            }
             await worldActor.recordAppliedFrames(appliedFrames)
             await worldActor.recordObservedConstraints(observedConstraints)
             guard shouldRetry else {
