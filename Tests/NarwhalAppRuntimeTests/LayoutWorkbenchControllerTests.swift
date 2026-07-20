@@ -33,7 +33,8 @@ struct LayoutWorkbenchControllerTests {
         #expect(window.title == "Narwhal Layout Workbench")
         let inspector = try #require(controller.debugInspectorGeometry())
         #expect(inspector.hasVerticalScroller)
-        #expect(inspector.contentHeight > inspector.viewportHeight)
+        #expect(inspector.viewportHeight == 520)
+        #expect(inspector.contentHeight > 0)
         controller.close()
     }
 

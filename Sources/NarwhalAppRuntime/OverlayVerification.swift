@@ -361,8 +361,13 @@ enum VisualArtifactVerification {
             size: size,
             url: directory.appendingPathComponent("workbench-ready-dark.png")
         ))
-
         content.appearance = NSAppearance(named: .aqua)
+        artifacts.append(try renderArtifact(
+            view: content,
+            size: CGSize(width: 860, height: 520),
+            url: directory.appendingPathComponent("workbench-minimum-size.png")
+        ))
+
         controller.debugPresent(workbenchPresentation(
             in: fixture.world,
             runtime: fixture.runtime,

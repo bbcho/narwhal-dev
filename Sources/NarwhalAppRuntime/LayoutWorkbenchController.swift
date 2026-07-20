@@ -45,7 +45,7 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
     private let railContainer = NSView()
     private let inspectorContainer = NSView()
     private let inspectorScrollView = NSScrollView()
-    private let inspectorDocumentView = NSView()
+    private let inspectorDocumentView = WorkbenchInspectorDocumentView()
 
     init(
         worldActor: WorldActor,
@@ -925,6 +925,10 @@ private final class WorkbenchRootView: NSView {
         dirtyRect.fill()
         super.draw(dirtyRect)
     }
+}
+
+private final class WorkbenchInspectorDocumentView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 private func direction(for tag: Int) -> Direction? {
