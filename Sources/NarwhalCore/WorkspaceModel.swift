@@ -94,7 +94,8 @@ public func focusCycleWindows(
     let eligible = world.windows.values.filter { metadata in
         guard !metadata.isMinimized,
               !tiled.contains(metadata.id),
-              world.windowDisplay[metadata.id] == key.displayID
+              world.windowDisplay[metadata.id] == key.displayID,
+              !isExcludedFromFocusCycle(metadata, rules: world.config.managedRules)
         else { return false }
 
         if hasObservedVisibleWindows, !observedVisible.contains(metadata.id) {

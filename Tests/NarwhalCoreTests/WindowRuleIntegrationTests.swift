@@ -4,6 +4,44 @@ import Testing
 
 @Suite("Window rule integration")
 struct WindowRuleIntegrationTests {
+    @Test("Managed rule placement and minimum constraints apply when a window opens")
+    func managedRulePlacementAndConstraintsApplyTogether() throws {
+        let display = DisplayID(raw: 1)
+        let window = WindowID(raw: 10)
+        let managedRule = ManagedWindowRule(
+            id: ManagedRuleID(rawValue: "managed-editor"),
+            name: "Editor",
+            matcher: ManagedRuleMatcher(bundleID: "com.example.editor"),
+            policy: ManagedRulePolicy(
+                placement: .forceFloat,
+                minimumWidth: 640,
+                minimumHeight: 360
+            )
+        )
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0)],
+            activeSpace: SpaceID(raw: 1),
+            spaces: [:],
+            windows: [:],
+            windowDisplay: [:],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: config(rules: []).withManagedRules([managedRule])
+        )
+
+        let next = worldByOpeningWindow(
+            metadata(
+                window,
+                bundleID: "com.example.editor",
+                frame: CGRect(x: 20, y: 20, width: 700, height: 500)
+            ),
+            in: world
+        )
+
+        #expect(next.pendingRules[window] == RuleAction.forceFloat)
+        #expect(next.windowConstraints[window] == WindowConstraints(minWidth: 640, minHeight: 360))
+    }
+
     @Test("Window opened applies force-float rule to world state")
     func windowOpenedAppliesForceFloatRule() throws {
         let display = DisplayID(raw: 1)

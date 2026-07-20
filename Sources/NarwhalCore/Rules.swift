@@ -5,23 +5,10 @@ public func matchRule(_ metadata: WindowMetadata, rules: [WindowRule]) -> RuleAc
 }
 
 public func windowOpenDecision(_ metadata: WindowMetadata, rules: [WindowRule]) -> WindowOpenDecision {
-    guard let action = matchRule(metadata, rules: rules) else {
-        return metadata.isResizable ? .tileOrFloatByDefault(metadata) : .forceFloat(metadata)
-    }
-
-    switch action {
-    case .forceFloat:
-        return .forceFloat(metadata)
-    case .ignore:
-        return .ignore(metadata.id)
-    case .pinToDisplay(let slot):
-        return metadata.isResizable ? .pinToDisplay(metadata, slot: slot) : .forceFloat(metadata)
-    case .tileToZone(let zoneID):
-        return metadata.isResizable ? .tileToZone(metadata, zoneID) : .forceFloat(metadata)
-    }
+    resolveWindowOpen(metadata, managedRules: [], luaRules: rules).decision
 }
 
-private func matches(_ predicate: RulePredicate, metadata: WindowMetadata) -> Bool {
+func matches(_ predicate: RulePredicate, metadata: WindowMetadata) -> Bool {
     switch predicate {
     case .bundleID(let expected):
         return metadata.bundleID.raw == expected

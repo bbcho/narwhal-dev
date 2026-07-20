@@ -85,7 +85,12 @@ public func reconcileEnvironment(_ snapshot: EnvironmentSnapshot, in world: Worl
 }
 
 func worldByOpeningWindow(_ metadata: WindowMetadata, in world: World) -> World {
-    switch windowOpenDecision(metadata, rules: world.config.rules) {
+    let resolution = resolveWindowOpen(
+        metadata,
+        managedRules: world.config.managedRules,
+        luaRules: world.config.rules
+    )
+    switch resolution.decision {
     case .tileOrFloatByDefault(let metadata):
         return worldByTrackingOpenedWindow(metadata, pendingRule: nil, preferredDisplaySlot: nil, in: world)
     case .forceFloat(let metadata):
@@ -457,9 +462,22 @@ private func worldByTrackingOpenedWindow(
             spaceID: targetActiveSpace,
             to: world.observedVisibleWindows
         ),
-        windowConstraints: world.windowConstraints,
+        windowConstraints: constraintsByApplyingManagedRule(to: metadata, in: world),
         pendingRules: world.pendingRules.settingOrRemoving(metadata.id, to: pendingRule),
         config: world.config
+    )
+}
+
+private func constraintsByApplyingManagedRule(
+    to metadata: WindowMetadata,
+    in world: World
+) -> [WindowID: WindowConstraints] {
+    guard let constraints = managedConstraints(for: metadata, rules: world.config.managedRules) else {
+        return world.windowConstraints
+    }
+    return world.windowConstraints.setting(
+        metadata.id,
+        to: (world.windowConstraints[metadata.id] ?? WindowConstraints()).merged(with: constraints)
     )
 }
 

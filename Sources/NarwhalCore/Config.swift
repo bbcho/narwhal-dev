@@ -8,6 +8,7 @@ public struct Config: Equatable, Sendable {
     public let border: BorderConfig
     public let hud: HUDConfig
     public let dragModifier: ModifierSet
+    public let managedRules: [ManagedWindowRule]
 
     public init(
         keymap: [HotkeyBinding],
@@ -16,7 +17,8 @@ public struct Config: Equatable, Sendable {
         gaps: Gaps,
         border: BorderConfig,
         hud: HUDConfig,
-        dragModifier: ModifierSet
+        dragModifier: ModifierSet,
+        managedRules: [ManagedWindowRule] = []
     ) {
         self.keymap = keymap
         self.rules = rules
@@ -25,6 +27,7 @@ public struct Config: Equatable, Sendable {
         self.border = border
         self.hud = hud
         self.dragModifier = dragModifier
+        self.managedRules = managedRules
     }
 
     public static let `default` = Config(
@@ -34,8 +37,22 @@ public struct Config: Equatable, Sendable {
         gaps: Gaps(inner: 0, outer: Insets(top: 0, left: 0, bottom: 0, right: 0)),
         border: .default,
         hud: .default,
-        dragModifier: [.shift]
+        dragModifier: [.shift],
+        managedRules: []
     )
+
+    public func withManagedRules(_ managedRules: [ManagedWindowRule]) -> Config {
+        Config(
+            keymap: keymap,
+            rules: rules,
+            zones: zones,
+            gaps: gaps,
+            border: border,
+            hud: hud,
+            dragModifier: dragModifier,
+            managedRules: managedRules
+        )
+    }
 }
 
 public struct HotkeyBinding: Equatable, Sendable {
