@@ -284,6 +284,32 @@ struct MVPLayoutTests {
         #expect(result[second] == CGRect(x: 0, y: 400, width: 600, height: 400))
     }
 
+    @Test("Moving a stacked window between sides expands the window left behind")
+    func movingStackedWindowCompactsItsVacatedBranch() {
+        let leftWindow = WindowID(raw: 1)
+        let terminal = WindowID(raw: 2)
+        let movedWindow = WindowID(raw: 3)
+        var tree = pushIntoTree(terminal, .right, pushIntoTree(leftWindow, .left, .void))
+
+        tree = pushIntoTree(movedWindow, .left, tree)
+        var result = frames(for: tree)
+        #expect(result[leftWindow] == CGRect(x: 0, y: 0, width: 600, height: 400))
+        #expect(result[movedWindow] == CGRect(x: 0, y: 400, width: 600, height: 400))
+        #expect(result[terminal] == CGRect(x: 600, y: 0, width: 600, height: 800))
+
+        tree = pushIntoTree(movedWindow, .right, tree)
+        result = frames(for: tree)
+        #expect(result[leftWindow] == CGRect(x: 0, y: 0, width: 600, height: 800))
+        #expect(result[terminal] == CGRect(x: 600, y: 0, width: 600, height: 400))
+        #expect(result[movedWindow] == CGRect(x: 600, y: 400, width: 600, height: 400))
+
+        tree = pushIntoTree(movedWindow, .left, tree)
+        result = frames(for: tree)
+        #expect(result[leftWindow] == CGRect(x: 0, y: 0, width: 600, height: 400))
+        #expect(result[movedWindow] == CGRect(x: 0, y: 400, width: 600, height: 400))
+        #expect(result[terminal] == CGRect(x: 600, y: 0, width: 600, height: 800))
+    }
+
     @Test("Reconciliation preserves a vacated right lane for the next right push")
     func reconciliationPreservesVacatedRightLaneForNextRightPush() throws {
         let first = WindowID(raw: 1)

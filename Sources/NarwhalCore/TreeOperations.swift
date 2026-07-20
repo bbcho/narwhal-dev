@@ -198,8 +198,33 @@ private func clearWindowPreservingZones(_ window: WindowID, from node: Node) -> 
 }
 
 private func insertionBaseAfterClearing(_ window: WindowID, from node: Node) -> Node {
+    guard occupiedWindows(in: node).contains(window) else { return node }
     let cleared = clearWindowPreservingZones(window, from: node)
-    return occupiedWindows(in: cleared).isEmpty ? .void : cleared
+    guard !occupiedWindows(in: cleared).isEmpty else { return .void }
+    return compactVacatedBranches(cleared, preservingRoot: true)
+}
+
+private func compactVacatedBranches(_ node: Node, preservingRoot: Bool) -> Node {
+    guard case .split(let split) = node else { return node }
+    let cells = split.cells.map { cell in
+        makeCell(
+            weight: cell.weight,
+            node: compactVacatedBranches(cell.node, preservingRoot: false)
+        )
+    }
+    guard !preservingRoot else {
+        return .split(makeSplit(axis: split.axis, cells: cells))
+    }
+
+    let occupied = cells.filter { !isUnoccupiedSubtree($0.node) }
+    switch occupied.count {
+    case 0:
+        return .void
+    case 1:
+        return occupied[0].node
+    default:
+        return .split(makeSplit(axis: split.axis, cells: cells))
+    }
 }
 
 private func insertIntoSubtreeAfterClearing(
