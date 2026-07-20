@@ -12,6 +12,7 @@ enum DiagnosticsMenuVerification {
         let menubar = Menubar()
         var copyError: Error?
         menubar.start(actions: MenubarActions(
+            openWorkbench: {},
             reloadConfig: {},
             retryStartup: {},
             openConfig: {},

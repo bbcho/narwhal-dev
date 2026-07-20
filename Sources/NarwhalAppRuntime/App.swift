@@ -84,6 +84,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let startupArguments = StartupArguments.current
     private lazy var worldActor = WorldActor(runtimeMetrics: runtimeMetrics)
     private let reporter = StartupReporter()
+    private lazy var workbenchController = LayoutWorkbenchController(
+        worldActor: worldActor,
+        snapshotQuality: { [weak self] in self?.operatingStatus.snapshotQuality },
+        applyPlan: { [weak self] result, intent in
+            guard let self else { return false }
+            return await self.applyWorkbenchPlan(result, intent: intent)
+        },
+        activateManagedRules: { [weak self] rules in
+            guard let self else { return }
+            await self.activateManagedRules(rules)
+        },
+        openAccessibilitySettings: { [weak self] in
+            self?.openAccessibilitySettingsFromMenu()
+        }
+    )
     private var config = Config.default
     private var managedRules: [ManagedWindowRule] = []
     private var managedRulesWarning: String?
@@ -247,6 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         runningServices?.stopAll()
         runningServices = nil
         servicesStarted = false
+        workbenchController.close()
         overlay.stop()
         reporter.info("NarwhalApp stopped")
         reporter.flush()
@@ -493,6 +509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             status.snapshotQuality = result.quality
         }
         await updateTiledBordersFromWorld()
+        workbenchController.refreshIfVisible()
         return result
     }
 
@@ -713,6 +730,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func startMenubar() {
         menubar.start(actions: MenubarActions(
+            openWorkbench: { [weak self] in
+                self?.workbenchController.show()
+            },
             reloadConfig: { [weak self] in
                 Task { @MainActor in
                     await self?.reloadConfig(reason: "menubar")
@@ -2662,6 +2682,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         reporter.info("Config reload completed (\(reason))")
         showOperatorFeedback("Config reloaded", tone: .success)
+        workbenchController.refreshIfVisible()
+    }
+
+    private func activateManagedRules(_ rules: [ManagedWindowRule]) async {
+        managedRules = rules
+        managedRulesWarning = nil
+        let activeConfig = config.withManagedRules(rules)
+        config = activeConfig
+        await worldActor.reloadConfig(activeConfig)
+        reporter.info("Activated \(rules.count) managed window rules from Layout Workbench")
+    }
+
+    private func applyWorkbenchPlan(
+        _ result: CommandPlanResult,
+        intent: WorkbenchIntent
+    ) async -> Bool {
+        await applyPlannedLayout(
+            result,
+            operation: intent.label,
+            persistReason: "workbench \(intent.label.lowercased())",
+            retryOnClamp: intent != .shuffle,
+            replanAfterClamp: { [worldActor] in
+                switch await planWorkbenchIntent(intent, with: worldActor) {
+                case .success(let plan):
+                    return .success(plan)
+                case .failure(.command(let error)):
+                    return .failure(error)
+                case .failure(let failure):
+                    return .failure(.configInvalid(workbenchExplanation(for: failure).reason))
+                }
+            }
+        )
     }
 
     private func backgroundStartupConfigLoad() async -> Result<StartupConfigLoad, StartupConfigError> {

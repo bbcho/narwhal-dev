@@ -3,6 +3,7 @@ import NarwhalAppSupport
 import NarwhalCore
 
 struct MenubarActions {
+    let openWorkbench: () -> Void
     let reloadConfig: () -> Void
     let retryStartup: () -> Void
     let openConfig: () -> Void
@@ -16,6 +17,7 @@ struct MenubarActions {
     let quit: () -> Void
 
     static let noOp = MenubarActions(
+        openWorkbench: {},
         reloadConfig: {},
         retryStartup: {},
         openConfig: {},
@@ -106,6 +108,7 @@ final class Menubar {
         menu.addItem(focusMenuItem)
         menu.addItem(lastCommandMenuItem)
         menu.addItem(.separator())
+        menu.addItem(menuItem(title: "Open Layout Workbench…", action: #selector(openWorkbench)))
         retryMenuItem.target = self
         menu.addItem(retryMenuItem)
         menu.addItem(menuItem(title: "Reload Config", action: #selector(reloadConfig)))
@@ -277,6 +280,11 @@ final class Menubar {
 
     private var focusDescription: String {
         "Focus: \(operatingStatus.focusedWindowID?.description ?? "unknown")"
+    }
+
+    @objc
+    private func openWorkbench() {
+        actions?.openWorkbench()
     }
 
     @objc

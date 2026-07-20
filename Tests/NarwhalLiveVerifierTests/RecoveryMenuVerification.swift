@@ -9,6 +9,7 @@ enum RecoveryMenuVerification {
         let menubar = Menubar()
         var retryCount = 0
         menubar.start(actions: MenubarActions(
+            openWorkbench: {},
             reloadConfig: {},
             retryStartup: { retryCount += 1 },
             openConfig: {},
