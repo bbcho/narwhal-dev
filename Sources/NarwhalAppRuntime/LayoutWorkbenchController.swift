@@ -6,11 +6,13 @@ import NarwhalCore
 final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
     typealias ApplyPlan = (CommandPlanResult, WorkbenchIntent) async -> Bool
     typealias ActivateManagedRules = ([ManagedWindowRule]) async throws -> Void
+    typealias ManagedRulesSnapshot = () -> [ManagedWindowRule]
 
     private let worldActor: WorldActor
     private let snapshotQuality: () -> AXSnapshotQuality?
     private let applyPlan: ApplyPlan
     private let activateManagedRules: ActivateManagedRules
+    private let managedRulesSnapshot: ManagedRulesSnapshot
     private let openAccessibilitySettings: () -> Void
     private let namedLayoutsStore: NamedLayoutsStore
     private let managedRulesStore: ManagedRulesStore
@@ -50,6 +52,7 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         snapshotQuality: @escaping () -> AXSnapshotQuality?,
         applyPlan: @escaping ApplyPlan,
         activateManagedRules: @escaping ActivateManagedRules,
+        managedRulesSnapshot: @escaping ManagedRulesSnapshot = { [] },
         openAccessibilitySettings: @escaping () -> Void,
         namedLayoutsStore: NamedLayoutsStore = NamedLayoutsStore(),
         managedRulesStore: ManagedRulesStore = ManagedRulesStore()
@@ -58,6 +61,7 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         self.snapshotQuality = snapshotQuality
         self.applyPlan = applyPlan
         self.activateManagedRules = activateManagedRules
+        self.managedRulesSnapshot = managedRulesSnapshot
         self.openAccessibilitySettings = openAccessibilitySettings
         self.namedLayoutsStore = namedLayoutsStore
         self.managedRulesStore = managedRulesStore
@@ -109,6 +113,10 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
             inspectorDocumentView.frame.height,
             inspectorScrollView.hasVerticalScroller
         )
+    }
+
+    func debugManagedRuleCount() -> Int {
+        managedRules.count
     }
 
 #if NARWHAL_ENABLE_VERIFIERS
@@ -328,6 +336,10 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         applyButton.bezelStyle = .rounded
         applyButton.keyEquivalent = "\r"
         cancelButton.keyEquivalent = "\u{1b}"
+        undoButton.keyEquivalent = "z"
+        undoButton.keyEquivalentModifierMask = [.command]
+        redoButton.keyEquivalent = "z"
+        redoButton.keyEquivalentModifierMask = [.command, .shift]
 
         let actions = NSStackView(views: [undoButton, redoButton, cancelButton, applyButton])
         actions.orientation = .horizontal
@@ -389,11 +401,14 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
             case .loaded(let rules):
                 managedRules = rules
             case .recoveredEmpty(let recovery):
+                managedRules = managedRulesSnapshot()
                 artifactWarning = recovery.error.description
             case .incompatible(let error):
+                managedRules = managedRulesSnapshot()
                 artifactWarning = error.description
             }
         } catch {
+            managedRules = managedRulesSnapshot()
             artifactWarning = String(describing: error)
         }
         renderLayoutPopup()
@@ -786,7 +801,10 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
 
     @objc private func editManagedRules() {
         guard let window else { return }
-        let editor = ManagedRulesEditorController(rules: managedRules) { [weak self] rules in
+        let editor = ManagedRulesEditorController(
+            rules: managedRules,
+            matchCounts: managedRuleMatchCounts()
+        ) { [weak self] rules in
             guard let self else { return }
             try self.managedRulesStore.save(rules)
             try await self.activateManagedRules(rules)
@@ -796,6 +814,15 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         }
         ruleEditor = editor
         editor.beginSheet(for: window)
+    }
+
+    private func managedRuleMatchCounts() -> [ManagedRuleID: Int] {
+        presentation.workspaces
+            .flatMap(\.windows)
+            .reduce(into: [:]) { counts, window in
+                guard case .managed(let id, _) = window.ruleSource else { return }
+                counts[id, default: 0] += 1
+            }
     }
 
     @objc private func openAccessibilityPreferences() {

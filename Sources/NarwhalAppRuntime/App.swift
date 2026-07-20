@@ -95,6 +95,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             await self.activateManagedRules(rules)
         },
+        managedRulesSnapshot: { [weak self] in
+            self?.managedRules ?? []
+        },
         openAccessibilitySettings: { [weak self] in
             self?.openAccessibilitySettingsFromMenu()
         }

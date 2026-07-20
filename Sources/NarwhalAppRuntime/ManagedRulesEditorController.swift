@@ -6,6 +6,7 @@ final class ManagedRulesEditorController: NSObject {
     typealias SaveRules = ([ManagedWindowRule]) async throws -> Void
 
     private var rules: [ManagedWindowRule]
+    private let matchCounts: [ManagedRuleID: Int]
     private let saveRules: SaveRules
     private weak var parentWindow: NSWindow?
     private var sheet: NSWindow?
@@ -25,8 +26,13 @@ final class ManagedRulesEditorController: NSObject {
     private let errorLabel = NSTextField(wrappingLabelWithString: "")
     private let saveButton = NSButton(title: "Save Rules", target: nil, action: nil)
 
-    init(rules: [ManagedWindowRule], saveRules: @escaping SaveRules) {
+    init(
+        rules: [ManagedWindowRule],
+        matchCounts: [ManagedRuleID: Int] = [:],
+        saveRules: @escaping SaveRules
+    ) {
         self.rules = rules
+        self.matchCounts = matchCounts
         self.saveRules = saveRules
         super.init()
     }
@@ -37,6 +43,10 @@ final class ManagedRulesEditorController: NSObject {
         self.sheet = sheet
         renderRuleList(selecting: rules.isEmpty ? nil : 0)
         parent.beginSheet(sheet)
+    }
+
+    func debugRuleTitles() -> [String] {
+        rulesPopup.itemTitles
     }
 
     private func makeSheet() -> NSWindow {
@@ -157,7 +167,9 @@ final class ManagedRulesEditorController: NSObject {
         } else {
             rulesPopup.isEnabled = true
             rulesPopup.addItems(withTitles: rules.enumerated().map { index, rule in
-                "\(index + 1). \(rule.name)\(rule.isEnabled ? "" : " · disabled")"
+                let count = matchCounts[rule.id, default: 0]
+                let state = rule.isEnabled ? "" : " · disabled"
+                return "\(index + 1). \(rule.name) · \(count) current\(state)"
             })
             let selected = min(max(index ?? 0, 0), rules.count - 1)
             selectedIndex = selected
