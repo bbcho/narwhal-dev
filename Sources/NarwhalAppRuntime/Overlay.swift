@@ -103,6 +103,10 @@ final class Overlay {
         let staleTiledBorderTargets = renderTiledBorders(model.tiledBorders)
         if let focusBorder = model.focusBorder {
             showFocusBorder(focusBorder)
+            enforceFocusBorderObscurationVisibility(
+                target: focusBorder,
+                entries: currentOverlayWindowEntries()
+            )
         } else {
             hideFocusBorder()
         }
@@ -166,6 +170,24 @@ final class Overlay {
         }
     }
 
+    private func enforceFocusBorderObscurationVisibility(
+        target: FocusBorderTarget,
+        entries: [OverlayWindowEntry]?
+    ) {
+        guard let borderWindow, let entries else { return }
+        let overlayWindowNumbers = ownOverlayWindowNumbers()
+        let targetFrame = appKitFrame(forAXFrame: target.frame)
+        guard let targetIndex = entries.firstIndex(where: { $0.cgID == target.windowID.raw }) else {
+            borderWindow.alphaValue = 0
+            return
+        }
+        let isObscured = entries[0..<targetIndex].contains { entry in
+            !overlayWindowNumbers.contains(entry.cgID)
+                && appKitFrame(forAXFrame: entry.frame).intersects(targetFrame)
+        }
+        borderWindow.alphaValue = isObscured ? 0 : 1
+    }
+
     private func ownOverlayWindowNumbers() -> Set<CGWindowID> {
         let windows = [borderWindow, commandWindow, hudWindow, dragPreviewWindow]
             + Array(tiledBorderWindows.values)
@@ -182,6 +204,10 @@ final class Overlay {
 
     func debugFocusBorderIsVisible() -> Bool {
         borderWindow?.isVisible == true
+    }
+
+    func debugFocusBorderIsVisuallyVisible() -> Bool {
+        borderWindow?.isVisible == true && (borderWindow?.alphaValue ?? 0) > 0
     }
 
     func debugFocusBorderWindowNumber() -> Int? {
@@ -305,6 +331,7 @@ final class Overlay {
         }
         view.update(border: borderConfig, cornerRadius: target.cornerRadius)
         window.setFrame(appKitFrame, display: true)
+        window.alphaValue = 1
         borderWindow = window
         visibleWindowID = target.windowID
         orderFocusBorderWindow(window, above: target.windowID)

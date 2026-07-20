@@ -307,6 +307,49 @@ struct AXClient {
         }
     }
 
+#if NARWHAL_ENABLE_VERIFIERS
+    func debugFocusedWindowRelationships() -> String {
+        let system = Self.systemWideElement()
+        let focusedUI = elementAttribute(system, kAXFocusedUIElementAttribute)
+        let focusedApp = try? focusedApplicationElement(from: system).get()
+        let rawFocusedWindow = focusedApp.flatMap { elementAttribute($0, kAXFocusedWindowAttribute) }
+        let parts = [
+            "focusedUI=\(focusedUI.map(debugElement) ?? "nil")",
+            "uiWindow=\(focusedUI.flatMap { elementAttribute($0, kAXWindowAttribute) }.map(debugElement) ?? "nil")",
+            "focusedWindow=\(rawFocusedWindow.map(debugElement) ?? "nil")",
+            "focusedSheets=\(rawFocusedWindow.map { debugElements(arrayAttribute($0, "AXSheets")) } ?? "nil")",
+            "focusedChildren=\(rawFocusedWindow.map { debugElements(arrayAttribute($0, kAXChildrenAttribute)) } ?? "nil")",
+            "appWindows=\(focusedApp.map { debugElements(arrayAttribute($0, kAXWindowsAttribute)) } ?? "nil")"
+        ]
+        return parts.joined(separator: " ")
+    }
+
+    private func elementAttribute(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
+        var value: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard error == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID()
+        else { return nil }
+        return Self.bounded(value as! AXUIElement)
+    }
+
+    private func arrayAttribute(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
+        var value: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard error == .success, let elements = value as? [AXUIElement] else { return [] }
+        return elements.map(Self.bounded)
+    }
+
+    private func debugElements(_ elements: [AXUIElement]) -> String {
+        "[" + elements.map(debugElement).joined(separator: ",") + "]"
+    }
+
+    private func debugElement(_ element: AXUIElement) -> String {
+        "\(stringAttribute(element, kAXRoleAttribute))/\(stringAttribute(element, kAXSubroleAttribute))/\(stringAttribute(element, kAXTitleAttribute))"
+    }
+#endif
+
     @MainActor
     func setFocusedWindowFrame(_ frame: CGRect) async -> AXFrameWriteOutcome {
         switch focusedWindowElement() {
@@ -605,9 +648,7 @@ struct AXClient {
 
     private func focusedWindowElement() -> Result<AXUIElement, AXClientError> {
         let systemElement = Self.systemWideElement()
-        if let window = focusedUIElementWindow(from: systemElement) {
-            return .success(window)
-        }
+        let focusedUIWindow = focusedUIElementWindow(from: systemElement)
 
         let focusedApp: AXUIElement
         let focusedAppError: AXClientError?
@@ -616,17 +657,29 @@ struct AXClient {
             focusedApp = app
             focusedAppError = nil
         case .failure(let error):
-            guard let app = frontmostApplicationElement() else {
+            if let app = frontmostApplicationElement() {
+                focusedApp = app
+                focusedAppError = error
+            } else if let focusedUIWindow {
+                return .success(focusedUIWindow)
+            } else {
                 return .failure(error)
             }
-            focusedApp = app
-            focusedAppError = error
         }
 
         switch focusedWindowElement(in: focusedApp) {
         case .success(let window):
-            return .success(window)
+            if isTransientFocusedWindow(
+                role: stringAttribute(window, kAXRoleAttribute),
+                subrole: stringAttribute(window, kAXSubroleAttribute)
+            ) || focusedUIWindow == nil {
+                return .success(window)
+            }
+            return .success(focusedUIWindow ?? window)
         case .failure(let focusedWindowError):
+            if let focusedUIWindow {
+                return .success(focusedUIWindow)
+            }
             if let focusedAppError {
                 return .failure(focusedAppError)
             }
@@ -661,7 +714,8 @@ struct AXClient {
         if focusedError == .success,
            let focusedValue,
            CFGetTypeID(focusedValue) == AXUIElementGetTypeID() {
-            return .success(Self.bounded(focusedValue as! AXUIElement))
+            let focusedWindow = Self.bounded(focusedValue as! AXUIElement)
+            return .success(deepestAttachedSheet(from: focusedWindow) ?? focusedWindow)
         }
 
         if focusedError != .success {
@@ -682,12 +736,63 @@ struct AXClient {
            let focusedElementValue,
            CFGetTypeID(focusedElementValue) == AXUIElementGetTypeID() {
             let focusedElement = Self.bounded(focusedElementValue as! AXUIElement)
-            if let window = ancestorWindow(from: focusedElement) {
-                return window
+            if let window = containingWindow(from: focusedElement) {
+                return deepestAttachedSheet(from: window) ?? window
             }
         }
 
         return nil
+    }
+
+    private func deepestAttachedSheet(from window: AXUIElement) -> AXUIElement? {
+        var current = window
+        var deepest: AXUIElement?
+
+        for _ in 0..<4 {
+            var sheetsValue: CFTypeRef?
+            let sheetsError = AXUIElementCopyAttributeValue(
+                current,
+                "AXSheets" as CFString,
+                &sheetsValue
+            )
+            guard sheetsError == .success,
+                  let sheets = sheetsValue as? [AXUIElement],
+                  let sheet = sheets.last
+            else { break }
+            let boundedSheet = Self.bounded(sheet)
+            deepest = boundedSheet
+            current = boundedSheet
+        }
+
+        return deepest
+    }
+
+    private func containingWindow(from element: AXUIElement) -> AXUIElement? {
+        let role = stringAttribute(element, kAXRoleAttribute)
+        let subrole = stringAttribute(element, kAXSubroleAttribute)
+        if isFocusedWindowContainer(role: role, subrole: subrole) {
+            return element
+        }
+
+        var windowValue: CFTypeRef?
+        let windowError = AXUIElementCopyAttributeValue(
+            element,
+            kAXWindowAttribute as CFString,
+            &windowValue
+        )
+        if windowError == .success,
+           let windowValue,
+           CFGetTypeID(windowValue) == AXUIElementGetTypeID() {
+            let window = Self.bounded(windowValue as! AXUIElement)
+            if isFocusedWindowContainer(
+                role: stringAttribute(window, kAXRoleAttribute),
+                subrole: stringAttribute(window, kAXSubroleAttribute)
+            ) {
+                return window
+            }
+        }
+
+        return ancestorWindow(from: element)
     }
 
     private func frontmostApplicationElement() -> AXUIElement? {
@@ -700,7 +805,8 @@ struct AXClient {
 
         for _ in 0..<8 {
             let role = stringAttribute(current, kAXRoleAttribute)
-            if role == kAXWindowRole {
+            let subrole = stringAttribute(current, kAXSubroleAttribute)
+            if isFocusedWindowContainer(role: role, subrole: subrole) {
                 return current
             }
 

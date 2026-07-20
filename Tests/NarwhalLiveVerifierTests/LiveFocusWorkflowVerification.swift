@@ -33,6 +33,57 @@ final class VerifierAppDelegate: NSObject, NSApplicationDelegate {
 
 @MainActor
 enum LiveFocusWorkflowVerification {
+    static func verifySheetFocusAndBorderWorkflow() async -> (passed: Bool, message: String) {
+        if isSystemLocked() {
+            return (false, "live sheet focus verification requires an unlocked user session")
+        }
+        do {
+            VerifierAppDelegate.installIfNeeded()
+            guard let display = DisplayClient().currentDisplays().values.sorted(by: {
+                $0.slot == $1.slot ? $0.id.raw < $1.id.raw : $0.slot < $1.slot
+            }).first else {
+                throw LiveFocusWorkflowFailure("sheet verification requires a display")
+            }
+            await activateVerifierApplication()
+            let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
+            let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
+            let parent = makeWindow(
+                title: "Narwhal live sheet focus parent",
+                frame: CGRect(
+                    x: display.visibleFrame.minX + 50,
+                    y: display.visibleFrame.minY + 70,
+                    width: min(720, display.visibleFrame.width - 100),
+                    height: min(520, display.visibleFrame.height - 140)
+                ),
+                display: display,
+                color: .systemBlue
+            )
+            defer {
+                overlay.stop()
+                parent.window.alphaValue = 0
+            }
+            let activeSpace = activeSpace(for: display)
+            var world = workflowWorld(windows: [parent], display: display, activeSpace: activeSpace)
+            world = try tileWindow(parent, in: world, display: display, liveWindows: [parent])
+            let targets = try currentTiledTargets(in: world, context: "standalone sheet tiled border")
+            var model = OverlayModel(tiledBorders: targets)
+            try await verifySheetFocusAndBorderOcclusion(
+                parent: parent,
+                tiledBorderID: parent.id,
+                tiledTargets: targets,
+                overlay: overlay,
+                overlayModel: &model,
+                axClient: axClient,
+                display: display
+            )
+            return (true, "live AXSheet focus, geometry, and WindowServer border occlusion verified")
+        } catch let error as LiveFocusWorkflowFailure {
+            return (false, error.message)
+        } catch {
+            return (false, "live sheet focus verification failed: \(String(describing: error))")
+        }
+    }
+
     static func verifyCycleMouseAndBorderWorkflow() async -> (passed: Bool, message: String) {
         if isSystemLocked() {
             return (false, "live focus workflow verification requires an unlocked user session")
@@ -225,6 +276,18 @@ enum LiveFocusWorkflowVerification {
                 context: "regression: unfocused floating must stay above tile border"
             )
 
+            observer?.stop()
+            observer = nil
+            try await verifySheetFocusAndBorderOcclusion(
+                parent: windows.tiled,
+                tiledBorderID: tiledBorderID,
+                tiledTargets: try currentTiledTargets(in: world, context: "sheet workflow tiled border"),
+                overlay: overlay,
+                overlayModel: &overlayModel,
+                axClient: axClient,
+                display: display
+            )
+
             return (
                 true,
                 [
@@ -234,7 +297,8 @@ enum LiveFocusWorkflowVerification {
                     "mouseFocus=\(windows.floatA.id.description)",
                     "focusBorderVisible=true",
                     "tiledBorderBelowFloating=true",
-                    "unfocusedFloatStaysAboveBorder=true"
+                    "unfocusedFloatStaysAboveBorder=true",
+                    "sheetFocusAndOcclusion=true"
                 ].joined(separator: " ")
             )
         } catch let error as LiveFocusWorkflowFailure {
@@ -242,6 +306,112 @@ enum LiveFocusWorkflowVerification {
         } catch {
             return (false, "live focus workflow verification failed: \(String(describing: error))")
         }
+    }
+
+    private static func verifySheetFocusAndBorderOcclusion(
+        parent: LiveFocusWindow,
+        tiledBorderID: WindowID,
+        tiledTargets: [FocusBorderTarget],
+        overlay: Overlay,
+        overlayModel: inout OverlayModel,
+        axClient: AXClient,
+        display: DisplayInfo
+    ) async throws {
+        try await focusVerifierWindow(parent, using: axClient, context: "sheet workflow parent")
+        let parentTarget = FocusBorderTarget(window: parent.metadata, frame: parent.metadata.frame)
+        overlayModel = overlayModel
+            .settingTiledBorders(tiledTargets)
+            .showingFocusBorder(parentTarget)
+        overlay.render(overlayModel)
+        guard overlay.debugFocusBorderIsVisuallyVisible() else {
+            throw LiveFocusWorkflowFailure("sheet workflow parent focus border was not initially visible")
+        }
+
+        let sheet = NSPanel(
+            contentRect: CGRect(x: 0, y: 0, width: 430, height: 190),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        sheet.title = "Narwhal live focus workflow sheet"
+        sheet.backgroundColor = .windowBackgroundColor
+        sheet.hasShadow = false
+        let field = NSTextField(string: "Dialog focus target")
+        field.frame = CGRect(x: 28, y: 78, width: 300, height: 28)
+        let content = NSView(frame: CGRect(x: 0, y: 0, width: 430, height: 190))
+        content.addSubview(field)
+        sheet.contentView = content
+        parent.window.beginSheet(sheet, completionHandler: { _ in })
+        await settleLiveVerifier(for: 0.12)
+        sheet.makeKey()
+        sheet.makeFirstResponder(field)
+        await settleLiveVerifier(for: 0.18)
+        defer {
+            parent.window.endSheet(sheet)
+            sheet.orderOut(nil)
+        }
+
+        // Before AX focus catches up, a stale parent border must be hidden behind
+        // the newly frontmost sheet rather than drawing across it.
+        overlay.render(overlayModel)
+        guard !overlay.debugFocusBorderIsVisuallyVisible() else {
+            throw LiveFocusWorkflowFailure("stale parent focus border remained visible across the sheet")
+        }
+        guard !overlay.debugTiledBorderIsVisuallyVisible(for: tiledBorderID) else {
+            throw LiveFocusWorkflowFailure("parent tiled border remained visible across the sheet")
+        }
+
+        let snapshot = try focusedDialogSnapshot(
+            using: axClient,
+            parentID: parent.id,
+            expectedFrame: axFrame(forAppKitFrame: sheet.frame, display: display)
+        )
+        guard snapshot.id != parent.id else {
+            throw LiveFocusWorkflowFailure("focused sheet resolved to its parent window identity")
+        }
+        overlayModel = overlayModel.showingFocusBorder(snapshot.focusBorderTarget)
+        overlay.render(overlayModel)
+        let liveSheet = LiveFocusWindow(id: snapshot.id, window: sheet, metadata: snapshot.metadata)
+        try requireFocusBorderVisible(
+            overlay: overlay,
+            target: snapshot.focusBorderTarget,
+            liveWindow: liveSheet,
+            display: display,
+            context: "focused sheet border"
+        )
+        try requireFloatingWindowCoversTiledBorder(
+            overlay: overlay,
+            floating: liveSheet,
+            tiledID: tiledBorderID,
+            display: display,
+            context: "focused sheet over parent tiled border"
+        )
+    }
+
+    private static func focusedDialogSnapshot(
+        using axClient: AXClient,
+        parentID: WindowID,
+        expectedFrame: CGRect
+    ) throws -> FocusedWindowSnapshot {
+        var lastFailure = "no focused snapshot"
+        let deadline = Date().addingTimeInterval(1.5)
+        while Date() < deadline {
+            switch axClient.focusedWindowSnapshot() {
+            case .success(let snapshot)
+                where snapshot.id != parentID
+                    && isTransientFocusedWindow(role: snapshot.role, subrole: snapshot.subrole)
+                    && snapshot.frame.matches(expectedFrame, tolerance: 3):
+                return snapshot
+            case .success(let snapshot):
+                lastFailure = "focused \(snapshot.id.description) role=\(snapshot.role) subrole=\(snapshot.subrole) title=\"\(snapshot.title)\""
+            case .failure(let error):
+                lastFailure = error.description
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.04))
+        }
+        throw LiveFocusWorkflowFailure(
+            "sheet focus snapshot failed: \(lastFailure) \(axClient.debugFocusedWindowRelationships())"
+        )
     }
 
     private static func tileWindow(

@@ -93,6 +93,11 @@ struct LiveAppKitVerifierTests {
         try expectPassed(DisplayChangeFocusBorderVerification.verifyDisplayChangePreservesVisibleFocusBorder())
     }
 
+    @Test("Focused sheet border and parent occlusion")
+    func focusedSheetBorderAndParentOcclusion() async throws {
+        try expectPassed(await LiveFocusWorkflowVerification.verifySheetFocusAndBorderWorkflow())
+    }
+
     // Keep these workflows in one case because the main-actor test host can
     // terminate between separate serialized cases at the end of the suite.
     @Test("Live focus + command workflows")
