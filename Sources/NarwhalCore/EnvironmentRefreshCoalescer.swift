@@ -156,19 +156,22 @@ public struct EnvironmentRefreshPolicy: Equatable, Sendable {
     public let persistRestore: Bool
     public let applyPendingTileRules: Bool
     public let scheduleDeferredCleanup: Bool
+    public let reflowTiledLayout: Bool
 
     fileprivate init(
         preserveSpaceLayouts: Bool,
         reconciliationMode: EnvironmentReconciliationMode,
         persistRestore: Bool,
         applyPendingTileRules: Bool,
-        scheduleDeferredCleanup: Bool
+        scheduleDeferredCleanup: Bool,
+        reflowTiledLayout: Bool
     ) {
         self.preserveSpaceLayouts = preserveSpaceLayouts
         self.reconciliationMode = reconciliationMode
         self.persistRestore = persistRestore
         self.applyPendingTileRules = applyPendingTileRules
         self.scheduleDeferredCleanup = scheduleDeferredCleanup
+        self.reflowTiledLayout = reflowTiledLayout
     }
 }
 
@@ -181,11 +184,16 @@ public func environmentRefreshPolicy(
         || reasons.contains(.spaceSettled)
         || reasons.contains(.spaceTransitionEnded)
 
+    let displayTopologySettled = reasons.contains(.displaySettled) && !preserveSpaceLayouts
+
     return EnvironmentRefreshPolicy(
         preserveSpaceLayouts: preserveSpaceLayouts,
-        reconciliationMode: preserveSpaceLayouts ? .preserveLayouts : .activeWorkspaceCleanup,
+        reconciliationMode: preserveSpaceLayouts
+            ? .preserveLayouts
+            : displayTopologySettled ? .displayTopologySettled : .activeWorkspaceCleanup,
         persistRestore: !preserveSpaceLayouts && !reasons.contains(.displaySettled),
         applyPendingTileRules: !preserveSpaceLayouts,
-        scheduleDeferredCleanup: reasons.contains(.displayChanged)
+        scheduleDeferredCleanup: reasons.contains(.displayChanged),
+        reflowTiledLayout: displayTopologySettled
     )
 }

@@ -73,6 +73,11 @@ struct LiveAppKitVerifierTests {
         try expectPassed(LiveMultiDisplayVerification.verifyDisplayScopedPushAndCycle())
     }
 
+    @Test("Display topology reflow geometry")
+    func displayTopologyReflowGeometry() throws {
+        try expectPassed(DisplayTopologyReflowVerification.verifyCurrentDisplayReflow())
+    }
+
     @Test("Focused-unavailable polling")
     func focusedUnavailablePolling() throws {
         try expectPassed(FocusedUnavailablePollingVerification.verifyUnavailableFocusIsNotLoggedEveryPoll())

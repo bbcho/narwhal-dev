@@ -114,6 +114,9 @@ public func environmentSnapshotPreservesSpaceLayouts(_ snapshot: EnvironmentSnap
         return true
     case .activeWorkspaceCleanup:
         break
+    case .displayTopologySettled:
+        guard case .complete = snapshot.axSnapshot.quality else { return true }
+        return false
     }
 
     guard case .complete = snapshot.axSnapshot.quality else {
@@ -253,7 +256,14 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
             liveWindowDisplay: liveWindowDisplay,
             windowSpace: mergedWindowSpace
         )
-        let tree = pruneTree(previous.tree, keeping: liveIDs)
+        let tree = snapshot.reconciliationMode == .displayTopologySettled
+            ? reconciledTreeAfterDisplayTopologyChange(
+                for: WorkspaceKey(displayID: displayID, spaceID: activeSpace),
+                liveWindowIDs: liveIDs,
+                liveWindows: liveWindows,
+                previousSpaces: world.spaces
+            )
+            : pruneTree(previous.tree, keeping: liveIDs)
         let tiled = Set(occupiedWindows(in: tree))
         let floating = liveWindowDisplay
             .filter { windowID, ownedDisplayID in
@@ -263,10 +273,12 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
             }
             .map(\.key)
             .sorted { $0.raw < $1.raw }
-        let displayStates = previousSpace.displays.setting(
-            displayID,
-            to: DisplaySpaceState(displayID: displayID, tree: tree, floating: floating)
-        )
+        let displayStates = previousSpace.displays
+            .filter { snapshot.displays[$0.key] != nil }
+            .setting(
+                displayID,
+                to: DisplaySpaceState(displayID: displayID, tree: tree, floating: floating)
+            )
 
         let focused = previousSpace.focused.flatMap {
             liveIDsByActiveSpace[activeSpace, default: []].contains($0) ? $0 : nil
@@ -292,6 +304,99 @@ private func reconcileCompleteEnvironment(_ snapshot: EnvironmentSnapshot, in wo
         previouslyTrackedWindowIDs: previouslyTrackedWindowIDs,
         in: reconciled
     )
+}
+
+private struct DisplayTreeFragment {
+    let source: WorkspaceKey
+    let tree: Node
+    let windowIDs: Set<WindowID>
+}
+
+private func reconciledTreeAfterDisplayTopologyChange(
+    for target: WorkspaceKey,
+    liveWindowIDs: Set<WindowID>,
+    liveWindows: [WindowID: WindowMetadata],
+    previousSpaces: [SpaceID: SpaceState]
+) -> Node {
+    let sources = previousSpaces.flatMap { spaceID, space in
+        space.displays.map { displayID, state in
+            (key: WorkspaceKey(displayID: displayID, spaceID: spaceID), tree: state.tree)
+        }
+    }.sorted { lhs, rhs in
+        let lhsPriority = displayTreeSourcePriority(lhs.key, target: target)
+        let rhsPriority = displayTreeSourcePriority(rhs.key, target: target)
+        if lhsPriority != rhsPriority { return lhsPriority < rhsPriority }
+        if lhs.key.spaceID.raw != rhs.key.spaceID.raw { return lhs.key.spaceID.raw < rhs.key.spaceID.raw }
+        return lhs.key.displayID.raw < rhs.key.displayID.raw
+    }
+
+    let result = sources.reduce((remaining: liveWindowIDs, fragments: [DisplayTreeFragment]())) { result, source in
+        let sourceWindowIDs = Set(occupiedWindows(in: source.tree)).intersection(result.remaining)
+        guard !sourceWindowIDs.isEmpty else { return result }
+        return (
+            remaining: result.remaining.subtracting(sourceWindowIDs),
+            fragments: result.fragments + [DisplayTreeFragment(
+                source: source.key,
+                tree: pruneTree(source.tree, keeping: sourceWindowIDs),
+                windowIDs: sourceWindowIDs
+            )]
+        )
+    }
+    return mergedDisplayTreeFragments(result.fragments, liveWindows: liveWindows)
+}
+
+private func displayTreeSourcePriority(_ source: WorkspaceKey, target: WorkspaceKey) -> Int {
+    if source == target { return 0 }
+    if source.spaceID == target.spaceID { return 1 }
+    return 2
+}
+
+private func mergedDisplayTreeFragments(
+    _ fragments: [DisplayTreeFragment],
+    liveWindows: [WindowID: WindowMetadata]
+) -> Node {
+    guard let first = fragments.first else { return .void }
+    guard fragments.count > 1 else { return first.tree }
+
+    let axis = displayTreeMergeAxis(fragments, liveWindows: liveWindows)
+    let ordered = fragments.sorted { lhs, rhs in
+        let lhsFrame = displayTreeFragmentFrame(lhs, liveWindows: liveWindows)
+        let rhsFrame = displayTreeFragmentFrame(rhs, liveWindows: liveWindows)
+        let lhsCoordinate = axis == .horizontal ? lhsFrame.midX : lhsFrame.midY
+        let rhsCoordinate = axis == .horizontal ? rhsFrame.midX : rhsFrame.midY
+        if lhsCoordinate != rhsCoordinate { return lhsCoordinate < rhsCoordinate }
+        if lhs.source.spaceID.raw != rhs.source.spaceID.raw {
+            return lhs.source.spaceID.raw < rhs.source.spaceID.raw
+        }
+        return lhs.source.displayID.raw < rhs.source.displayID.raw
+    }
+    let cells = ordered.compactMap { fragment -> Cell? in
+        try? Cell.create(weight: Double(fragment.windowIDs.count), node: fragment.tree).get()
+    }
+    guard case .success(let split) = Split.create(axis: axis, cells: cells) else {
+        return first.tree
+    }
+    return .split(split)
+}
+
+private func displayTreeMergeAxis(
+    _ fragments: [DisplayTreeFragment],
+    liveWindows: [WindowID: WindowMetadata]
+) -> Axis {
+    let frames = fragments.map { displayTreeFragmentFrame($0, liveWindows: liveWindows) }
+    guard let first = frames.first else { return .horizontal }
+    let minX = frames.dropFirst().reduce(first.midX) { min($0, $1.midX) }
+    let maxX = frames.dropFirst().reduce(first.midX) { max($0, $1.midX) }
+    let minY = frames.dropFirst().reduce(first.midY) { min($0, $1.midY) }
+    let maxY = frames.dropFirst().reduce(first.midY) { max($0, $1.midY) }
+    return maxX - minX >= maxY - minY ? .horizontal : .vertical
+}
+
+private func displayTreeFragmentFrame(
+    _ fragment: DisplayTreeFragment,
+    liveWindows: [WindowID: WindowMetadata]
+) -> CGRect {
+    fragment.windowIDs.compactMap { liveWindows[$0]?.frame }.reduce(CGRect.null) { $0.union($1) }
 }
 
 private func containsTrackedInactiveSpaceWindows(

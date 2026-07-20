@@ -121,7 +121,8 @@ struct EnvironmentRefreshCoalescerTests {
             reconciliationMode: .preserveLayouts,
             persistRestore: false,
             applyPendingTileRules: false,
-            scheduleDeferredCleanup: false
+            scheduleDeferredCleanup: false,
+            reflowTiledLayout: false
         )
         expectPolicy(environmentRefreshPolicy(
             for: [.windowClosed(WindowID(raw: 44)), .spaceSettled],
@@ -131,7 +132,8 @@ struct EnvironmentRefreshCoalescerTests {
             reconciliationMode: .preserveLayouts,
             persistRestore: false,
             applyPendingTileRules: false,
-            scheduleDeferredCleanup: false
+            scheduleDeferredCleanup: false,
+            reflowTiledLayout: false
         )
         expectPolicy(environmentRefreshPolicy(
             for: [.windowClosed(WindowID(raw: 44)), .windowOpened(WindowID(raw: 45))],
@@ -141,7 +143,8 @@ struct EnvironmentRefreshCoalescerTests {
             reconciliationMode: .activeWorkspaceCleanup,
             persistRestore: true,
             applyPendingTileRules: true,
-            scheduleDeferredCleanup: false
+            scheduleDeferredCleanup: false,
+            reflowTiledLayout: false
         )
         expectPolicy(environmentRefreshPolicy(
             for: [.spaceSettled, .spaceTransitionEnded],
@@ -151,7 +154,8 @@ struct EnvironmentRefreshCoalescerTests {
             reconciliationMode: .preserveLayouts,
             persistRestore: false,
             applyPendingTileRules: false,
-            scheduleDeferredCleanup: false
+            scheduleDeferredCleanup: false,
+            reflowTiledLayout: false
         )
         expectPolicy(environmentRefreshPolicy(
             for: [.displayChanged],
@@ -161,7 +165,8 @@ struct EnvironmentRefreshCoalescerTests {
             reconciliationMode: .preserveLayouts,
             persistRestore: false,
             applyPendingTileRules: false,
-            scheduleDeferredCleanup: true
+            scheduleDeferredCleanup: true,
+            reflowTiledLayout: false
         )
         expectPolicy(environmentRefreshPolicy(
             for: [.windowOpened(WindowID(raw: 46)), .displayChanged],
@@ -171,17 +176,19 @@ struct EnvironmentRefreshCoalescerTests {
             reconciliationMode: .preserveLayouts,
             persistRestore: false,
             applyPendingTileRules: false,
-            scheduleDeferredCleanup: true
+            scheduleDeferredCleanup: true,
+            reflowTiledLayout: false
         )
         expectPolicy(environmentRefreshPolicy(
             for: [.displaySettled],
             duringSpaceTransition: false
         ),
             preserveSpaceLayouts: false,
-            reconciliationMode: .activeWorkspaceCleanup,
+            reconciliationMode: .displayTopologySettled,
             persistRestore: false,
             applyPendingTileRules: true,
-            scheduleDeferredCleanup: false
+            scheduleDeferredCleanup: false,
+            reflowTiledLayout: true
         )
         expectPolicy(environmentRefreshPolicy(
             for: [.tiledBorderTargetMismatch(WindowID(raw: 47))],
@@ -191,7 +198,8 @@ struct EnvironmentRefreshCoalescerTests {
             reconciliationMode: .activeWorkspaceCleanup,
             persistRestore: true,
             applyPendingTileRules: true,
-            scheduleDeferredCleanup: false
+            scheduleDeferredCleanup: false,
+            reflowTiledLayout: false
         )
         expectPolicy(environmentRefreshPolicy(
             for: [.displaySettled, .displayChanged],
@@ -201,7 +209,8 @@ struct EnvironmentRefreshCoalescerTests {
             reconciliationMode: .preserveLayouts,
             persistRestore: false,
             applyPendingTileRules: false,
-            scheduleDeferredCleanup: true
+            scheduleDeferredCleanup: true,
+            reflowTiledLayout: false
         )
     }
 
@@ -211,12 +220,14 @@ struct EnvironmentRefreshCoalescerTests {
         reconciliationMode: EnvironmentReconciliationMode,
         persistRestore: Bool,
         applyPendingTileRules: Bool,
-        scheduleDeferredCleanup: Bool
+        scheduleDeferredCleanup: Bool,
+        reflowTiledLayout: Bool
     ) {
         #expect(policy.preserveSpaceLayouts == preserveSpaceLayouts)
         #expect(policy.reconciliationMode == reconciliationMode)
         #expect(policy.persistRestore == persistRestore)
         #expect(policy.applyPendingTileRules == applyPendingTileRules)
         #expect(policy.scheduleDeferredCleanup == scheduleDeferredCleanup)
+        #expect(policy.reflowTiledLayout == reflowTiledLayout)
     }
 }

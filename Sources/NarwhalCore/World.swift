@@ -87,6 +87,7 @@ public enum EnvironmentReconciliationMode: String, Equatable, Codable, Sendable 
     case observeOnly
     case preserveLayouts
     case activeWorkspaceCleanup
+    case displayTopologySettled
 }
 
 public struct SpaceTopology: Equatable, Codable, Sendable {

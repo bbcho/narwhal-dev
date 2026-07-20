@@ -2625,7 +2625,8 @@ struct MVPLayoutTests {
         )
         #expect(!displaySettledPolicy.persistRestore)
         #expect(displaySettledPolicy.applyPendingTileRules)
-        #expect(displaySettledPolicy.reconciliationMode == .activeWorkspaceCleanup)
+        #expect(displaySettledPolicy.reconciliationMode == .displayTopologySettled)
+        #expect(displaySettledPolicy.reflowTiledLayout)
 
         let settledSnapshot = EnvironmentSnapshot(
             activeSpace: activeSpace,

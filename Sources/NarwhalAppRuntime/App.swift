@@ -3010,8 +3010,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if completed && policy.scheduleDeferredCleanup {
                 scheduleDelayedDisplaySettledRefresh(after: Self.displaySettledRefreshDelay)
             }
+            var appliedPendingTileRules = false
             if completed && policy.applyPendingTileRules && !environment.preservedSpaceLayouts {
-                await applyPendingTileRules(reason: "coalesced \(completedRequest.description)")
+                appliedPendingTileRules = await applyPendingTileRules(
+                    reason: "coalesced \(completedRequest.description)"
+                )
+            }
+            if completed
+                && policy.reflowTiledLayout
+                && !environment.preservedSpaceLayouts
+                && !appliedPendingTileRules
+            {
+                await applySettledDisplayLayout(reason: completedRequest.description)
             }
             if policy.persistRestore && !environment.preservedSpaceLayouts {
                 await persistRestore(reason: "coalesced \(completedRequest.description)")
@@ -3020,6 +3030,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.info("Coalesced environment refresh retained pending generation \(pending.generation) after incomplete AX snapshot")
         case .stale, .idle:
             break
+        }
+    }
+
+    @MainActor
+    private func applySettledDisplayLayout(reason: String) async {
+        guard !isPaused else {
+            reporter.info("Display reflow deferred while paused (\(reason))")
+            return
+        }
+        guard AccessibilityTrust.current(prompt: false).isTrusted else {
+            reporter.error("Display reflow requires Accessibility permission (\(reason))")
+            return
+        }
+
+        switch await worldActor.planCurrentLayout() {
+        case .success(nil):
+            reporter.info("Display reflow completed with no tiled windows (\(reason))")
+            await persistRestore(reason: "display topology")
+        case .success(let result?):
+            _ = await applyPlannedLayout(
+                result,
+                operation: "Display reflow",
+                persistReason: "display topology",
+                retryOnClamp: true,
+                showFocusBorder: false,
+                writeStrategy: .coordinated
+            ) {
+                await self.currentLayoutRetryPlan()
+            }
+        case .failure(let error):
+            reporter.error("Display reflow rejected by core (\(reason)): \(error.message)")
+        }
+    }
+
+    private func currentLayoutRetryPlan() async -> Result<CommandPlanResult, CommandError> {
+        switch await worldActor.planCurrentLayout() {
+        case .success(let result?):
+            return .success(result)
+        case .success(nil):
+            return .failure(.activeSpaceUnavailable)
+        case .failure(let error):
+            return .failure(error)
         }
     }
 
