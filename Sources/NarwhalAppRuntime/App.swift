@@ -509,7 +509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             status.snapshotQuality = result.quality
         }
         await updateTiledBordersFromWorld()
-        workbenchController.refreshIfVisible()
+        await refreshWorkspacePresentationSurfaces()
         return result
     }
 
@@ -522,6 +522,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.error("Tiled border refresh failed: \(error.message)")
             setTiledBorders([])
         }
+    }
+
+    private func refreshWorkspacePresentationSurfaces() async {
+        let presentation = await worldActor.workbenchPresentation(
+            snapshotQuality: operatingStatus.snapshotQuality
+        )
+        menubar.updateWorkspacePresentation(presentation)
+        workbenchController.updatePresentationIfVisible(presentation)
     }
 
     @discardableResult
@@ -2490,6 +2498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await worldActor.commit(result, appliedFrames: appliedFrames)
             reporter.info("\(operation) completed")
             await updateTiledBordersFromWorld()
+            await refreshWorkspacePresentationSurfaces()
             switch focusUpdate {
             case .target(let focusedWindowID, let frame):
                 if showFocusBorder {

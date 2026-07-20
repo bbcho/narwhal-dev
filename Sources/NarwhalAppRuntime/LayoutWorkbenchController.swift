@@ -79,6 +79,11 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         Task { await refreshPresentation() }
     }
 
+    func updatePresentationIfVisible(_ presentation: WorkbenchPresentation) {
+        guard window?.isVisible == true else { return }
+        applyPresentation(presentation)
+    }
+
     func windowWillClose(_ notification: Notification) {
         planned = nil
         canvas.preview = nil
@@ -332,7 +337,11 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
     }
 
     private func refreshPresentation() async {
-        presentation = await worldActor.workbenchPresentation(snapshotQuality: snapshotQuality())
+        applyPresentation(await worldActor.workbenchPresentation(snapshotQuality: snapshotQuality()))
+    }
+
+    private func applyPresentation(_ presentation: WorkbenchPresentation) {
+        self.presentation = presentation
         if let selectedWorkspaceKey,
            !presentation.workspaces.contains(where: { $0.key == selectedWorkspaceKey }) {
             self.selectedWorkspaceKey = nil
@@ -343,7 +352,7 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         }
         renderRail()
         renderWorkspace()
-        await renderHistoryAvailability()
+        Task { await renderHistoryAvailability() }
     }
 
     private func renderRail() {

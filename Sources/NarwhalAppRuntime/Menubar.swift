@@ -80,6 +80,8 @@ final class Menubar {
     )
     private var updateStatus: UpdateMenuStatus = .idle
     private var actions: MenubarActions?
+    private var maintenanceMenu: NSMenu?
+    private var workspacePopover: WorkspaceOverviewPopoverController?
     private let lightIcon = NarwhalIconResources.statusItemIcon(variant: .light)
     private let darkIcon = NarwhalIconResources.statusItemIcon(variant: .dark)
     private var appearanceObservation: NSKeyValueObservation?
@@ -108,7 +110,6 @@ final class Menubar {
         menu.addItem(focusMenuItem)
         menu.addItem(lastCommandMenuItem)
         menu.addItem(.separator())
-        menu.addItem(menuItem(title: "Open Layout Workbench…", action: #selector(openWorkbench)))
         retryMenuItem.target = self
         menu.addItem(retryMenuItem)
         menu.addItem(menuItem(title: "Reload Config", action: #selector(reloadConfig)))
@@ -124,7 +125,16 @@ final class Menubar {
         menu.addItem(menuItem(title: "Reset Layout", action: #selector(resetLayout)))
         menu.addItem(.separator())
         menu.addItem(menuItem(title: "Quit Narwhal", action: #selector(quitApp)))
-        item.menu = menu
+        maintenanceMenu = menu
+        workspacePopover = WorkspaceOverviewPopoverController(
+            openWorkbench: { [weak self] in
+                self?.workspacePopover?.close()
+                self?.actions?.openWorkbench()
+            },
+            showMaintenance: { [weak self] view in
+                self?.showMaintenanceMenu(relativeTo: view)
+            }
+        )
 
         statusItem = item
         renderStatus()
@@ -143,6 +153,10 @@ final class Menubar {
     func updateOperatingStatus(_ status: MenubarOperatingStatus) {
         operatingStatus = status
         renderStatus()
+    }
+
+    func updateWorkspacePresentation(_ presentation: WorkbenchPresentation) {
+        workspacePopover?.update(presentation)
     }
 
     func updateLoginItemStatus(_ status: LoginItemStatus) {
@@ -190,27 +204,30 @@ final class Menubar {
     }
 
     func debugPerformMenuItem(titled title: String) -> Bool {
-        guard let item = statusItem?.menu?.items.first(where: { $0.title == title }),
+        guard let item = maintenanceMenu?.items.first(where: { $0.title == title }),
               let action = item.action
         else { return false }
         return NSApp.sendAction(action, to: item.target, from: item)
     }
 
     func debugMenuItem(titled title: String) -> (title: String, isEnabled: Bool)? {
-        statusItem?.menu?.items.first(where: { $0.title == title }).map { ($0.title, $0.isEnabled) }
+        maintenanceMenu?.items.first(where: { $0.title == title }).map { ($0.title, $0.isEnabled) }
     }
 
     func debugMenuItemIsOn(titled title: String) -> Bool? {
-        statusItem?.menu?.items.first(where: { $0.title == title }).map { $0.state == .on }
+        maintenanceMenu?.items.first(where: { $0.title == title }).map { $0.state == .on }
     }
 
     func debugMenuTitles() -> [String] {
-        statusItem?.menu?.items.map(\.title) ?? []
+        maintenanceMenu?.items.map(\.title) ?? []
     }
 #endif
 
     func stop() {
         guard let statusItem else { return }
+        workspacePopover?.close()
+        workspacePopover = nil
+        maintenanceMenu = nil
         NSStatusBar.system.removeStatusItem(statusItem)
         self.statusItem = nil
         actions = nil
@@ -227,6 +244,9 @@ final class Menubar {
         button.title = ""
         button.imagePosition = .imageOnly
         button.toolTip = "Narwhal"
+        button.target = self
+        button.action = #selector(statusButtonClicked(_:))
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         refreshButtonImage(button)
         // macOS doesn't reliably honor isTemplate on NSImage(contentsOf:)-loaded
         // images, so swap explicit light/dark PNGs based on effectiveAppearance.
@@ -236,6 +256,22 @@ final class Menubar {
                 self.refreshButtonImage(button)
             }
         }
+    }
+
+    @objc private func statusButtonClicked(_ sender: NSStatusBarButton) {
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            showMaintenanceMenu(relativeTo: sender)
+        } else {
+            workspacePopover?.toggle(relativeTo: sender)
+        }
+    }
+
+    private func showMaintenanceMenu(relativeTo view: NSView) {
+        maintenanceMenu?.popUp(
+            positioning: nil,
+            at: CGPoint(x: 0, y: view.bounds.maxY + 4),
+            in: view
+        )
     }
 
     private func refreshButtonImage(_ button: NSStatusBarButton) {
@@ -280,11 +316,6 @@ final class Menubar {
 
     private var focusDescription: String {
         "Focus: \(operatingStatus.focusedWindowID?.description ?? "unknown")"
-    }
-
-    @objc
-    private func openWorkbench() {
-        actions?.openWorkbench()
     }
 
     @objc
