@@ -933,9 +933,16 @@ struct AXClient {
         }
     }
 
-    private func frameWriteDidNotConverge(target: CGRect, actualFrames: [CGRect]) -> AXFrameWriteOutcome {
+    func frameWriteDidNotConverge(target: CGRect, actualFrames: [CGRect]) -> AXFrameWriteOutcome {
         guard let actual = actualFrames.last else {
             return .failed(.frameDidNotConverge(target: target, actual: .null, attempts: 0))
+        }
+        if frameWriteApproximatelySettled(
+            target: target,
+            actual: actual,
+            tolerance: Double(frameWriteSettleTolerance)
+        ) {
+            return .converged(actual: actual)
         }
         if let observed = confirmedObservedConstraints(
             target: target,

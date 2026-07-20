@@ -34,4 +34,20 @@ struct AXFrameWritePolicyTests {
                 == WindowConstraints(minHeight: 881)
         )
     }
+
+    @Test("A browser-chrome offset inside the settle contract is a successful write")
+    func approximateBrowserFrameIsConverged() {
+        let target = CGRect(x: 16, y: 499.36, width: 1_410, height: 1_076.64)
+        let actual = CGRect(x: 16, y: 515, width: 1_410, height: 1_076)
+
+        switch AXClient().frameWriteDidNotConverge(
+            target: target,
+            actualFrames: [actual, actual]
+        ) {
+        case .converged(let settled):
+            #expect(settled == actual)
+        case .clamped, .failed:
+            #expect(Bool(false), "Expected the accepted Firefox chrome offset to converge")
+        }
+    }
 }
