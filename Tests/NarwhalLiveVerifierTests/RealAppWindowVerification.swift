@@ -2,6 +2,7 @@
 @testable import NarwhalAppRuntime
 import AppKit
 import CoreGraphics
+import Darwin
 import Foundation
 import NarwhalAppSupport
 import NarwhalCore
@@ -89,6 +90,7 @@ enum RealAppWindowVerification {
     private static let realAppFrameWriteTolerance: CGFloat = 6
     private static let browserResizeReserveDelta = 0.18
     private static let coordinatedResizeDeadline: TimeInterval = 0.8
+    private static let outlookStageObservationDuration: TimeInterval = 1.0
 
     static func verifyFirefox() async -> (passed: Bool, message: String) {
         await verifyApp(firefoxSpec())
@@ -132,7 +134,7 @@ enum RealAppWindowVerification {
             let targetDisplay = try manualResizeVerificationDisplay(displays)
 
             for spec in [chromeSpec(), firefoxSpec(), terminalSpec()] {
-                originals.append(try launchTrackedWindow(
+                originals.append(try await launchTrackedWindow(
                     spec: spec,
                     using: axClient,
                     requiringNewWindow: true,
@@ -181,7 +183,7 @@ enum RealAppWindowVerification {
             let displays = DisplayClient().currentDisplays()
             let targetDisplay = try manualResizeVerificationDisplay(displays)
 
-            let leftTerminal = try launchTrackedWindow(
+            let leftTerminal = try await launchTrackedWindow(
                 spec: terminalSpec(),
                 using: axClient,
                 requiringNewWindow: true,
@@ -189,7 +191,7 @@ enum RealAppWindowVerification {
             )
             originals.append(leftTerminal)
 
-            let rightTerminal = try launchTrackedWindow(
+            let rightTerminal = try await launchTrackedWindow(
                 spec: terminalSpec(),
                 using: axClient,
                 requiringNewWindow: true,
@@ -198,7 +200,7 @@ enum RealAppWindowVerification {
             )
             originals.append(rightTerminal)
 
-            let outlook = try launchTrackedWindow(
+            let outlook = try await launchTrackedWindow(
                 spec: outlookSpec(),
                 using: axClient,
                 requiringNewWindow: false,
@@ -247,7 +249,7 @@ enum RealAppWindowVerification {
             var selectedIDs = Set<WindowID>()
 
             for index in 0..<3 {
-                let original = try launchTrackedWindow(
+                let original = try await launchTrackedWindow(
                     spec: spec,
                     using: axClient,
                     requiringNewWindow: true,
@@ -324,13 +326,27 @@ enum RealAppWindowVerification {
         try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
         current = try currentWorkflowMetadata(for: rightTerminal, using: axClient)
         try await focusIfPossible(current, appName: "Outlook transfer right Terminal", using: axClient)
-        try await applyWorkflowCommand(
+        let initialFrames = try await applyWorkflowCommand(
             "Outlook transfer stage right Terminal",
             plan: { await worldActor.planPush(current.id, direction: .right) },
             worldActor: worldActor,
             applier: applier,
             allowConstraintRetry: false
         )
+        try requireInitialOutlookSideTransferLayout(
+            initialFrames,
+            leftTerminalID: leftTerminal.metadata.id,
+            rightTerminalID: rightTerminal.metadata.id,
+            visibleFrame: targetDisplay.visibleFrame
+        )
+        try requirePlannedRealFramesVisible(
+            [leftTerminal, rightTerminal],
+            plannedFrames: initialFrames,
+            using: axClient,
+            context: "Outlook transfer initial left-right split"
+        )
+        report("REAL OUTLOOK SIDE TRANSFER: two full-height Terminal halves staged")
+        await settleLiveVerifier(for: outlookStageObservationDuration)
 
         for direction in [Direction.left, .right, .left] {
             let frames = try await pushOutlook(
@@ -349,13 +365,14 @@ enum RealAppWindowVerification {
                 outlookID: outlook.metadata.id,
                 visibleFrame: targetDisplay.visibleFrame
             )
-            await settleLiveVerifier(for: 0.35)
             try requirePlannedRealFramesVisible(
                 originals,
                 plannedFrames: frames,
                 using: axClient,
                 context: "Outlook \(direction.rawValue) transfer"
             )
+            report("REAL OUTLOOK SIDE TRANSFER: Outlook moved \(direction.rawValue); vacated side expanded")
+            await settleLiveVerifier(for: outlookStageObservationDuration)
         }
 
         let finalTerminal = try currentWorkflowMetadata(for: rightTerminal, using: axClient)
@@ -382,16 +399,22 @@ enum RealAppWindowVerification {
         )
     }
 
-    private static func launchChromeVerificationWindow(token: String) throws {
+    private static func launchChromeVerificationWindow(token: String) throws -> URL {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        let url = browserVerificationURL(browser: "Chrome", token: token)
+        let page = try browserVerificationPage(browser: "Chrome", token: token)
+        var callerOwnsPage = false
+        defer {
+            if !callerOwnsPage {
+                try? FileManager.default.removeItem(at: page)
+            }
+        }
         process.arguments = [
             "-n",
             "-a", "Google Chrome",
             "--args",
             "--new-window",
-            url
+            page.absoluteString
         ]
         try process.run()
         process.waitUntilExit()
@@ -399,14 +422,23 @@ enum RealAppWindowVerification {
             throw RealAppWindowVerifierFailure("Google Chrome new-window launch failed with status \(process.terminationStatus)")
         }
         RunLoop.current.run(until: Date().addingTimeInterval(0.45))
+        callerOwnsPage = true
+        return page
     }
 
-    private static func launchFirefoxVerificationWindow(token: String) throws {
+    private static func launchFirefoxVerificationWindow(token: String) throws -> URL {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/Applications/Firefox.app/Contents/MacOS/firefox")
+        let page = try browserVerificationPage(browser: "Firefox", token: token)
+        var callerOwnsPage = false
+        defer {
+            if !callerOwnsPage {
+                try? FileManager.default.removeItem(at: page)
+            }
+        }
         process.arguments = [
             "--new-window",
-            browserVerificationURL(browser: "Firefox", token: token)
+            page.absoluteString
         ]
         try process.run()
         process.waitUntilExit()
@@ -414,12 +446,17 @@ enum RealAppWindowVerification {
             throw RealAppWindowVerifierFailure("Firefox new-window launch failed with status \(process.terminationStatus)")
         }
         RunLoop.current.run(until: Date().addingTimeInterval(0.45))
+        callerOwnsPage = true
+        return page
     }
 
-    private static func browserVerificationURL(browser: String, token: String) -> String {
+    private static func browserVerificationPage(browser: String, token: String) throws -> URL {
         let title = "Narwhal \(browser) Verifier \(token)-\(UUID().uuidString)"
         let html = "<!doctype html><meta charset=utf-8><title>\(title)</title><main>\(title)</main>"
-        return "data:text/html;base64,\(Data(html.utf8).base64EncodedString())"
+        let page = FileManager.default.temporaryDirectory
+            .appendingPathComponent("narwhal-browser-verifier-\(UUID().uuidString).html")
+        try Data(html.utf8).write(to: page, options: .atomic)
+        return page
     }
 
     private static func verifyApp(_ spec: RealAppSpec) async -> (passed: Bool, message: String) {
@@ -464,7 +501,7 @@ enum RealAppWindowVerification {
         displays: [DisplayID: DisplayInfo]
     ) async throws -> String {
         let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
-        let original = try launchTrackedWindow(
+        let original = try await launchTrackedWindow(
             spec: spec,
             using: axClient,
             requiringNewWindow: spec.pattern == .browser,
@@ -481,6 +518,14 @@ enum RealAppWindowVerification {
 
             let display = displayContaining(original.frame, displays: displays)
                 ?? displays.values.sorted(by: { $0.slot < $1.slot }).first!
+            if case .browser = spec.pattern {
+                try await normalizeFreshBrowserWindow(
+                    original.metadata,
+                    appName: spec.name,
+                    in: display.visibleFrame,
+                    using: axClient
+                )
+            }
             let targets = try targetFrames(in: display.visibleFrame, originalFrame: original.frame, spec: spec)
             var actuals: [CGRect] = []
 
@@ -521,7 +566,7 @@ enum RealAppWindowVerification {
         do {
             for spec in specs {
                 do {
-                    originals.append(try launchTrackedWindow(
+                    originals.append(try await launchTrackedWindow(
                         spec: spec,
                         using: axClient,
                         requiringNewWindow: true,
@@ -1190,6 +1235,29 @@ enum RealAppWindowVerification {
         }
     }
 
+    private static func requireInitialOutlookSideTransferLayout(
+        _ frames: [WindowID: CGRect],
+        leftTerminalID: WindowID,
+        rightTerminalID: WindowID,
+        visibleFrame: CGRect
+    ) throws {
+        let (leftHalf, rightHalf) = visibleFrame.divided(
+            atDistance: visibleFrame.width / 2,
+            from: .minXEdge
+        )
+        let expected = [leftTerminalID: leftHalf, rightTerminalID: rightHalf]
+        for (windowID, expectedFrame) in expected {
+            guard let actualFrame = frames[windowID],
+                  actualFrame.matches(expectedFrame, tolerance: frameWriteSettleTolerance)
+            else {
+                throw RealAppWindowVerifierFailure(
+                    "Outlook transfer did not begin with two exact full-height halves for \(windowID.description): "
+                        + "expected=\(expectedFrame.debugDescription) actual=\(String(describing: frames[windowID]))"
+                )
+            }
+        }
+    }
+
     private static func requirePlannedRealFramesVisible(
         _ originals: [RealAppOriginal],
         plannedFrames: [WindowID: CGRect],
@@ -1698,12 +1766,45 @@ enum RealAppWindowVerification {
     }
 
     private static func preexistingWindowIDs(
+        spec: RealAppSpec,
         bundleID: String,
         using axClient: AXClient
     ) -> Set<WindowID> {
-        return Set(axClient.windowSnapshot().windows
-            .filter { $0.bundleID.raw == bundleID }
-            .map(\.id))
+        Set(windows(for: spec, bundleID: bundleID, using: axClient).map(\.id))
+    }
+
+    private static func windows(
+        for spec: RealAppSpec,
+        bundleID: String,
+        using axClient: AXClient
+    ) -> [WindowMetadata] {
+        let processIDs = Set(
+            NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                .map(\.processIdentifier)
+        )
+        let serverWindowIDs = windowServerWindowIDs(ownerNames: [spec.name, spec.launchName])
+        return axClient.windowSnapshot().windows.filter {
+            $0.bundleID.raw == bundleID
+                || processIDs.contains($0.pid)
+                || serverWindowIDs.contains($0.id)
+        }
+    }
+
+    private static func windowServerWindowIDs(ownerNames: Set<String>) -> Set<WindowID> {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else { return [] }
+
+        return Set(windows.compactMap { window in
+            guard let layer = window[kCGWindowLayer as String] as? Int,
+                  layer == 0,
+                  let ownerName = window[kCGWindowOwnerName as String] as? String,
+                  ownerNames.contains(ownerName),
+                  let number = window[kCGWindowNumber as String] as? CGWindowID
+            else { return nil }
+            return WindowID(raw: number)
+        })
     }
 
     private static func launchTrackedWindow(
@@ -1712,23 +1813,47 @@ enum RealAppWindowVerification {
         requiringNewWindow: Bool,
         excluding additionalExcludedIDs: Set<WindowID> = [],
         token: String
-    ) throws -> RealAppOriginal {
+    ) async throws -> RealAppOriginal {
         let bundleID = try installedBundleID(for: spec)
-        let preexistingIDs = preexistingWindowIDs(bundleID: bundleID, using: axClient)
+        let preexistingIDs = preexistingWindowIDs(spec: spec, bundleID: bundleID, using: axClient)
         let excludedIDs = requiringNewWindow ? preexistingIDs.union(additionalExcludedIDs) : additionalExcludedIDs
-        try launch(spec: spec, bundleID: bundleID, token: token)
-        let metadata = try waitForUsableWindow(
-            spec: spec,
-            bundleID: bundleID,
-            using: axClient,
-            excluding: excludedIDs
-        )
+        report("REAL APP WINDOW: launching \(spec.name) verification token=\(token)")
+        let verificationPage = try launch(spec: spec, bundleID: bundleID, token: token)
+        defer {
+            if let verificationPage {
+                try? FileManager.default.removeItem(at: verificationPage)
+            }
+        }
+        let requiredTitleSubstrings = verificationTitleSubstrings(for: spec, token: token)
+        let metadata: WindowMetadata
+        do {
+            metadata = try await waitForUsableWindow(
+                spec: spec,
+                bundleID: bundleID,
+                using: axClient,
+                excluding: excludedIDs,
+                requiredTitleSubstrings: requiredTitleSubstrings
+            )
+        } catch {
+            if requiringNewWindow {
+                await closeUntrackedVerifierWindows(
+                    spec: spec,
+                    bundleID: bundleID,
+                    excluding: excludedIDs,
+                    using: axClient
+                )
+            }
+            throw error
+        }
         let createdByVerifier = !preexistingIDs.contains(metadata.id)
         guard !requiringNewWindow || createdByVerifier else {
             throw RealAppWindowVerifierFailure(
                 "\(spec.name) launch reused preexisting window \(metadata.id.description) instead of creating a verification window"
             )
         }
+        report(
+            "REAL APP WINDOW: selected \(spec.name) \(metadata.id.description) pid=\(metadata.pid) new=\(createdByVerifier)"
+        )
         return RealAppOriginal(
             spec: spec,
             bundleID: bundleID,
@@ -1736,6 +1861,44 @@ enum RealAppWindowVerification {
             frame: metadata.frame,
             createdByVerifier: createdByVerifier
         )
+    }
+
+    private static func verificationTitleSubstrings(for spec: RealAppSpec, token: String) -> [String] {
+        switch spec.name {
+        case "Terminal":
+            return ["Narwhal Real App Verifier \(token)"]
+        case "Google Chrome", "Firefox":
+            return spec.preferredTitleSubstrings.map { "\($0) \(token)-" }
+        default:
+            return spec.preferredTitleSubstrings
+        }
+    }
+
+    private static func closeUntrackedVerifierWindows(
+        spec: RealAppSpec,
+        bundleID: String,
+        excluding excludedIDs: Set<WindowID>,
+        using axClient: AXClient
+    ) async {
+        let candidates = windows(for: spec, bundleID: bundleID, using: axClient)
+            .filter { !excludedIDs.contains($0.id) }
+        for candidate in candidates {
+            let original = RealAppOriginal(
+                spec: spec,
+                bundleID: bundleID,
+                metadata: candidate,
+                frame: candidate.frame,
+                createdByVerifier: true
+            )
+            do {
+                try await closeCreatedWindow(original, using: axClient)
+                report("REAL APP WINDOW: cleaned failed launch \(spec.name) \(candidate.id.description)")
+            } catch {
+                report(
+                    "REAL APP WINDOW: failed to clean launch \(spec.name) \(candidate.id.description): \(String(describing: error))"
+                )
+            }
+        }
     }
 
     private static func cleanupApp(_ original: RealAppOriginal, using axClient: AXClient) async throws {
@@ -1774,22 +1937,20 @@ enum RealAppWindowVerification {
         }
     }
 
-    private static func launch(spec: RealAppSpec, bundleID: String, token: String) throws {
+    private static func launch(spec: RealAppSpec, bundleID: String, token: String) throws -> URL? {
         if spec.name == "Finder" {
             try FinderWindowOpener.openHomeWindow()
-            return
+            return nil
         }
         if spec.name == "Terminal" {
             try launchTerminalVerificationWindow(token: token)
-            return
+            return nil
         }
         if spec.name == "Google Chrome" {
-            try launchChromeVerificationWindow(token: token)
-            return
+            return try launchChromeVerificationWindow(token: token)
         }
         if spec.name == "Firefox" {
-            try launchFirefoxVerificationWindow(token: token)
-            return
+            return try launchFirefoxVerificationWindow(token: token)
         }
         let process = Process()
         if let launchExecutablePath = spec.launchExecutablePath {
@@ -1812,6 +1973,7 @@ enum RealAppWindowVerification {
             app.activate(options: [.activateAllWindows])
         }
         RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        return nil
     }
 
     private static func launchTerminalVerificationWindow(token: String) throws {
@@ -1820,7 +1982,10 @@ enum RealAppWindowVerification {
         process.arguments = [
             "-e",
             """
-            tell application "Terminal" to do script "printf '\\\\e]0;Narwhal Real App Verifier \(token)\\\\a'; echo Narwhal real-app verifier \(token)"
+            tell application "Terminal"
+                activate
+                do script "printf '\\\\e]0;Narwhal Real App Verifier \(token)\\\\a'; echo Narwhal real-app verifier \(token)"
+            end tell
             """
         ]
         try process.run()
@@ -1838,16 +2003,15 @@ enum RealAppWindowVerification {
         spec: RealAppSpec,
         bundleID: String,
         using axClient: AXClient,
-        excluding excludedIDs: Set<WindowID> = []
-    ) throws -> WindowMetadata {
+        excluding excludedIDs: Set<WindowID> = [],
+        requiredTitleSubstrings: [String] = []
+    ) async throws -> WindowMetadata {
         let deadline = Date().addingTimeInterval(14)
         var lastCandidates: [WindowMetadata] = []
         var lastSeen: [WindowMetadata] = []
+        var lastIdentityFailure = ""
         while Date() < deadline {
-            lastSeen = axClient.windowSnapshot().windows
-                .filter {
-                    $0.bundleID.raw == bundleID
-                }
+            lastSeen = windows(for: spec, bundleID: bundleID, using: axClient)
                 .sorted { $0.frame.area > $1.frame.area }
             lastCandidates = lastSeen
                 .filter {
@@ -1858,20 +2022,29 @@ enum RealAppWindowVerification {
                         && $0.frame.height >= spec.minimumWindowSize.height
                 }
                 .sorted { $0.id.raw > $1.id.raw }
-            if let preferred = lastCandidates
-                .filter({ candidate in
-                    spec.preferredTitleSubstrings.contains { token in
-                        candidate.title.localizedCaseInsensitiveContains(token)
-                    }
-                })
-                .first
-            {
-                return preferred
-            }
-            if let candidate = lastCandidates.first {
+            if requiredTitleSubstrings.isEmpty, let candidate = lastCandidates.first {
                 return candidate
             }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            for candidate in lastCandidates {
+                switch await axClient.focusWindow(candidate) {
+                case .success:
+                    switch axClient.focusedWindowSnapshot() {
+                    case .success(let focused)
+                        where focused.id == candidate.id
+                            && requiredTitleSubstrings.contains(where: {
+                                focused.title.localizedCaseInsensitiveContains($0)
+                            }):
+                        return candidate
+                    case .success(let focused):
+                        lastIdentityFailure = "candidate=\(candidate.id.description) focused=\(focused.id.description) title=\"\(focused.title)\""
+                    case .failure(let error):
+                        lastIdentityFailure = "candidate=\(candidate.id.description) focused snapshot failed: \(error.description)"
+                    }
+                case .failure(let error):
+                    lastIdentityFailure = "candidate=\(candidate.id.description) focus failed: \(error.description)"
+                }
+            }
+            await settleLiveVerifier(for: 0.25)
         }
 
         let seen = lastCandidates
@@ -1881,7 +2054,7 @@ enum RealAppWindowVerification {
             .map { "\($0.id.description) \($0.frame.shortDescription) resizable=\($0.isResizable) minimized=\($0.isMinimized) title=\"\($0.title)\"" }
             .joined(separator: ", ")
         throw RealAppWindowVerifierFailure(
-            "\(spec.name) did not expose a usable resizable AX window for bundle \(bundleID) with minimum size \(spec.minimumWindowSize.shortDescription); candidates=[\(seen)] allVisibleForBundle=[\(allSeen)]"
+            "\(spec.name) did not expose a usable resizable AX window for bundle \(bundleID) with minimum size \(spec.minimumWindowSize.shortDescription); candidates=[\(seen)] allVisibleForBundle=[\(allSeen)] identity=[\(lastIdentityFailure)]"
         )
     }
 
@@ -1963,18 +2136,25 @@ enum RealAppWindowVerification {
         if original.spec.name == "Terminal",
            closeTerminalWindow(windowID: original.metadata.id) {
             await settleLiveVerifier(for: 0.2)
+            report("REAL APP WINDOW: closed Terminal \(original.metadata.id.description)")
             return
         }
 
         switch await axClient.closeWindow(original.metadata) {
         case .success:
             await settleLiveVerifier(for: 0.2)
+            report("REAL APP WINDOW: closed \(original.spec.name) \(original.metadata.id.description)")
             return
         case .failure(let error):
             throw RealAppWindowVerifierFailure(
                 "\(original.spec.name) could not close verifier-created window \(original.metadata.id.description): \(error.description)"
             )
         }
+    }
+
+    private static func report(_ message: String) {
+        print(message)
+        fflush(stdout)
     }
 
     private static func closeTerminalWindow(windowID: WindowID) -> Bool {
@@ -2086,6 +2266,47 @@ enum RealAppWindowVerification {
                 height: secondHeight
             ).standardized
         ]
+    }
+
+    private static func normalizeFreshBrowserWindow(
+        _ metadata: WindowMetadata,
+        appName: String,
+        in visibleFrame: CGRect,
+        using axClient: AXClient
+    ) async throws {
+        let target = CGRect(
+            x: visibleFrame.minX + 96,
+            y: visibleFrame.minY + 96,
+            width: max(640, visibleFrame.width * 0.58),
+            height: max(480, visibleFrame.height * 0.58)
+        ).intersection(visibleFrame)
+        let actual: CGRect
+        switch await axClient.setFrame(metadata, to: target) {
+        case .converged(let frame), .clamped(let frame, _):
+            actual = frame
+        case .failed(.frameDidNotConverge(_, let frame, _)) where frame.narwhalIsFinitePositive:
+            actual = frame
+        case .failed(let error):
+            throw RealAppWindowVerifierFailure(
+                "\(appName) could not leave its fresh-window state before verification: \(error.description)"
+            )
+        }
+        guard visibleFrame.intersection(actual).narwhalArea >= actual.narwhalArea * 0.9 else {
+            throw RealAppWindowVerifierFailure(
+                "\(appName) browser normalization left the window off display: actual=\(actual.debugDescription) visible=\(visibleFrame.debugDescription)"
+            )
+        }
+        let serverFrame = LiveWindowServerVerification.waitForFrame(
+            windowNumber: Int(metadata.id.raw),
+            matching: actual,
+            tolerance: frameWriteSettleTolerance
+        )
+        guard serverFrame?.matches(actual, tolerance: frameWriteSettleTolerance) == true else {
+            throw RealAppWindowVerifierFailure(
+                "\(appName) browser normalization was not visible in WindowServer: AX=\(actual.debugDescription) WindowServer=\(serverFrame?.debugDescription ?? "nil")"
+            )
+        }
+        await settleLiveVerifier(for: 0.35)
     }
 
     private static func displayContaining(
