@@ -74,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let displayClient = DisplayClient()
     private let spaceClient = SpaceClient()
     private var restorePersistence = RestorePersistence(manager: RestoreManager())
+    private let managedRulesStore = ManagedRulesStore()
     private let echoSuppressor = AXEchoSuppressor()
     private let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
     private var overlayModel = OverlayModel.empty
@@ -84,6 +85,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var worldActor = WorldActor(runtimeMetrics: runtimeMetrics)
     private let reporter = StartupReporter()
     private var config = Config.default
+    private var managedRules: [ManagedWindowRule] = []
+    private var managedRulesWarning: String?
     private var operatingStatus = MenubarOperatingStatus.empty
     private var accessibilityPollTimer: Timer?
     private var hotkeyManager: HotkeyManager?
@@ -546,7 +549,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func loadStartupConfig() -> Bool {
         switch startupConfigLoad() {
         case .success(let loaded):
-            activateStartupConfig(loaded.config)
+            activateStartupConfig(configByRefreshingManagedRules(loaded.config))
             logStartupConfig(loaded)
             return true
         case .failure(let error):
@@ -558,13 +561,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func loadNormalStartupConfig() {
         switch startupConfigLoad() {
         case .success(let loaded):
-            activateStartupConfig(loaded.config)
+            activateStartupConfig(configByRefreshingManagedRules(loaded.config))
             configHealthy = true
             startupConfigFailure = nil
             configWarning = nil
             logStartupConfig(loaded)
         case .failure(let error):
-            activateStartupConfig(.default)
+            activateStartupConfig(configByRefreshingManagedRules(.default))
             configHealthy = false
             startupConfigFailure = error
             configWarning = .configFallback
@@ -576,6 +579,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         config = activeConfig
         worldActor = WorldActor(config: activeConfig, runtimeMetrics: runtimeMetrics)
         overlay.updateConfig(border: activeConfig.border, hud: activeConfig.hud)
+    }
+
+    private func configByRefreshingManagedRules(_ baseConfig: Config) -> Config {
+        do {
+            switch try managedRulesStore.loadRecovering() {
+            case .missing:
+                managedRules = []
+                managedRulesWarning = nil
+            case .loaded(let loadedRules):
+                managedRules = loadedRules
+                managedRulesWarning = nil
+                reporter.info("Loaded \(loadedRules.count) managed window rules")
+            case .recoveredEmpty(let recovery):
+                managedRulesWarning = recovery.error.description
+                reporter.error(
+                    "Managed rules were invalid; preserving \(managedRules.count) active rules and quarantined \(recovery.quarantinedFilename): \(recovery.error.description)"
+                )
+            case .incompatible(let error):
+                managedRulesWarning = error.description
+                reporter.error(
+                    "Managed rules were written by an incompatible version; preserving \(managedRules.count) active rules: \(error.description)"
+                )
+            }
+        } catch {
+            managedRulesWarning = String(describing: error)
+            reporter.error(
+                "Managed rules could not be read; preserving \(managedRules.count) active rules: \(error)"
+            )
+        }
+        return baseConfig.withManagedRules(managedRules)
     }
 
     private func startupConfigLoad() -> Result<StartupConfigLoad, StartupConfigError> {
@@ -594,7 +627,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .userFile(let url):
             reporter.info("Loaded startup config from \(url.path)")
         }
-        reporter.info("Startup config active: \(loaded.config.keymap.count) hotkeys, \(loaded.config.zones.count) zones")
+        reporter.info(
+            "Startup config active: \(config.keymap.count) hotkeys, \(config.zones.count) zones, \(config.managedRules.count) managed rules"
+        )
     }
 
     private func runPushOnceAndTerminate(_ direction: Direction) {
@@ -2612,13 +2647,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        config = loaded.config
+        let activeConfig = configByRefreshingManagedRules(loaded.config)
+        config = activeConfig
         configHealthy = true
         startupConfigFailure = nil
         configWarning = nil
-        await worldActor.reloadConfig(loaded.config)
-        overlay.updateConfig(border: loaded.config.border, hud: loaded.config.hud)
-        eventTapClient?.updateModifier(loaded.config.dragModifier)
+        await worldActor.reloadConfig(activeConfig)
+        overlay.updateConfig(border: activeConfig.border, hud: activeConfig.hud)
+        eventTapClient?.updateModifier(activeConfig.dragModifier)
         logStartupConfig(loaded)
         menubar.updateConfigStatus(.loaded)
         if servicesStarted {
