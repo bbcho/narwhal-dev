@@ -50,4 +50,20 @@ struct AXFrameWritePolicyTests {
             #expect(Bool(false), "Expected the accepted Firefox chrome offset to converge")
         }
     }
+
+    @Test("Terminal character-grid rounding is a successful write")
+    func terminalCharacterGridRoundingIsConverged() {
+        let target = CGRect(x: 1504, y: 550.666_666_666_7, width: 1504, height: 520.666_666_666_7)
+        let actual = CGRect(x: 1504, y: 551, width: 1507, height: 525)
+
+        switch AXClient().frameWriteDidNotConverge(
+            target: target,
+            actualFrames: [actual, actual]
+        ) {
+        case .converged(let settled):
+            #expect(settled == actual)
+        case .clamped, .failed:
+            #expect(Bool(false), "Expected Terminal character-grid rounding to converge")
+        }
+    }
 }

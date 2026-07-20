@@ -89,6 +89,7 @@ private func dimensionExpansionIsEdgeNormalized(
 
     let lowerDelta = actualLower - targetLower
     let upperDelta = actualUpper - targetUpper
-    return abs(upperDelta) <= tolerance
-        && abs(lowerDelta + expansion) <= tolerance
+    let edgeTolerance = tolerance + 1
+    return abs(upperDelta) <= edgeTolerance
+        && abs(lowerDelta + expansion) <= edgeTolerance
 }
