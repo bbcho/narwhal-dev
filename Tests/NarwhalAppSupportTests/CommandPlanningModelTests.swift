@@ -27,6 +27,7 @@ struct CommandPlanningModelTests {
 
         #expect(plan.focusedWindowID == right.id)
         #expect(plan.desiredLayout.generation.raw == 42)
+        #expect(plan.sourceWorld == oldWorld)
         #expect(plan.plannedWorld == newWorld)
         #expect(plan.undoWorld == oldWorld)
         #expect(plan.windows == newWorld.windows)

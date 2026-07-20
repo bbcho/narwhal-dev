@@ -710,6 +710,17 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
     private func performApply(_ planned: (result: CommandPlanResult, intent: WorkbenchIntent)) {
         setEditingEnabled(false)
         Task {
+            guard await worldActor.isCurrent(planned.result) else {
+                setEditingEnabled(true)
+                self.planned = nil
+                await refreshPresentation()
+                showFailure(WorkbenchPlanExplanation(
+                    title: "Preview is out of date",
+                    reason: "The workspace changed after this proposal was created. Review the refreshed layout and preview the operation again.",
+                    canRetryAsPartial: false
+                ))
+                return
+            }
             let succeeded = await applyPlan(planned.result, planned.intent)
             setEditingEnabled(true)
             if succeeded {

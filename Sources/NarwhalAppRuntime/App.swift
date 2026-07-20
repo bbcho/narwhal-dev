@@ -2498,7 +2498,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ).apply(result, preserving: preservedFrames, strategy: writeStrategy)
         switch plannedLayoutApplyDecision(plan: result, applyResult: applyResult, retryOnClamp: retryOnClamp) {
         case .commit(let appliedFrames, let focusUpdate):
-            await worldActor.commit(result, appliedFrames: appliedFrames)
+            guard await worldActor.commit(result, appliedFrames: appliedFrames) else {
+                reporter.error(
+                    "\(operation) moved windows but its source workspace changed before commit; reconciling live frames without history"
+                )
+                _ = await refreshEnvironment(reason: "stale \(operation.lowercased()) commit")
+                showOperatorFeedback("\(operation) was not committed because the workspace changed", tone: .warning)
+                return false
+            }
             reporter.info("\(operation) completed")
             await updateTiledBordersFromWorld()
             await refreshWorkspacePresentationSurfaces()
@@ -2619,7 +2626,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .success(let result?):
             let applyResult = await LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
             if applyResult.succeeded {
-                await worldActor.commit(result, appliedFrames: applyResult.applied)
+                guard await worldActor.commit(result, appliedFrames: applyResult.applied) else {
+                    reporter.error("Startup restore convergence became stale before commit; reconciling live frames")
+                    _ = await refreshEnvironment(reason: "stale startup convergence")
+                    return
+                }
                 reporter.info("Startup restore convergence completed")
                 await updateTiledBordersFromWorld()
                 await persistRestore(reason: "startup")

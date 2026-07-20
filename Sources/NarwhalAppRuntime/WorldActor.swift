@@ -557,7 +557,13 @@ actor WorldActor {
         storedWorld(from: world)
     }
 
-    func commit(_ result: CommandPlanResult, appliedFrames: [WindowID: CGRect]) {
+    func isCurrent(_ result: CommandPlanResult) -> Bool {
+        result.sourceWorld.map { $0 == world } ?? true
+    }
+
+    @discardableResult
+    func commit(_ result: CommandPlanResult, appliedFrames: [WindowID: CGRect]) -> Bool {
+        guard isCurrent(result) else { return false }
         runtimeState = worldRuntimeBySettingUndo(result.undoWorld, in: runtimeState)
         switch result.historyAction {
         case .none:
@@ -574,6 +580,7 @@ actor WorldActor {
         }
         world = worldByRecordingWindowFrames(appliedFrames, in: result.plannedWorld)
         pruneRuntimeState()
+        return true
     }
 
     func recordAppliedFrames(_ frames: [WindowID: CGRect]) {
@@ -651,7 +658,7 @@ actor WorldActor {
                 to: targetWorld,
                 layout: targetLayout,
                 focusedWindowID: targetWorld.spaces[entry.spaceID]?.focused,
-                undoWorld: nil
+                undoWorld: world
             ).map { $0.withHistoryAction(action) }
         case .failure(let error):
             return .failure(.layoutUnsatisfiable(error))

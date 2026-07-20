@@ -5,6 +5,7 @@ public struct CommandPlanResult: Equatable, Sendable {
     public let focusedWindowID: WindowID?
     public let desiredLayout: DesiredLayout
     public let windows: [WindowID: WindowMetadata]
+    public let sourceWorld: World?
     public let plannedWorld: World
     public let undoWorld: World?
     public let historyAction: LayoutHistoryAction
@@ -13,6 +14,7 @@ public struct CommandPlanResult: Equatable, Sendable {
         focusedWindowID: WindowID?,
         desiredLayout: DesiredLayout,
         windows: [WindowID: WindowMetadata],
+        sourceWorld: World? = nil,
         plannedWorld: World,
         undoWorld: World?,
         historyAction: LayoutHistoryAction = .none
@@ -20,6 +22,7 @@ public struct CommandPlanResult: Equatable, Sendable {
         self.focusedWindowID = focusedWindowID
         self.desiredLayout = desiredLayout
         self.windows = windows
+        self.sourceWorld = sourceWorld
         self.plannedWorld = plannedWorld
         self.undoWorld = undoWorld
         self.historyAction = historyAction
@@ -30,6 +33,7 @@ public struct CommandPlanResult: Equatable, Sendable {
             focusedWindowID: focusedWindowID,
             desiredLayout: desiredLayout,
             windows: windows,
+            sourceWorld: sourceWorld,
             plannedWorld: plannedWorld,
             undoWorld: undoWorld,
             historyAction: action
@@ -64,6 +68,7 @@ public func commandPlan(
         .flatMap { oldLayout in
             commandLayout(of: newWorld, scope: scope).map { newLayout in
                 commandPlanResult(
+                    sourceWorld: oldWorld,
                     newWorld: newWorld,
                     focusedWindowID: focusedWindowID,
                     undoWorld: undoWorld,
@@ -131,6 +136,7 @@ public func customLayoutCommandPlan(
     flattenedLayout(of: oldWorld)
         .map { oldLayout in
             commandPlanResult(
+                sourceWorld: oldWorld,
                 newWorld: newWorld,
                 focusedWindowID: focusedWindowID,
                 undoWorld: undoWorld,
@@ -152,6 +158,7 @@ public func currentLayoutCommandPlan(
         .map { layout -> CommandPlanResult? in
             guard !layout.tiled.isEmpty else { return nil }
             return commandPlanResult(
+                sourceWorld: world,
                 newWorld: world,
                 focusedWindowID: nil,
                 undoWorld: nil,
@@ -358,6 +365,7 @@ public func worldByRecordingObservedConstraints(
 }
 
 private func commandPlanResult(
+    sourceWorld: World,
     newWorld: World,
     focusedWindowID: WindowID?,
     undoWorld: World?,
@@ -367,6 +375,7 @@ private func commandPlanResult(
         focusedWindowID: focusedWindowID,
         desiredLayout: desiredLayout,
         windows: newWorld.windows,
+        sourceWorld: sourceWorld,
         plannedWorld: newWorld,
         undoWorld: undoWorld
     )

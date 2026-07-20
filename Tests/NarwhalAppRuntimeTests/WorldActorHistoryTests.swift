@@ -44,6 +44,21 @@ struct WorldActorHistoryTests {
         #expect(try await actor.planUndoLastLayout().get() == nil)
     }
 
+    @Test("A stale preview cannot replace a newer observed world")
+    func stalePreviewIsRejectedAtCommit() async throws {
+        let actor = WorldActor()
+        let first = metadata(1)
+        let second = metadata(2)
+        _ = await actor.refreshEnvironment(snapshot(windows: [first, second]))
+        let preview = try await actor.planPush(first.id, direction: .left).get()
+
+        await actor.recordExternalFocus(second.id)
+
+        #expect(!(await actor.isCurrent(preview)))
+        #expect(!(await actor.commit(preview, appliedFrames: preview.desiredLayout.delta.moves)))
+        #expect(try await actor.planUndoLastLayout().get() == nil)
+    }
+
     @Test("Reset is an undoable Space transition instead of clearing history")
     func resetIsUndoable() async throws {
         let actor = WorldActor()
