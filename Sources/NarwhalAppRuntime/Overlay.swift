@@ -137,7 +137,6 @@ final class Overlay {
         return staleTargets
     }
 
-    /// Hides tiled borders obscured by foreign windows in the live front-to-back list.
     private func enforceTiledBorderObscurationVisibility(targets: [FocusBorderTarget], entries: [OverlayWindowEntry]) {
         let tileIDs = Set(targets.map(\.windowID.raw))
         let overlayWindowNumbers = ownOverlayWindowNumbers()
@@ -145,15 +144,10 @@ final class Overlay {
         for target in targets {
             guard let borderWindow = tiledBorderWindows[target.windowID] else { continue }
             let tileFrame = appKitFrame(forAXFrame: target.frame)
-            // Find the target tile's index in front-to-back order.
             guard let tileIndex = entries.firstIndex(where: { $0.cgID == target.windowID.raw }) else {
-                // Tile isn't on-screen; hide its border.
                 if borderWindow.isVisible { borderWindow.orderOut(nil) }
                 continue
             }
-            // Walk entries above the tile (lower index = further front). If any
-            // foreign, non-tile window overlaps the tile frame, the border is
-            // obscured.
             var obscured = false
             for above in entries[0..<tileIndex] {
                 if overlayWindowNumbers.contains(above.cgID) { continue }

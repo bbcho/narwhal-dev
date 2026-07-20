@@ -118,8 +118,9 @@ actor WorldActor {
             to: constrainedWorld,
             focusedWindowID: nil,
             undoWorld: previous.undoWorld
-        ).map { replanned in
-            replanned.withHistoryAction(replannedHistoryAction(previous.historyAction, result: replanned))
+        ).flatMap { replanned in
+            replannedHistoryAction(previous.historyAction, result: replanned)
+                .map { replanned.withHistoryAction($0) }
         }
     }
 
@@ -668,18 +669,20 @@ actor WorldActor {
     private func replannedHistoryAction(
         _ action: LayoutHistoryAction,
         result: CommandPlanResult
-    ) -> LayoutHistoryAction {
-        guard case .record(let entry) = action else { return action }
-        let afterLayout = (try? spaceLayout(for: entry.spaceID, in: result.plannedWorld).get())
-            ?? result.desiredLayout.layout
-        return .record(LayoutHistoryEntry(
-            label: entry.label,
-            spaceID: entry.spaceID,
-            beforeWorld: entry.beforeWorld,
-            afterWorld: result.plannedWorld,
-            beforeLayout: entry.beforeLayout,
-            afterLayout: afterLayout
-        ))
+    ) -> Result<LayoutHistoryAction, CommandError> {
+        guard case .record(let entry) = action else { return .success(action) }
+        return spaceLayout(for: entry.spaceID, in: result.plannedWorld)
+            .map { afterLayout in
+                .record(LayoutHistoryEntry(
+                    label: entry.label,
+                    spaceID: entry.spaceID,
+                    beforeWorld: entry.beforeWorld,
+                    afterWorld: result.plannedWorld,
+                    beforeLayout: entry.beforeLayout,
+                    afterLayout: afterLayout
+                ))
+            }
+            .mapError(CommandError.layoutUnsatisfiable)
     }
 
     private func layoutReplacingSpace(

@@ -470,8 +470,7 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
     }
 
     private func renderRail() {
-        while railStack.arrangedSubviews.count > 1 {
-            let view = railStack.arrangedSubviews.last!
+        for view in railStack.arrangedSubviews.dropFirst() {
             railStack.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
@@ -924,11 +923,12 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
     }
 
     private func directionRow(prefix: String, action: Selector) -> NSView {
-        let titles: [(String, Int)] = [("←", 0), ("↑", 1), ("↓", 2), ("→", 3)]
-        let buttons = titles.map { title, tag -> NSButton in
-            let button = actionButton(title, action, "\(prefix) \(direction(for: tag)!.rawValue)")
+        let directions: [(String, Direction)] = [("←", .left), ("↑", .up), ("↓", .down), ("→", .right)]
+        let buttons = directions.enumerated().map { tag, entry -> NSButton in
+            let (title, direction) = entry
+            let button = actionButton(title, action, "\(prefix) \(direction.rawValue)")
             button.tag = tag
-            button.setAccessibilityLabel("\(prefix) \(direction(for: tag)!.rawValue)")
+            button.setAccessibilityLabel("\(prefix) \(direction.rawValue)")
             return button
         }
         return actionRow(buttons)

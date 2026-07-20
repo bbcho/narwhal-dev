@@ -76,7 +76,8 @@ private final class WorkspaceOverviewViewController: NSViewController {
         open.bezelStyle = .rounded
         open.setAccessibilityHelp("Open the full geometry, preview, rules, and named-layout editor")
         open.translatesAutoresizingMaskIntoConstraints = false
-        let gear = NSButton(image: NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Maintenance")!, target: self, action: #selector(showMaintenanceAction(_:)))
+        let gearImage = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Maintenance") ?? NSImage()
+        let gear = NSButton(image: gearImage, target: self, action: #selector(showMaintenanceAction(_:)))
         gear.bezelStyle = .texturedRounded
         gear.toolTip = "Maintenance and diagnostics"
         gear.setAccessibilityLabel("Maintenance and diagnostics")
