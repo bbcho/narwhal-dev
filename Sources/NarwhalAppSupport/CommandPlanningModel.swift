@@ -5,7 +5,7 @@ public struct CommandPlanResult: Equatable, Sendable {
     public let focusedWindowID: WindowID?
     public let desiredLayout: DesiredLayout
     public let windows: [WindowID: WindowMetadata]
-    public let sourceWorld: World?
+    public let sourceWorld: World
     public let plannedWorld: World
     public let undoWorld: World?
     public let historyAction: LayoutHistoryAction
@@ -14,7 +14,7 @@ public struct CommandPlanResult: Equatable, Sendable {
         focusedWindowID: WindowID?,
         desiredLayout: DesiredLayout,
         windows: [WindowID: WindowMetadata],
-        sourceWorld: World? = nil,
+        sourceWorld: World,
         plannedWorld: World,
         undoWorld: World?,
         historyAction: LayoutHistoryAction = .none

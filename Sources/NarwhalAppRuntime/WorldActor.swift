@@ -558,7 +558,7 @@ actor WorldActor {
     }
 
     func isCurrent(_ result: CommandPlanResult) -> Bool {
-        result.sourceWorld.map { $0 == world } ?? true
+        result.sourceWorld == world
     }
 
     @discardableResult

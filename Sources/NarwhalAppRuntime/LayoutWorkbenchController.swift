@@ -24,7 +24,7 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
     private var planned: (result: CommandPlanResult, intent: WorkbenchIntent)?
     private var namedLayouts: [NamedLayout] = []
     private var managedRules: [ManagedWindowRule] = []
-    private var artifactWarning: String?
+    private var artifactWarnings: [ArtifactWarningSource: String] = [:]
     private var ruleEditor: ManagedRulesEditorController?
 
     private let railStack = NSStackView()
@@ -119,6 +119,10 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
 
     func debugManagedRuleCount() -> Int {
         managedRules.count
+    }
+
+    func debugArtifactWarningText() -> String? {
+        artifactWarningText
     }
 
     func debugRailHasVerticalScroller() -> Bool {
@@ -409,32 +413,36 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
             switch try namedLayoutsStore.loadRecovering() {
             case .missing:
                 namedLayouts = []
+                artifactWarnings.removeValue(forKey: .namedLayouts)
             case .loaded(let layouts):
                 namedLayouts = layouts
+                artifactWarnings.removeValue(forKey: .namedLayouts)
             case .recoveredEmpty(let recovery):
-                artifactWarning = recovery.error.description
+                artifactWarnings[.namedLayouts] = recovery.error.description
             case .incompatible(let error):
-                artifactWarning = error.description
+                artifactWarnings[.namedLayouts] = error.description
             }
         } catch {
-            artifactWarning = String(describing: error)
+            artifactWarnings[.namedLayouts] = String(describing: error)
         }
         do {
             switch try managedRulesStore.loadRecovering() {
             case .missing:
                 managedRules = []
+                artifactWarnings.removeValue(forKey: .managedRules)
             case .loaded(let rules):
                 managedRules = rules
+                artifactWarnings.removeValue(forKey: .managedRules)
             case .recoveredEmpty(let recovery):
                 managedRules = managedRulesSnapshot()
-                artifactWarning = recovery.error.description
+                artifactWarnings[.managedRules] = recovery.error.description
             case .incompatible(let error):
                 managedRules = managedRulesSnapshot()
-                artifactWarning = error.description
+                artifactWarnings[.managedRules] = error.description
             }
         } catch {
             managedRules = managedRulesSnapshot()
-            artifactWarning = String(describing: error)
+            artifactWarnings[.managedRules] = String(describing: error)
         }
         renderLayoutPopup()
     }
@@ -511,8 +519,8 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         if selectedWindowID == nil { selectedWindowID = workspace.windows.first(where: \.isFocused)?.id ?? workspace.windows.first?.id }
         canvas.selectedWindowID = selectedWindowID
         renderSelection()
-        if let artifactWarning, planned == nil {
-            explanationLabel.stringValue = artifactWarning
+        if let artifactWarningText, planned == nil {
+            explanationLabel.stringValue = artifactWarningText
             explanationLabel.isHidden = false
         }
     }
@@ -558,8 +566,8 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
             canvas.preview = nil
             scopeLabel.stringValue = "No pending change"
             changesLabel.stringValue = "No pending change"
-            explanationLabel.isHidden = artifactWarning == nil
-            explanationLabel.stringValue = artifactWarning ?? ""
+            explanationLabel.isHidden = artifactWarningText == nil
+            explanationLabel.stringValue = artifactWarningText ?? ""
         }
     }
 
@@ -832,7 +840,8 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         do {
             try namedLayoutsStore.save(layouts)
             namedLayouts = layouts
-            artifactWarning = nil
+            artifactWarnings.removeValue(forKey: .namedLayouts)
+            artifactWarnings.removeValue(forKey: .operation)
             renderLayoutPopup()
         } catch {
             showArtifactError("Named layouts were not saved: \(error)")
@@ -849,7 +858,8 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
             try self.managedRulesStore.save(rules)
             try await self.activateManagedRules(rules)
             self.managedRules = rules
-            self.artifactWarning = nil
+            self.artifactWarnings.removeValue(forKey: .managedRules)
+            self.artifactWarnings.removeValue(forKey: .operation)
             await self.refreshPresentation()
         }
         ruleEditor = editor
@@ -903,9 +913,14 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
     }
 
     private func showArtifactError(_ message: String) {
-        artifactWarning = message
+        artifactWarnings[.operation] = message
         explanationLabel.stringValue = message
         explanationLabel.isHidden = false
+    }
+
+    private var artifactWarningText: String? {
+        let messages = ArtifactWarningSource.allCases.compactMap { artifactWarnings[$0] }
+        return messages.isEmpty ? nil : messages.joined(separator: "\n")
     }
 
     private func directionRow(prefix: String, action: Selector) -> NSView {
@@ -957,6 +972,12 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         box.boxType = .separator
         return box
     }
+}
+
+private enum ArtifactWarningSource: CaseIterable {
+    case namedLayouts
+    case managedRules
+    case operation
 }
 
 private final class WorkbenchRootView: NSView {

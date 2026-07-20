@@ -47,7 +47,9 @@ struct LayoutWorkbenchControllerTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let rulesURL = directory.appendingPathComponent("rules.json")
+        let layoutsURL = directory.appendingPathComponent("layouts.json")
         try Data("not-json".utf8).write(to: rulesURL)
+        try Data("not-json".utf8).write(to: layoutsURL)
         let activeRule = ManagedWindowRule(
             id: ManagedRuleID(rawValue: "editor"),
             name: "Editor",
@@ -61,7 +63,7 @@ struct LayoutWorkbenchControllerTests {
             activateManagedRules: { _ in },
             managedRulesSnapshot: { [activeRule] },
             openAccessibilitySettings: {},
-            namedLayoutsStore: NamedLayoutsStore(url: directory.appendingPathComponent("layouts.json")),
+            namedLayoutsStore: NamedLayoutsStore(url: layoutsURL),
             managedRulesStore: ManagedRulesStore(url: rulesURL)
         )
 
@@ -69,6 +71,9 @@ struct LayoutWorkbenchControllerTests {
 
         #expect(controller.debugManagedRuleCount() == 1)
         #expect(!FileManager.default.fileExists(atPath: rulesURL.path))
+        let warning = try #require(controller.debugArtifactWarningText())
+        #expect(warning.contains("named layouts JSON decode failed"))
+        #expect(warning.contains("managed rules JSON decode failed"))
         controller.close()
     }
 

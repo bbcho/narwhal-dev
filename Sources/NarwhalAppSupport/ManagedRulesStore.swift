@@ -85,37 +85,21 @@ public struct ManagedRulesStore: Sendable {
     }
 
     public func load() throws -> [ManagedWindowRule] {
-        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        if let byteCount = attributes[.size] as? NSNumber,
-           byteCount.intValue > Self.maximumFileSize {
-            throw ManagedRulesStoreError.fileTooLarge(
-                bytes: byteCount.intValue,
-                limit: Self.maximumFileSize
-            )
-        }
-        return try decodeStoredManagedRules(Data(contentsOf: url)).rules
+        let data = try readPrivateArtifact(
+            at: url,
+            maximumSize: Self.maximumFileSize,
+            fileTooLarge: { ManagedRulesStoreError.fileTooLarge(bytes: $0, limit: $1) }
+        )
+        return try decodeStoredManagedRules(data).rules
     }
 
     public func save(_ rules: [ManagedWindowRule]) throws {
         let stored = try validated(StoredManagedRules(rules: rules))
-        let directory = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-        try encode(stored).write(to: url, options: [.atomic])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        try writePrivateArtifact(encode(stored), to: url)
     }
 
     private func quarantine(id: String) throws -> URL {
-        let destination = url
-            .deletingLastPathComponent()
-            .appendingPathComponent("\(url.lastPathComponent).corrupt-\(id)")
-        try FileManager.default.moveItem(at: url, to: destination)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
-        return destination
+        try quarantinePrivateArtifact(at: url, id: id)
     }
 }
 

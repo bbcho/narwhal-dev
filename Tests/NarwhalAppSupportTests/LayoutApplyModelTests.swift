@@ -326,6 +326,7 @@ struct LayoutApplyModelTests {
                 delta: LayoutDelta(moves: moves ?? tiled, raises: [], hides: [], shows: shows)
             ),
             windows: windows,
+            sourceWorld: .empty,
             plannedWorld: .empty,
             undoWorld: nil
         )

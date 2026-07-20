@@ -160,6 +160,7 @@ struct ExternalGeometryEventModelTests {
                 delta: LayoutDelta(moves: [window: liveFrame], raises: [], hides: [], shows: [])
             ),
             windows: [window: metadata(window, frame: liveFrame)],
+            sourceWorld: .empty,
             plannedWorld: .empty,
             undoWorld: nil
         )

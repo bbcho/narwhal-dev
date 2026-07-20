@@ -145,6 +145,7 @@ enum ObservationReplayVerification {
                 delta: LayoutDelta(moves: replayLayout.tiled, raises: [], hides: [], shows: [])
             ),
             windows: next.windows,
+            sourceWorld: next,
             plannedWorld: next,
             undoWorld: nil
         )

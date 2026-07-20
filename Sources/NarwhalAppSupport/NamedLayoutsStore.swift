@@ -88,37 +88,21 @@ public struct NamedLayoutsStore: Sendable {
     }
 
     public func load() throws -> [NamedLayout] {
-        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        if let byteCount = attributes[.size] as? NSNumber,
-           byteCount.intValue > Self.maximumFileSize {
-            throw NamedLayoutsStoreError.fileTooLarge(
-                bytes: byteCount.intValue,
-                limit: Self.maximumFileSize
-            )
-        }
-        return try decodeStoredNamedLayouts(Data(contentsOf: url)).layouts
+        let data = try readPrivateArtifact(
+            at: url,
+            maximumSize: Self.maximumFileSize,
+            fileTooLarge: { NamedLayoutsStoreError.fileTooLarge(bytes: $0, limit: $1) }
+        )
+        return try decodeStoredNamedLayouts(data).layouts
     }
 
     public func save(_ layouts: [NamedLayout]) throws {
         let stored = try validated(StoredNamedLayouts(layouts: layouts))
-        let directory = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-        try encode(stored).write(to: url, options: [.atomic])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        try writePrivateArtifact(encode(stored), to: url)
     }
 
     private func quarantine(id: String) throws -> URL {
-        let destination = url
-            .deletingLastPathComponent()
-            .appendingPathComponent("\(url.lastPathComponent).corrupt-\(id)")
-        try FileManager.default.moveItem(at: url, to: destination)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
-        return destination
+        try quarantinePrivateArtifact(at: url, id: id)
     }
 }
 
