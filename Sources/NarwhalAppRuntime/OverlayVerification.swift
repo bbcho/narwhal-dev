@@ -309,13 +309,222 @@ enum VisualArtifactVerification {
                 return (false, "HUD accessibility or contrast failed: \(failure)")
             }
 
+            let workbenchArtifacts = try renderWorkbenchArtifacts(directory: directory)
+            guard workbenchArtifacts.allSatisfy({ $0.isNonBlank && $0.hasReadableRange }) else {
+                return (false, "workbench artifacts failed pixel rules: \(workbenchArtifacts.map(\.description).joined(separator: "; "))")
+            }
+
             return (
                 true,
-                "visual artifacts verified in \(directory.path): \(regular.description); \(compact.description); \(border.description)"
+                "visual artifacts verified in \(directory.path): \(regular.description); \(compact.description); \(border.description); \(workbenchArtifacts.map(\.description).joined(separator: "; "))"
             )
         } catch {
             return (false, "visual artifact verification failed: \(String(describing: error))")
         }
+    }
+
+    private static func renderWorkbenchArtifacts(directory: URL) throws -> [VisualArtifactStats] {
+        let fixture = try workbenchFixture()
+        let artifactDirectory = directory.appendingPathComponent("workbench-store", isDirectory: true)
+        let controller = LayoutWorkbenchController(
+            worldActor: WorldActor(),
+            snapshotQuality: { .complete },
+            applyPlan: { _, _ in true },
+            activateManagedRules: { _ in },
+            openAccessibilitySettings: {},
+            namedLayoutsStore: NamedLayoutsStore(url: artifactDirectory.appendingPathComponent("layouts.json")),
+            managedRulesStore: ManagedRulesStore(url: artifactDirectory.appendingPathComponent("rules.json"))
+        )
+        controller.show()
+        guard let content = controller.debugWindow()?.contentView else {
+            throw VisualArtifactError.renderFailed("workbench window did not create content")
+        }
+        defer { controller.close() }
+        let size = CGSize(width: 1020, height: 640)
+        var artifacts: [VisualArtifactStats] = []
+
+        controller.debugPresent(
+            workbenchPresentation(in: fixture.world, runtime: fixture.runtime, snapshotQuality: .complete),
+            planned: fixture.plan,
+            intent: .resize(windowID: fixture.first, direction: .right, delta: 0.10),
+            selectedWindowID: fixture.floating
+        )
+        content.appearance = NSAppearance(named: .aqua)
+        artifacts.append(try renderArtifact(
+            view: content,
+            size: size,
+            url: directory.appendingPathComponent("workbench-ready-light.png")
+        ))
+        content.appearance = NSAppearance(named: .darkAqua)
+        artifacts.append(try renderArtifact(
+            view: content,
+            size: size,
+            url: directory.appendingPathComponent("workbench-ready-dark.png")
+        ))
+
+        content.appearance = NSAppearance(named: .aqua)
+        controller.debugPresent(workbenchPresentation(
+            in: fixture.world,
+            runtime: fixture.runtime,
+            snapshotQuality: .permissionDenied("Accessibility permission missing")
+        ))
+        artifacts.append(try renderArtifact(
+            view: content,
+            size: size,
+            url: directory.appendingPathComponent("workbench-permission.png")
+        ))
+
+        controller.debugPresent(workbenchPresentation(
+            in: fixture.world,
+            runtime: fixture.runtime,
+            snapshotQuality: .partial([AXWindowReadError(windowID: nil, pid: nil, message: "partial")])
+        ))
+        artifacts.append(try renderArtifact(
+            view: content,
+            size: size,
+            url: directory.appendingPathComponent("workbench-partial-inventory.png")
+        ))
+
+        controller.debugPresent(workbenchPresentation(
+            in: fixture.constrainedWorld,
+            runtime: fixture.runtime,
+            snapshotQuality: .complete
+        ))
+        artifacts.append(try renderArtifact(
+            view: content,
+            size: size,
+            url: directory.appendingPathComponent("workbench-constraint-conflict.png")
+        ))
+
+        controller.debugPresent(workbenchPresentation(
+            in: fixture.emptyWorld,
+            runtime: .empty,
+            snapshotQuality: .complete
+        ))
+        artifacts.append(try renderArtifact(
+            view: content,
+            size: size,
+            url: directory.appendingPathComponent("workbench-empty-space.png")
+        ))
+
+        controller.debugPresent(workbenchPresentation(
+            in: fixture.world,
+            runtime: fixture.runtime,
+            snapshotQuality: .complete
+        ))
+        controller.debugShowFailure(WorkbenchPlanExplanation(
+            title: "Named layout has unmatched targets",
+            reason: "1 window slot and 1 display are unavailable. Unmatched windows will remain floating.",
+            canRetryAsPartial: true
+        ))
+        artifacts.append(try renderArtifact(
+            view: content,
+            size: size,
+            url: directory.appendingPathComponent("workbench-template-mismatch.png")
+        ))
+        return artifacts
+    }
+
+    private static func workbenchFixture() throws -> (
+        world: World,
+        constrainedWorld: World,
+        emptyWorld: World,
+        runtime: WorldRuntimeState,
+        plan: CommandPlanResult,
+        first: WindowID,
+        floating: WindowID
+    ) {
+        let displayID = DisplayID(raw: 1)
+        let spaceID = SpaceID(raw: 7)
+        let first = WindowID(raw: 101)
+        let focused = WindowID(raw: 102)
+        let floating = WindowID(raw: 103)
+        let detached = WindowID(raw: 104)
+        let display = DisplayInfo(
+            id: displayID,
+            slot: 0,
+            fingerprint: "visual-fixture",
+            frame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+            visibleFrame: CGRect(x: 0, y: 24, width: 1440, height: 876)
+        )
+        let windows = [
+            metadata(first, bundle: "com.example.editor", title: "Project Editor", frame: CGRect(x: 0, y: 24, width: 860, height: 876)),
+            metadata(focused, bundle: "com.example.browser", title: "Documentation", frame: CGRect(x: 860, y: 24, width: 580, height: 876)),
+            metadata(floating, bundle: "com.example.terminal", title: "Build Output", frame: CGRect(x: 180, y: 170, width: 720, height: 480)),
+            metadata(detached, bundle: "com.example.chat", title: "Messages", frame: CGRect(x: 980, y: 180, width: 380, height: 520))
+        ]
+        let split = try Split.create(axis: .horizontal, cells: [
+            try Cell.create(weight: 1.5, node: .leaf(first)).get(),
+            try Cell.create(weight: 1, node: .leaf(focused)).get(),
+            try Cell.create(weight: 0.4, node: .void).get()
+        ]).get()
+        let world = World(
+            displays: [displayID: display],
+            activeSpace: spaceID,
+            spaces: [spaceID: SpaceState(
+                id: spaceID,
+                displays: [displayID: DisplaySpaceState(
+                    displayID: displayID,
+                    tree: .split(split),
+                    floating: [floating, detached]
+                )],
+                focused: focused
+            )],
+            windows: Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) }),
+            windowDisplay: Dictionary(uniqueKeysWithValues: windows.map { ($0.id, displayID) }),
+            windowSpace: Dictionary(uniqueKeysWithValues: windows.map { ($0.id, spaceID) }),
+            observedVisibleWindows: [WorkspaceKey(displayID: displayID, spaceID: spaceID): Set(windows.map(\.id))],
+            windowConstraints: [first: WindowConstraints(minWidth: 520, minHeight: 360)],
+            pendingRules: [:],
+            config: .default
+        )
+        var runtime = worldRuntimeBySettingInteraction(.manualAdjustment, for: first, in: .empty)
+        runtime = worldRuntimeBySettingInteraction(.temporarilyDetached(.applicationConstraint), for: detached, in: runtime)
+        let resized = try apply(.resizeSplit(first, .right, delta: 0.10), to: world).get()
+        let plan = try commandPlan(
+            from: world,
+            to: resized,
+            focusedWindowID: first,
+            undoWorld: world,
+            generation: LayoutGeneration(raw: 1)
+        ).get()
+        let constrainedWorld = worldByRecordingObservedConstraints(
+            [first: WindowConstraints(minWidth: 2_000)],
+            in: world
+        )
+        let emptyWorld = World(
+            displays: [displayID: display],
+            activeSpace: spaceID,
+            spaces: [spaceID: SpaceState(
+                id: spaceID,
+                displays: [displayID: DisplaySpaceState(displayID: displayID, tree: .void, floating: [])],
+                focused: nil
+            )],
+            windows: [:],
+            windowDisplay: [:],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+        return (world, constrainedWorld, emptyWorld, runtime, plan, first, floating)
+    }
+
+    private static func metadata(
+        _ id: WindowID,
+        bundle: String,
+        title: String,
+        frame: CGRect
+    ) -> WindowMetadata {
+        WindowMetadata(
+            id: id,
+            bundleID: BundleID(raw: bundle),
+            title: title,
+            role: "AXWindow",
+            pid: ProcessID(Int32(id.raw)),
+            frame: frame,
+            isResizable: true,
+            isMinimized: false
+        )
     }
 
     private static func hudAccessibilityOrContrastFailure() -> String? {

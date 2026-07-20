@@ -33,6 +33,7 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
     private let selectionDetails = NSTextField(wrappingLabelWithString: "Select a window tile to inspect it.")
     private let changesLabel = NSTextField(wrappingLabelWithString: "No pending change")
     private let explanationLabel = NSTextField(wrappingLabelWithString: "")
+    private let accessibilityButton = NSButton(title: "Open Accessibility Settings…", target: nil, action: nil)
     private let scopeLabel = NSTextField(labelWithString: "No pending change")
     private let applyButton = NSButton(title: "Apply Change", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel Preview", target: nil, action: nil)
@@ -41,6 +42,8 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
     private let layoutPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let railContainer = NSView()
     private let inspectorContainer = NSView()
+    private let inspectorScrollView = NSScrollView()
+    private let inspectorDocumentView = NSView()
 
     init(
         worldActor: WorldActor,
@@ -97,6 +100,43 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         return (railContainer.frame.width, inspectorContainer.frame.width, window.minSize)
     }
 
+    func debugInspectorGeometry() -> (viewportHeight: CGFloat, contentHeight: CGFloat, hasVerticalScroller: Bool)? {
+        guard window != nil else { return nil }
+        inspectorContainer.layoutSubtreeIfNeeded()
+        inspectorDocumentView.layoutSubtreeIfNeeded()
+        return (
+            inspectorScrollView.contentView.bounds.height,
+            inspectorDocumentView.frame.height,
+            inspectorScrollView.hasVerticalScroller
+        )
+    }
+
+#if NARWHAL_ENABLE_VERIFIERS
+    func debugPresent(
+        _ presentation: WorkbenchPresentation,
+        planned result: CommandPlanResult? = nil,
+        intent: WorkbenchIntent? = nil,
+        selectedWindowID: WindowID? = nil
+    ) {
+        applyPresentation(presentation)
+        self.selectedWindowID = selectedWindowID
+        canvas.selectedWindowID = selectedWindowID
+        renderSelection()
+        if let result, let intent {
+            planned = (result, intent)
+        } else {
+            planned = nil
+        }
+        renderPreviewState()
+        window?.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    func debugShowFailure(_ explanation: WorkbenchPlanExplanation) {
+        showFailure(explanation)
+        window?.contentView?.layoutSubtreeIfNeeded()
+    }
+#endif
+
     private func makeWindow() -> NSWindow {
         let window = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 1020, height: 640),
@@ -115,7 +155,7 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
     }
 
     private func makeRootView() -> NSView {
-        let root = NSView()
+        let root = WorkbenchRootView()
         root.translatesAutoresizingMaskIntoConstraints = false
 
         configureRail()
@@ -176,12 +216,27 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         inspectorStack.alignment = .leading
         inspectorStack.spacing = 8
         inspectorStack.translatesAutoresizingMaskIntoConstraints = false
-        inspectorContainer.addSubview(inspectorStack)
+
+        inspectorScrollView.drawsBackground = false
+        inspectorScrollView.borderType = .noBorder
+        inspectorScrollView.hasHorizontalScroller = false
+        inspectorScrollView.hasVerticalScroller = true
+        inspectorScrollView.autohidesScrollers = true
+        inspectorScrollView.translatesAutoresizingMaskIntoConstraints = false
+        inspectorDocumentView.translatesAutoresizingMaskIntoConstraints = false
+        inspectorDocumentView.addSubview(inspectorStack)
+        inspectorScrollView.documentView = inspectorDocumentView
+        inspectorContainer.addSubview(inspectorScrollView)
         NSLayoutConstraint.activate([
-            inspectorStack.leadingAnchor.constraint(equalTo: inspectorContainer.leadingAnchor, constant: 14),
-            inspectorStack.trailingAnchor.constraint(equalTo: inspectorContainer.trailingAnchor, constant: -14),
-            inspectorStack.topAnchor.constraint(equalTo: inspectorContainer.topAnchor, constant: 14),
-            inspectorStack.bottomAnchor.constraint(lessThanOrEqualTo: inspectorContainer.bottomAnchor, constant: -14)
+            inspectorScrollView.leadingAnchor.constraint(equalTo: inspectorContainer.leadingAnchor),
+            inspectorScrollView.trailingAnchor.constraint(equalTo: inspectorContainer.trailingAnchor),
+            inspectorScrollView.topAnchor.constraint(equalTo: inspectorContainer.topAnchor),
+            inspectorScrollView.bottomAnchor.constraint(equalTo: inspectorContainer.bottomAnchor),
+            inspectorDocumentView.widthAnchor.constraint(equalTo: inspectorScrollView.contentView.widthAnchor),
+            inspectorStack.leadingAnchor.constraint(equalTo: inspectorDocumentView.leadingAnchor, constant: 14),
+            inspectorStack.trailingAnchor.constraint(equalTo: inspectorDocumentView.trailingAnchor, constant: -14),
+            inspectorStack.topAnchor.constraint(equalTo: inspectorDocumentView.topAnchor, constant: 14),
+            inspectorStack.bottomAnchor.constraint(equalTo: inspectorDocumentView.bottomAnchor, constant: -14)
         ])
 
         selectionTitle.font = .systemFont(ofSize: 14, weight: .semibold)
@@ -192,6 +247,13 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         changesLabel.textColor = .secondaryLabelColor
         explanationLabel.textColor = .systemRed
         explanationLabel.isHidden = true
+        configureActionButton(
+            accessibilityButton,
+            action: #selector(openAccessibilityPreferences),
+            help: "Open Privacy & Security settings so Narwhal can inspect and move application windows"
+        )
+        accessibilityButton.controlSize = .small
+        accessibilityButton.isHidden = true
 
         inspectorStack.addArrangedSubview(sectionHeading("SELECTION"))
         inspectorStack.addArrangedSubview(selectionTitle)
@@ -237,6 +299,7 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         inspectorStack.addArrangedSubview(sectionHeading("PROPOSED CHANGE"))
         inspectorStack.addArrangedSubview(changesLabel)
         inspectorStack.addArrangedSubview(explanationLabel)
+        inspectorStack.addArrangedSubview(accessibilityButton)
         inspectorStack.arrangedSubviews.forEach { view in
             view.widthAnchor.constraint(lessThanOrEqualTo: inspectorStack.widthAnchor).isActive = true
         }
@@ -342,6 +405,9 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
 
     private func applyPresentation(_ presentation: WorkbenchPresentation) {
         self.presentation = presentation
+        accessibilityButton.isHidden = !presentation.workspaces.contains {
+            $0.health == .permissionRequired
+        }
         if let selectedWorkspaceKey,
            !presentation.workspaces.contains(where: { $0.key == selectedWorkspaceKey }) {
             self.selectedWorkspaceKey = nil
@@ -369,13 +435,22 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
             button.tag = index
             button.bezelStyle = .inline
             button.alignment = .left
-            button.font = .systemFont(ofSize: 11, weight: selectedWorkspaceKey == workspace.key ? .semibold : .regular)
+            button.attributedTitle = NSAttributedString(
+                string: title + "\n" + subtitle,
+                attributes: [
+                    .font: NSFont.systemFont(
+                        ofSize: 11,
+                        weight: selectedWorkspaceKey == workspace.key ? .semibold : .regular
+                    ),
+                    .foregroundColor: NSColor.labelColor
+                ]
+            )
             button.state = selectedWorkspaceKey == workspace.key ? .on : .off
             button.toolTip = "Display \(workspace.displaySlot), Space \(workspace.key.spaceID.raw), \(workspace.health.label)"
             button.setAccessibilityLabel("Display \(workspace.displaySlot), Space \(workspace.key.spaceID.raw)")
             button.setAccessibilityValue("\(active), \(workspace.health.label), \(workspace.tiledCount) tiled, \(workspace.floatingCount) floating")
-            button.widthAnchor.constraint(equalTo: railStack.widthAnchor).isActive = true
             railStack.addArrangedSubview(button)
+            button.widthAnchor.constraint(equalTo: railStack.widthAnchor).isActive = true
         }
     }
 
@@ -723,6 +798,10 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         editor.beginSheet(for: window)
     }
 
+    @objc private func openAccessibilityPreferences() {
+        openAccessibilitySettings()
+    }
+
     private func promptForName(
         title: String,
         initial: String,
@@ -810,6 +889,14 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         let box = NSBox()
         box.boxType = .separator
         return box
+    }
+}
+
+private final class WorkbenchRootView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.windowBackgroundColor.setFill()
+        dirtyRect.fill()
+        super.draw(dirtyRect)
     }
 }
 
