@@ -349,6 +349,7 @@ enum RealAppWindowVerification {
                 outlookID: outlook.metadata.id,
                 visibleFrame: targetDisplay.visibleFrame
             )
+            await settleLiveVerifier(for: 0.35)
             try requirePlannedRealFramesVisible(
                 originals,
                 plannedFrames: frames,
