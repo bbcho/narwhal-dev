@@ -119,7 +119,7 @@ func workbenchExplanation(for failure: WorkbenchPlanFailure) -> WorkbenchPlanExp
         let displays = result.missingDisplaySlots.count
         return WorkbenchPlanExplanation(
             title: "Named layout has unmatched targets",
-            reason: "\(slots) window slot\(slots == 1 ? "" : "s") and \(displays) display\(displays == 1 ? "" : "s") are unavailable. Unmatched windows will remain floating.",
+            reason: namedLayoutMismatchReason(result, slotCount: slots, displayCount: displays),
             canRetryAsPartial: !result.matches.isEmpty
         )
     case .namedLayout(.noMatchingWindows):
@@ -136,4 +136,39 @@ func workbenchExplanation(for failure: WorkbenchPlanFailure) -> WorkbenchPlanExp
             canRetryAsPartial: false
         )
     }
+}
+
+private func namedLayoutMismatchReason(
+    _ result: NamedLayoutMatchResult,
+    slotCount: Int,
+    displayCount: Int
+) -> String {
+    var lines = [
+        "\(slotCount) window slot\(slotCount == 1 ? "" : "s") and \(displayCount) display\(displayCount == 1 ? "" : "s") are unavailable. Unmatched windows will remain floating."
+    ]
+    if !result.missingDisplaySlots.isEmpty {
+        lines.append("Missing displays: " + result.missingDisplaySlots.map { "D\($0)" }.joined(separator: ", "))
+    }
+    if !result.unmatchedSlots.isEmpty {
+        lines.append("Unmatched slots:")
+        lines.append(contentsOf: result.unmatchedSlots.map { slot in
+            "• \(slot.slotID.rawValue) on D\(slot.targetDisplaySlot): \(matcherDescription(slot.matcher))"
+        })
+    }
+    if !result.unmatchedWindows.isEmpty {
+        lines.append("Unmatched windows: " + result.unmatchedWindows.map { "W\($0.raw)" }.joined(separator: ", "))
+    }
+    return lines.joined(separator: "\n")
+}
+
+private func matcherDescription(_ matcher: LayoutWindowMatcher) -> String {
+    var parts = [matcher.bundleID]
+    if let role = matcher.role { parts.append(role) }
+    if let title = matcher.title {
+        switch title {
+        case .exact(let value): parts.append("title = \(value)")
+        case .regex(let value): parts.append("title ~= \(value)")
+        }
+    }
+    return parts.joined(separator: " · ")
 }
