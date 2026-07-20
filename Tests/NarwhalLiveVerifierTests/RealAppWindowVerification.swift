@@ -67,6 +67,13 @@ struct RealAppWindowVerificationTests {
         try expectPassed(await RealAppWindowVerification.verifyThreeChromeVerticalStack())
     }
 
+    @Test("Four through eight Terminal windows tile horizontally and vertically")
+    func fourThroughEightTerminalWindowsTileInBothAxes() async throws {
+        _ = NSApplication.shared
+        VerifierAppDelegate.installIfNeeded()
+        try expectPassed(await RealAppWindowVerification.verifyTerminalTileMatrix())
+    }
+
     @Test("Outlook side transfers keep equal halves and expand Terminal")
     func outlookSideTransfersKeepEqualHalvesAndExpandTerminal() async throws {
         _ = NSApplication.shared
@@ -175,6 +182,63 @@ enum RealAppWindowVerification {
         await verifyThreeWindowVerticalStack(spec: chromeSpec(), label: "Google Chrome")
     }
 
+    static func verifyTerminalTileMatrix() async -> (passed: Bool, message: String) {
+        let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
+        var originals: [RealAppOriginal] = []
+        do {
+            try waitForUnlockedSession()
+            let displays = DisplayClient().currentDisplays()
+            let targetDisplay = try manualResizeVerificationDisplay(displays)
+            let minimum = terminalSpec().minimumWindowSize
+            guard targetDisplay.visibleFrame.width / 8 >= minimum.width,
+                  targetDisplay.visibleFrame.height / 8 >= minimum.height
+            else {
+                throw RealAppWindowVerifierFailure(
+                    "4-8 Terminal tile matrix requires at least \(minimum.width * 8)x\(minimum.height * 8) visible points"
+                )
+            }
+
+            var selectedIDs = Set<WindowID>()
+            for count in 4...8 {
+                while originals.count < count {
+                    let index = originals.count + 1
+                    let original = try await launchTrackedWindow(
+                        spec: terminalSpec(),
+                        using: axClient,
+                        requiringNewWindow: true,
+                        excluding: selectedIDs,
+                        token: "matrix-\(index)"
+                    )
+                    selectedIDs.insert(original.metadata.id)
+                    originals.append(original)
+                }
+
+                for axis in Axis.allCases {
+                    try await applyRealAxisLayout(
+                        originals,
+                        axis: axis,
+                        label: "Terminal \(count)-tile \(axis.rawValue)",
+                        targetDisplay: targetDisplay,
+                        axClient: axClient,
+                        displays: displays
+                    )
+                    report("REAL TILE MATRIX: \(count) Terminal windows tiled \(axis.rawValue)")
+                    await settleLiveVerifier(for: 0.35)
+                }
+            }
+
+            try await cleanupApps(originals, using: axClient)
+            originals.removeAll()
+            return (true, "real Terminal 4-8 horizontal and vertical tile matrix passed")
+        } catch let error as RealAppWindowVerifierFailure {
+            await cleanupAppsBestEffort(originals, using: axClient, context: "REAL TERMINAL TILE MATRIX VERIFY")
+            return (false, error.message)
+        } catch {
+            await cleanupAppsBestEffort(originals, using: axClient, context: "REAL TERMINAL TILE MATRIX VERIFY")
+            return (false, "Terminal tile matrix verification failed: \(String(describing: error))")
+        }
+    }
+
     static func verifyOutlookTerminalSideTransfer() async -> (passed: Bool, message: String) {
         let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
         var originals: [RealAppOriginal] = []
@@ -260,42 +324,221 @@ enum RealAppWindowVerification {
                 originals.append(original)
             }
 
-            let frames = try threeWindowVerticalStackFrames(in: targetDisplay.visibleFrame)
-            var actuals: [CGRect] = []
-            for (index, original) in originals.enumerated() {
-                let metadata = try currentWorkflowMetadata(for: original, using: axClient)
-                try await focusIfPossible(metadata, appName: "\(label) stack \(index + 1)", using: axClient)
-                let actual = try await verifyFrameWrite(
-                    frames[index],
-                    metadata: metadata,
-                    appName: "\(label) vertical stack",
-                    step: index + 1,
-                    using: axClient
-                )
-                try requireFrame(actual, isOn: targetDisplay, context: "\(label) vertical stack \(index + 1)")
-                actuals.append(actual)
-            }
-
-            for first in actuals.indices {
-                for second in actuals.indices where second > first {
-                    guard framesDoNotVisiblyOverlap(actuals[first], actuals[second], tolerance: frameWriteSettleTolerance) else {
-                        throw RealAppWindowVerifierFailure(
-                            "\(label) vertical stack windows overlapped: first=\(actuals[first].debugDescription) second=\(actuals[second].debugDescription)"
-                        )
-                    }
-                }
-            }
+            let frames = try await applyRealAxisLayout(
+                originals,
+                axis: .vertical,
+                label: "three \(label) vertical stack",
+                targetDisplay: targetDisplay,
+                axClient: axClient,
+                displays: displays
+            )
 
             try await cleanupApps(originals, using: axClient)
             originals.removeAll()
 
-            return (true, "three \(label) vertical stack passed: \(actuals.map(\.shortDescription).joined(separator: ","))")
+            return (
+                true,
+                "three \(label) vertical command stack passed: \(frames.values.map(\.shortDescription).sorted().joined(separator: ","))"
+            )
         } catch let error as RealAppWindowVerifierFailure {
             await cleanupAppsBestEffort(originals, using: axClient, context: "REAL \(label.uppercased()) STACK VERIFY")
             return (false, error.message)
         } catch {
             await cleanupAppsBestEffort(originals, using: axClient, context: "REAL \(label.uppercased()) STACK VERIFY")
             return (false, "three \(label) vertical stack verification failed: \(String(describing: error))")
+        }
+    }
+
+    private static func applyRealAxisLayout(
+        _ originals: [RealAppOriginal],
+        axis: Axis,
+        label: String,
+        targetDisplay: DisplayInfo,
+        axClient: AXClient,
+        displays: [DisplayID: DisplayInfo]
+    ) async throws -> [WindowID: CGRect] {
+        guard originals.count >= 2, let first = originals.first else {
+            throw RealAppWindowVerifierFailure("\(label) requires at least two real windows")
+        }
+
+        try await stageAxisLayoutWindowsIfNeeded(
+            originals,
+            on: targetDisplay,
+            using: axClient
+        )
+        let worldActor = WorldActor(config: .default)
+        let reporter = StartupReporter(logPath: "/tmp/narwhal-real-axis-layout.log")
+        let applier = LayoutApplier(axClient: axClient, reporter: reporter)
+        let windowIDs = Set(originals.map(\.metadata.id))
+        let spaceID = try await refreshWorkflowWorld(
+            worldActor,
+            axClient: axClient,
+            displays: displays,
+            including: windowIDs,
+            activeDisplayID: targetDisplay.id
+        )
+        let namedLayout = realAxisNamedLayout(
+            count: originals.count,
+            axis: axis,
+            displaySlot: targetDisplay.slot,
+            bundleID: first.bundleID
+        )
+        let plan: CommandPlanResult
+        switch await worldActor.planNamedLayout(namedLayout, spaceID: spaceID, allowPartial: false) {
+        case .success(let planned):
+            plan = planned
+        case .failure(let error):
+            throw RealAppWindowVerifierFailure("\(label) named-layout plan failed: \(String(describing: error))")
+        }
+
+        let frames = try await applyWorkflowCommand(
+            label,
+            plan: { Result<CommandPlanResult, CommandError>.success(plan) },
+            worldActor: worldActor,
+            applier: applier,
+            allowNoMove: true,
+            strategy: .coordinated
+        )
+        try requireEqualAxisLayout(
+            frames,
+            windowIDs: windowIDs,
+            axis: axis,
+            visibleFrame: targetDisplay.visibleFrame,
+            context: label
+        )
+        try requirePlannedRealFramesVisible(
+            originals,
+            plannedFrames: frames,
+            using: axClient,
+            context: label
+        )
+        return frames
+    }
+
+    private static func stageAxisLayoutWindowsIfNeeded(
+        _ originals: [RealAppOriginal],
+        on display: DisplayInfo,
+        using axClient: AXClient
+    ) async throws {
+        let visible = display.visibleFrame
+        var movedWindow = false
+        for (index, original) in originals.enumerated() {
+            let metadata = try currentWorkflowMetadata(for: original, using: axClient)
+            let intersection = metadata.frame.intersection(visible)
+            if !intersection.isNull, intersection.area >= metadata.frame.area * 0.80 {
+                continue
+            }
+
+            let inset: CGFloat = 24
+            let offset = CGFloat(index) * 18
+            let target = CGRect(
+                x: visible.minX + inset + offset,
+                y: visible.minY + inset + offset,
+                width: min(
+                    visible.width - inset * 2,
+                    max(original.spec.minimumWindowSize.width, visible.width * 0.42)
+                ),
+                height: min(
+                    visible.height - inset * 2,
+                    max(original.spec.minimumWindowSize.height, visible.height * 0.42)
+                )
+            ).standardized
+            try await focusIfPossible(
+                metadata,
+                appName: "\(original.spec.name) axis-layout staging",
+                using: axClient
+            )
+            let actual = try await verifyFrameWrite(
+                target,
+                metadata: metadata,
+                appName: "\(original.spec.name) axis-layout staging",
+                step: index + 1,
+                using: axClient
+            )
+            try requireFrame(actual, isOn: display, context: "\(original.spec.name) axis-layout staging")
+            movedWindow = true
+        }
+        if movedWindow {
+            await settleLiveVerifier(for: 0.16)
+        }
+    }
+
+    private static func realAxisNamedLayout(
+        count: Int,
+        axis: Axis,
+        displaySlot: Int,
+        bundleID: String
+    ) -> NamedLayout {
+        NamedLayout(
+            id: NamedLayoutID(rawValue: "live-\(axis.rawValue)-\(count)"),
+            name: "Live \(axis.rawValue) \(count)",
+            displays: [
+                DisplayLayoutTemplate(
+                    displaySlot: displaySlot,
+                    root: .split(
+                        axis: axis,
+                        cells: (0..<count).map { index in
+                            LayoutTemplateCell(
+                                weight: 1,
+                                node: .slot(LayoutTemplateSlot(
+                                    id: LayoutSlotID(rawValue: "window-\(index)"),
+                                    matcher: LayoutWindowMatcher(bundleID: bundleID, role: kAXWindowRole)
+                                ))
+                            )
+                        }
+                    )
+                )
+            ]
+        )
+    }
+
+    private static func requireEqualAxisLayout(
+        _ frames: [WindowID: CGRect],
+        windowIDs: Set<WindowID>,
+        axis: Axis,
+        visibleFrame: CGRect,
+        context: String
+    ) throws {
+        guard Set(frames.keys) == windowIDs else {
+            throw RealAppWindowVerifierFailure(
+                "\(context) planned \(frames.count) windows instead of the expected \(windowIDs.count)"
+            )
+        }
+        let actual = frames.values.sorted { lhs, rhs in
+            axis == .horizontal ? lhs.minX < rhs.minX : lhs.minY < rhs.minY
+        }
+        let expected = equalAxisFrames(count: windowIDs.count, axis: axis, in: visibleFrame)
+        guard zip(actual, expected).allSatisfy({ frame, target in
+            frame.matches(target, tolerance: 0.001)
+        }) else {
+            throw RealAppWindowVerifierFailure(
+                "\(context) was not an equal \(axis.rawValue) layout: expected=\(expected) actual=\(actual)"
+            )
+        }
+    }
+
+    private static func equalAxisFrames(count: Int, axis: Axis, in frame: CGRect) -> [CGRect] {
+        let extent = axis == .horizontal ? frame.width : frame.height
+        let length = extent / CGFloat(count)
+        return (0..<count).map { index in
+            let offset = CGFloat(index) * length
+            let cellLength = index == count - 1 ? extent - offset : length
+            switch axis {
+            case .horizontal:
+                return CGRect(
+                    x: frame.minX + offset,
+                    y: frame.minY,
+                    width: cellLength,
+                    height: frame.height
+                )
+            case .vertical:
+                return CGRect(
+                    x: frame.minX,
+                    y: frame.minY + offset,
+                    width: frame.width,
+                    height: cellLength
+                )
+            }
         }
     }
 
@@ -1279,13 +1522,13 @@ enum RealAppWindowVerification {
             }
             let serverFrame = LiveWindowServerVerification.waitForFrame(
                 windowNumber: Int(metadata.id.raw),
-                matching: plannedFrame,
+                matching: metadata.frame,
                 tolerance: frameWriteSettleTolerance
             )
-            guard serverFrame?.matches(plannedFrame, tolerance: frameWriteSettleTolerance) == true else {
+            guard serverFrame?.matches(metadata.frame, tolerance: frameWriteSettleTolerance) == true else {
                 throw RealAppWindowVerifierFailure(
                     "\(context) WindowServer frame mismatch for \(original.spec.name): "
-                        + "expected=\(plannedFrame.debugDescription) "
+                        + "expected AX=\(metadata.frame.debugDescription) "
                         + "actual=\(serverFrame?.debugDescription ?? "nil")"
                 )
             }
@@ -1433,23 +1676,52 @@ enum RealAppWindowVerification {
         return plannedFrame
     }
 
+    @discardableResult
     private static func refreshWorkflowWorld(
         _ worldActor: WorldActor,
         axClient: AXClient,
-        displays: [DisplayID: DisplayInfo]
-    ) async throws {
-        let axSnapshot = axClient.windowSnapshot()
-        guard axSnapshot.quality == .complete else {
-            throw RealAppWindowVerifierFailure("real workflow AX snapshot was not complete: \(axSnapshot.quality)")
+        displays: [DisplayID: DisplayInfo],
+        including includedWindowIDs: Set<WindowID>? = nil,
+        activeDisplayID: DisplayID? = nil
+    ) async throws -> SpaceID {
+        let fullSnapshot = axClient.windowSnapshot()
+        guard fullSnapshot.quality == .complete else {
+            throw RealAppWindowVerifierFailure("real workflow AX snapshot was not complete: \(fullSnapshot.quality)")
+        }
+        let axSnapshot = AXWindowSnapshot(
+            windows: includedWindowIDs.map { included in
+                fullSnapshot.windows.filter { included.contains($0.id) }
+            } ?? fullSnapshot.windows,
+            quality: fullSnapshot.quality
+        )
+        if let includedWindowIDs {
+            let found = Set(axSnapshot.windows.map(\.id))
+            guard found == includedWindowIDs else {
+                throw RealAppWindowVerifierFailure(
+                    "real workflow snapshot omitted windows \(includedWindowIDs.subtracting(found).map(\.description).sorted())"
+                )
+            }
         }
         let spaceClient = SpaceClient()
         let topology = spaceClient.spaceTopology(displays: displays, windows: axSnapshot.windows)
-        let activeSpace: SpaceID?
-        switch spaceClient.activeSpaceID() {
-        case .success(let spaceID):
-            activeSpace = spaceID
-        case .failure:
-            activeSpace = topology.primaryActiveSpace
+        let activeSpace: SpaceID
+        if let activeDisplayID {
+            guard let displaySpace = topology.activeSpaceByDisplay[activeDisplayID] else {
+                throw RealAppWindowVerifierFailure(
+                    "real workflow could not resolve the active Space for display \(activeDisplayID.raw)"
+                )
+            }
+            activeSpace = displaySpace
+        } else {
+            switch spaceClient.activeSpaceID() {
+            case .success(let spaceID):
+                activeSpace = spaceID
+            case .failure:
+                guard let fallback = topology.primaryActiveSpace else {
+                    throw RealAppWindowVerifierFailure("real workflow could not resolve an active Space")
+                }
+                activeSpace = fallback
+            }
         }
         _ = await worldActor.refreshEnvironment(EnvironmentSnapshot(
             activeSpace: activeSpace,
@@ -1459,6 +1731,7 @@ enum RealAppWindowVerification {
             preserveSpaceLayouts: true,
             reconciliationMode: .observeOnly
         ))
+        return activeSpace
     }
 
     @discardableResult
@@ -2056,28 +2329,6 @@ enum RealAppWindowVerification {
         throw RealAppWindowVerifierFailure(
             "\(spec.name) did not expose a usable resizable AX window for bundle \(bundleID) with minimum size \(spec.minimumWindowSize.shortDescription); candidates=[\(seen)] allVisibleForBundle=[\(allSeen)] identity=[\(lastIdentityFailure)]"
         )
-    }
-
-    private static func threeWindowVerticalStackFrames(in visible: CGRect) throws -> [CGRect] {
-        let margin: CGFloat = 40
-        let gap: CGFloat = 18
-        let width = min(max(visible.width * 0.46, 1_180), visible.width - margin * 2)
-        let height = (visible.height - margin * 2 - gap * 2) / 3
-        guard width > 0, height >= 320 else {
-            throw RealAppWindowVerifierFailure(
-                "three Firefox vertical stack requires at least 320pt per window: visible=\(visible.debugDescription)"
-            )
-        }
-        let x = visible.minX + margin
-        let y = visible.minY + margin
-        return (0..<3).map { index in
-            CGRect(
-                x: x,
-                y: y + CGFloat(index) * (height + gap),
-                width: width,
-                height: height
-            ).standardized
-        }
     }
 
     private static func verifyFrameWrite(
