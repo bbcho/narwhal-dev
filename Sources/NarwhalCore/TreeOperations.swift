@@ -507,6 +507,9 @@ private func insertAtRootEdge(_ window: WindowID, _ direction: Direction, _ node
         }
 
         guard split.axis == direction.layoutAxisForPush else {
+            if !containsEmptySlot(node) {
+                return edgeSplit(inserted: .leaf(window), existing: node, direction: direction)
+            }
             return insertIntoCenterLane(window, direction, split)
         }
 
@@ -516,6 +519,17 @@ private func insertAtRootEdge(_ window: WindowID, _ direction: Direction, _ node
             at: targetIndex,
             with: insertIntoLane(window, direction, split.cells[targetIndex].node, nextAxis: direction.splitLineAxis)
         )
+    }
+}
+
+private func containsEmptySlot(_ node: Node) -> Bool {
+    switch node {
+    case .void:
+        return true
+    case .leaf:
+        return false
+    case .split(let split):
+        return split.cells.contains { containsEmptySlot($0.node) }
     }
 }
 

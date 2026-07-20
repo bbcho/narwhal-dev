@@ -48,13 +48,21 @@ struct LayoutSolverTests {
     }
 
     @Test("Binding minimum takes only the required space from flexible siblings")
-    func bindingMinimumUsesWaterFillAllocation() {
+    func bindingMinimumUsesWaterFillAllocation() throws {
         let display = DisplayID(raw: 1)
         let a = WindowID(raw: 1)
         let b = WindowID(raw: 2)
         let c = WindowID(raw: 3)
         let d = WindowID(raw: 4)
-        let tree = pushIntoTree(d, .up, pushIntoTree(c, .down, pushIntoTree(b, .right, pushIntoTree(a, .left, .void))))
+        let middle = try Split.create(axis: .vertical, cells: [
+            try Cell.create(weight: 1, node: .leaf(d)).get(),
+            try Cell.create(weight: 1, node: .leaf(c)).get()
+        ]).get()
+        let tree = Node.split(try Split.create(axis: .horizontal, cells: [
+            try Cell.create(weight: 1, node: .leaf(a)).get(),
+            try Cell.create(weight: 1, node: .split(middle)).get(),
+            try Cell.create(weight: 1, node: .leaf(b)).get()
+        ]).get())
         let space = spaceState(display: display, tree: tree)
         let frame = CGRect(x: 0, y: 0, width: 1472, height: 800)
         let gaps = noGaps
@@ -225,6 +233,27 @@ struct LayoutSolverTests {
             maxEdgeDrift: 16,
             minimumOverlapRatio: 0.98
         ))
+    }
+
+    @Test("Terminal character-grid rounding settles without becoming a minimum height")
+    func terminalCharacterGridRoundingSettles() {
+        let target = CGRect(x: 1504, y: 550.666_666_666_7, width: 1504, height: 520.666_666_666_7)
+        let actual = CGRect(x: 1504, y: 551, width: 1507, height: 525)
+
+        #expect(frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 4))
+    }
+
+    @Test("Expansion beyond edge-rounding slack remains a minimum-size signal")
+    func expansionBeyondEdgeRoundingSlackDoesNotSettle() {
+        let target = CGRect(x: 0, y: 0, width: 500, height: 500)
+        let actual = CGRect(x: 0, y: 0, width: 500, height: 506)
+
+        #expect(inferObservedConstraints(
+            target: target,
+            actual: actual,
+            tolerance: 4
+        ) == WindowConstraints(minHeight: 506))
+        #expect(!frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 4))
     }
 
     @Test("Minimum-size expansion is still inferred as a clamp")

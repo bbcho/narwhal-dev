@@ -1880,6 +1880,50 @@ struct MVPLayoutTests {
         #expect(result[e] == CGRect(x: 600, y: 400, width: 600, height: 400))
     }
 
+    @Test("Switching a full vertical layout to a horizontal edge preserves it as one group")
+    func fullVerticalLayoutMovesOppositeNewHorizontalEdge() {
+        let rightTree = tree(for: "JKKKL")
+        let rightFrames = frames(for: rightTree)
+
+        #expect(rightFrames[WindowID(raw: 5)] == CGRect(x: 600, y: 0, width: 600, height: 800))
+        #expect((1...4).allSatisfy { id in
+            guard let frame = rightFrames[WindowID(raw: CGWindowID(id))] else { return false }
+            return CGRect(x: 0, y: 0, width: 600, height: 800).contains(frame)
+        })
+
+        let leftTree = tree(for: "JKKKH")
+        let leftFrames = frames(for: leftTree)
+
+        #expect(leftFrames[WindowID(raw: 5)] == CGRect(x: 0, y: 0, width: 600, height: 800))
+        #expect((1...4).allSatisfy { id in
+            guard let frame = leftFrames[WindowID(raw: CGWindowID(id))] else { return false }
+            return CGRect(x: 600, y: 0, width: 600, height: 800).contains(frame)
+        })
+    }
+
+    @Test("Switching a full horizontal layout to a vertical edge preserves it as one group")
+    func fullHorizontalLayoutMovesOppositeNewVerticalEdge() {
+        for keys in ["HLLLJ", "HLLLLJ"] {
+            let bottomFrames = frames(for: tree(for: keys))
+            let newWindow = WindowID(raw: CGWindowID(keys.count))
+
+            #expect(bottomFrames[newWindow] == CGRect(x: 0, y: 400, width: 1200, height: 400))
+            #expect((1..<keys.count).allSatisfy { id in
+                guard let frame = bottomFrames[WindowID(raw: CGWindowID(id))] else { return false }
+                return CGRect(x: 0, y: 0, width: 1200, height: 400).contains(frame)
+            })
+        }
+
+        let topTree = tree(for: "HLLLK")
+        let topFrames = frames(for: topTree)
+
+        #expect(topFrames[WindowID(raw: 5)] == CGRect(x: 0, y: 0, width: 1200, height: 400))
+        #expect((1...4).allSatisfy { id in
+            guard let frame = topFrames[WindowID(raw: CGWindowID(id))] else { return false }
+            return CGRect(x: 0, y: 400, width: 1200, height: 400).contains(frame)
+        })
+    }
+
     @Test("Third right push splits the bottom-right leaf toward center")
     func thirdRightPushSplitsCenterFacingLeaf() throws {
         let a = WindowID(raw: 1)
@@ -1919,8 +1963,8 @@ struct MVPLayoutTests {
         #expect(result[b] == CGRect(x: 800, y: 400, width: 400, height: 400))
     }
 
-    @Test("HLJK creates one lane per edge")
-    func hljkCreatesOneLanePerEdge() throws {
+    @Test("HLJK keeps the completed horizontal layout together when switching axes")
+    func hljkKeepsCompletedHorizontalLayoutTogether() throws {
         let a = WindowID(raw: 1)
         let b = WindowID(raw: 2)
         let c = WindowID(raw: 3)
@@ -1928,14 +1972,14 @@ struct MVPLayoutTests {
         let tree = pushIntoTree(d, .up, pushIntoTree(c, .down, pushIntoTree(b, .right, pushIntoTree(a, .left, .void))))
         let result = frames(for: tree)
 
-        #expect(result[a] == CGRect(x: 0, y: 0, width: 400, height: 800))
+        #expect(result[a] == CGRect(x: 0, y: 0, width: 400, height: 400))
         #expect(result[d] == CGRect(x: 400, y: 0, width: 400, height: 400))
-        #expect(result[c] == CGRect(x: 400, y: 400, width: 400, height: 400))
-        #expect(result[b] == CGRect(x: 800, y: 0, width: 400, height: 800))
+        #expect(result[b] == CGRect(x: 800, y: 0, width: 400, height: 400))
+        #expect(result[c] == CGRect(x: 0, y: 400, width: 1200, height: 400))
     }
 
-    @Test("KJHL creates the vertical mirror of HLJK")
-    func kjhlCreatesVerticalMirrorOfHLJK() throws {
+    @Test("KJHL keeps the completed vertical layout together when switching axes")
+    func kjhlKeepsCompletedVerticalLayoutTogether() throws {
         let a = WindowID(raw: 1)
         let b = WindowID(raw: 2)
         let c = WindowID(raw: 3)
@@ -1943,10 +1987,10 @@ struct MVPLayoutTests {
         let tree = pushIntoTree(d, .right, pushIntoTree(c, .left, pushIntoTree(b, .down, pushIntoTree(a, .up, .void))))
         let result = frames(for: tree, frame: CGRect(x: 0, y: 0, width: 1200, height: 900))
 
-        #expect(result[a] == CGRect(x: 0, y: 0, width: 1200, height: 300))
-        #expect(result[c] == CGRect(x: 0, y: 300, width: 600, height: 300))
-        #expect(result[d] == CGRect(x: 600, y: 300, width: 600, height: 300))
-        #expect(result[b] == CGRect(x: 0, y: 600, width: 1200, height: 300))
+        #expect(result[c] == CGRect(x: 0, y: 0, width: 600, height: 900))
+        #expect(result[a] == CGRect(x: 600, y: 0, width: 600, height: 450))
+        #expect(result[d] == CGRect(x: 600, y: 450, width: 300, height: 450))
+        #expect(result[b] == CGRect(x: 900, y: 450, width: 300, height: 450))
     }
 
     @Test("Pruning a closed window removes it from metadata, display ownership, and BSP layout")
@@ -3612,11 +3656,20 @@ struct MVPLayoutTests {
         let c = WindowID(raw: 3)
         let d = WindowID(raw: 4)
         let e = WindowID(raw: 5)
-        let tree = pushIntoTree(
-            e,
-            .up,
-            pushIntoTree(d, .right, pushIntoTree(c, .left, pushIntoTree(b, .right, pushIntoTree(a, .left, .void))))
-        )
+        let tree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1, node: .leaf(a)),
+                try cell(weight: 1, node: .leaf(c))
+            ]))),
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1, node: .leaf(e)),
+                try cell(weight: 1, node: .void)
+            ]))),
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1, node: .leaf(b)),
+                try cell(weight: 1, node: .leaf(d))
+            ])))
+        ]))
         let display = DisplayID(raw: 1)
         let space = SpaceState(
             id: SpaceID(raw: 1),
@@ -4001,6 +4054,19 @@ struct MVPLayoutTests {
             frame: frame,
             gaps: Gaps(inner: 0, outer: Insets(top: 0, left: 0, bottom: 0, right: 0))
         ).tiled
+    }
+
+    private func tree(for keys: String) -> Node {
+        keys.enumerated().reduce(Node.void) { tree, entry in
+            let direction: Direction = switch entry.element {
+            case "H": .left
+            case "L": .right
+            case "J": .down
+            case "K": .up
+            default: preconditionFailure("Unsupported layout key \(entry.element)")
+            }
+            return pushIntoTree(WindowID(raw: CGWindowID(entry.offset + 1)), direction, tree)
+        }
     }
 
     private func generatedDirectionSequences(length: Int) -> [[Direction]] {
