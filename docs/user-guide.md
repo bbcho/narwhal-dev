@@ -69,6 +69,44 @@ The menu remains available when config, restore, or runtime service startup is
 degraded. It can retry startup, open the config, open Accessibility settings,
 reveal logs, copy diagnostics, or export a privacy-safe support bundle.
 
+## Layout Workbench
+
+Click the Narwhal status item to see the active display/Space, health, tiled and
+floating counts, and focused application. Choose **Open Layout Workbench…** for
+the deliberate preview-and-apply interface. The gear menu keeps maintenance
+actions separate from layout editing.
+
+The workbench has four fixed roles:
+
+- The left rail chooses the display and Space being inspected. Selecting a row
+  or canvas tile does not change macOS focus.
+- The canvas shows tiled, floating, manually adjusting, detached, focused, and
+  selected windows with distinct labels and border styles.
+- The inspector previews push, resize, eject, balance, shuffle, cascade, reset,
+  and named-layout operations before any real window moves.
+- The bottom row names the target Space and affected-window count. **Apply
+  Change** commits the proposal; **Cancel Preview** discards it.
+
+The inspector scrolls at the minimum window size. `command-Z` and
+`shift-command-Z` preview undo and redo while the workbench is active. History
+keeps up to 32 successful transitions independently for each Space; failed or
+partially applied frame writes are not recorded.
+
+Managed rules are evaluated in visible first-match order before Lua rules. The
+editor shows the current match count, validates matchers and policies, and only
+activates the rules after **Save Rules**. Named layouts store semantic app/role
+matchers, display slots, empty cells, and split weights. A partial match lists
+each missing display, unmatched slot, and unmatched window before it can be
+acknowledged and previewed.
+
+The two user-owned files are stored under `~/Library/Application Support/narwhal/`:
+
+- `managed-rules.json`
+- `layouts.json`
+
+Malformed files are quarantined next to the original. Narwhal keeps the last
+valid in-memory managed rules active and displays the persistence warning.
+
 ## Default Hotkeys
 
 Directions use the Vim-style keys:
@@ -174,8 +212,9 @@ Use:
 control-option-Z
 ```
 
-Undo restores the previous tiled layout. It is one step deep; after undoing, the
-next undo toggles back to the layout you just left.
+Undo restores the previous successful layout transition in the active Space.
+Up to 32 transitions are retained per Space. Redo is available in the Layout
+Workbench; committing a new change after undo clears that Space's redo branch.
 
 ### Move To The Next Display
 
@@ -214,8 +253,9 @@ or:
 narwhalctl reset
 ```
 
-Reset clears BSP trees, floating lists, focus memory, pending rules, and observed
-minimum-size constraints. It does not close windows.
+Reset clears the active Space's BSP trees, floating lists, focus memory, pending
+rules, and observed minimum-size constraints. It does not close windows or
+discard layout history, so the successful reset can be undone.
 
 ### Copy Diagnostics
 

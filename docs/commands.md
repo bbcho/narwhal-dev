@@ -350,8 +350,10 @@ tree shape and window membership.
 
 ### Undo Layout
 
-Undo restores the previous tiled layout. The undo buffer is one step deep, so
-undoing once swaps the current and previous layouts.
+Undo restores the previous successful layout transition in the active Space.
+Narwhal retains up to 32 transitions per Space. The Layout Workbench also
+provides redo; a new committed change after undo clears only that Space's redo
+branch.
 
 ### Move To Next Display
 

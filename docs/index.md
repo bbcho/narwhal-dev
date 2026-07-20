@@ -26,6 +26,8 @@ Use this page as the map for Narwhal documentation.
 
 - [Architecture](architecture.md): module boundaries, pure core, shell effects,
   command flow, persistence, IPC, errors, and concurrency.
+- [Layout Workbench design](layout-workbench-design.md): workspace inspection,
+  previews, history, managed rules, named layouts, and visual verification.
 - [Developer guide](development.md): setup, build/test commands, coding
   guidelines, and change checklists.
 - [Design notes](../design.md): product semantics and detailed layout rules.
