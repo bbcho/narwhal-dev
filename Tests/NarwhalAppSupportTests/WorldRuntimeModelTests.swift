@@ -5,6 +5,31 @@ import NarwhalCore
 
 @Suite("World runtime model")
 struct WorldRuntimeModelTests {
+    @Test("Transient interaction state is explicit, replaceable, and pruned with its window")
+    func interactionStateLifecycle() {
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let adjusting = worldRuntimeBySettingInteraction(
+            .manualAdjustment,
+            for: first,
+            in: .empty
+        )
+        let detached = worldRuntimeBySettingInteraction(
+            .temporarilyDetached(.applicationConstraint),
+            for: second,
+            in: adjusting
+        )
+
+        #expect(detached.windowInteractions[first] == .manualAdjustment)
+        #expect(detached.windowInteractions[second] == .temporarilyDetached(.applicationConstraint))
+
+        let cleared = worldRuntimeBySettingInteraction(nil, for: first, in: detached)
+        #expect(cleared.windowInteractions[first] == nil)
+        #expect(prunedWorldRuntimeState(liveWindowIDs: [second], in: cleared).windowInteractions == [
+            second: .temporarilyDetached(.applicationConstraint)
+        ])
+    }
+
     @Test("Recording focus ignores duplicate tail and keeps newest IDs")
     func recordingFocusIgnoresDuplicateTailAndKeepsNewestIDs() {
         let initial = WorldRuntimeState.empty
