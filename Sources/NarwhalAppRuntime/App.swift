@@ -2782,8 +2782,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isHandlingExternalGeometry = true
         var current: PendingExternalGeometryEvent? = incoming
         while let currentEvent = current {
-            await commandExecutionGate.perform {
+            let windowID = externalGeometryWindowID(for: currentEvent.event)
+            if let windowID {
+                await worldActor.setWindowInteraction(.manualAdjustment, for: windowID)
+                await refreshWorkspacePresentationSurfaces()
+            }
+            let resolvedInteraction = await commandExecutionGate.perform {
                 await self.processExternalGeometryEvent(currentEvent.event, snapshot: currentEvent.snapshot)
+            }
+            if let windowID {
+                await worldActor.setWindowInteraction(resolvedInteraction, for: windowID)
+                await refreshWorkspacePresentationSurfaces()
             }
             current = pendingExternalGeometryEvents.dequeue()
         }
@@ -2794,7 +2803,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func processExternalGeometryEvent(
         _ event: AXEvent,
         snapshot: FocusedWindowSnapshot?
-    ) async {
+    ) async -> WindowInteractionState? {
         let metricInterval = runtimeMetrics.begin(.manualResizeHandoff)
         defer { runtimeMetrics.end(metricInterval) }
         let selectedEvent = externalGeometryEventSelection(
@@ -2829,12 +2838,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !completed {
                 await worldActor.recordExternalGeometry(selectedEvent.event)
                 await updateTiledBordersFromWorld()
+                return .temporarilyDetached(.applicationConstraint)
             }
+            return nil
         case .success(nil):
             if let snapshot {
                 await updateFocusBorderFromWorld(windowID: snapshot.id)
             }
             await updateTiledBordersFromWorld()
+            return nil
         case .failure(let error):
             reporter.error("External geometry rejected by core: \(error.message)")
             await worldActor.recordExternalGeometry(selectedEvent.event)
@@ -2842,6 +2854,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await updateFocusBorderFromWorld(windowID: snapshot.id)
             }
             await updateTiledBordersFromWorld()
+            return .temporarilyDetached(.userMoved)
         }
     }
 

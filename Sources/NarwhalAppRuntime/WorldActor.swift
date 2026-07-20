@@ -73,6 +73,10 @@ actor WorldActor {
         }
     }
 
+    func setWindowInteraction(_ interaction: WindowInteractionState?, for windowID: WindowID) {
+        runtimeState = worldRuntimeBySettingInteraction(interaction, for: windowID, in: runtimeState)
+    }
+
     func planExternalGeometry(_ event: AXEvent) -> Result<CommandPlanResult?, CommandError> {
         switch event {
         case .windowMoved, .windowResized:
