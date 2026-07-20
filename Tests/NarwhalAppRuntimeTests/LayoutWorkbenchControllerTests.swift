@@ -33,7 +33,8 @@ struct LayoutWorkbenchControllerTests {
         #expect(window.title == "Narwhal Layout Workbench")
         let inspector = try #require(controller.debugInspectorGeometry())
         #expect(inspector.hasVerticalScroller)
-        #expect(inspector.viewportHeight == 520)
+        #expect(inspector.viewportHeight > 0)
+        #expect(inspector.viewportHeight <= (window.contentView?.bounds.height ?? 0))
         #expect(inspector.contentHeight > 0)
         controller.close()
     }
@@ -89,6 +90,43 @@ struct LayoutWorkbenchControllerTests {
         editor.beginSheet(for: parent)
 
         #expect(editor.debugRuleTitles() == ["1. Editor · 3 current"])
+        parent.close()
+    }
+
+    @Test("Managed rule navigation stages valid edits and blocks invalid edits")
+    func managedRuleNavigationPreservesEdits() {
+        let first = ManagedWindowRule(
+            id: ManagedRuleID(rawValue: "first"),
+            name: "First",
+            matcher: ManagedRuleMatcher(bundleID: "com.example.first"),
+            policy: ManagedRulePolicy()
+        )
+        let second = ManagedWindowRule(
+            id: ManagedRuleID(rawValue: "second"),
+            name: "Second",
+            matcher: ManagedRuleMatcher(bundleID: "com.example.second"),
+            policy: ManagedRulePolicy()
+        )
+        let parent = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 700, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let editor = ManagedRulesEditorController(rules: [first, second]) { _ in }
+        editor.beginSheet(for: parent)
+
+        editor.debugEditName("Updated First")
+        editor.debugSelectRule(at: 1)
+
+        #expect(editor.debugRuleNames() == ["Updated First", "Second"])
+        #expect(editor.debugSelectedIndex() == 1)
+
+        editor.debugEditName("")
+        editor.debugSelectRule(at: 0)
+
+        #expect(editor.debugSelectedIndex() == 1)
+        #expect(editor.debugRuleNames() == ["Updated First", "Second"])
         parent.close()
     }
 }

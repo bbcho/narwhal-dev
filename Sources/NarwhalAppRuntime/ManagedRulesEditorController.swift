@@ -49,6 +49,23 @@ final class ManagedRulesEditorController: NSObject {
         rulesPopup.itemTitles
     }
 
+    func debugEditName(_ name: String) {
+        nameField.stringValue = name
+    }
+
+    func debugSelectRule(at index: Int) {
+        rulesPopup.selectItem(at: index)
+        selectRule()
+    }
+
+    func debugRuleNames() -> [String] {
+        rules.map(\.name)
+    }
+
+    func debugSelectedIndex() -> Int? {
+        selectedIndex
+    }
+
     private func makeSheet() -> NSWindow {
         let sheet = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 620, height: 530),
@@ -221,11 +238,17 @@ final class ManagedRulesEditorController: NSObject {
     @objc private func selectRule() {
         let newIndex = rulesPopup.indexOfSelectedItem
         guard rules.indices.contains(newIndex) else { return }
+        let previousIndex = selectedIndex
+        guard stageSelectedRule() else {
+            if let previousIndex { rulesPopup.selectItem(at: previousIndex) }
+            return
+        }
         selectedIndex = newIndex
         loadForm(rules[newIndex])
     }
 
     @objc private func addRule() {
+        guard stageSelectedRule() else { return }
         let rule = ManagedWindowRule(
             id: ManagedRuleID(rawValue: UUID().uuidString.lowercased()),
             name: "New Rule",
@@ -254,13 +277,13 @@ final class ManagedRulesEditorController: NSObject {
     }
 
     @objc private func moveRuleUp() {
-        guard let selectedIndex, selectedIndex > 0 else { return }
+        guard stageSelectedRule(), let selectedIndex, selectedIndex > 0 else { return }
         rules.swapAt(selectedIndex, selectedIndex - 1)
         renderRuleList(selecting: selectedIndex - 1)
     }
 
     @objc private func moveRuleDown() {
-        guard let selectedIndex, selectedIndex + 1 < rules.count else { return }
+        guard stageSelectedRule(), let selectedIndex, selectedIndex + 1 < rules.count else { return }
         rules.swapAt(selectedIndex, selectedIndex + 1)
         renderRuleList(selecting: selectedIndex + 1)
     }
@@ -274,34 +297,12 @@ final class ManagedRulesEditorController: NSObject {
     }
 
     @objc private func updateRule() {
-        guard let selectedIndex, rules.indices.contains(selectedIndex) else { return }
-        switch ruleFromForm(id: rules[selectedIndex].id) {
-        case .failure(let message):
-            showError(message)
-        case .success(let rule):
-            let updated = rules.enumerated().map { $0.offset == selectedIndex ? rule : $0.element }
-            switch validateManagedRules(updated) {
-            case .failure(let error):
-                showError(validationMessage(error))
-            case .success:
-                rules = updated
-                renderRuleList(selecting: selectedIndex)
-            }
-        }
+        guard let selectedIndex, stageSelectedRule() else { return }
+        renderRuleList(selecting: selectedIndex)
     }
 
     @objc private func save() {
-        if let selectedIndex, rules.indices.contains(selectedIndex) {
-            guard case .success(let current) = ruleFromForm(id: rules[selectedIndex].id) else {
-                updateRule()
-                return
-            }
-            rules[selectedIndex] = current
-        }
-        if case .failure(let error) = validateManagedRules(rules) {
-            showError(validationMessage(error))
-            return
-        }
+        guard stageSelectedRule() else { return }
         saveButton.isEnabled = false
         Task {
             do {
@@ -374,6 +375,26 @@ final class ManagedRulesEditorController: NSObject {
                 minimumHeight: minimumHeight
             )
         ))
+    }
+
+    private func stageSelectedRule() -> Bool {
+        guard let selectedIndex, rules.indices.contains(selectedIndex) else { return true }
+        let updatedRule: ManagedWindowRule
+        switch ruleFromForm(id: rules[selectedIndex].id) {
+        case .failure(let message):
+            showError(message)
+            return false
+        case .success(let rule):
+            updatedRule = rule
+        }
+        let updated = rules.enumerated().map { $0.offset == selectedIndex ? updatedRule : $0.element }
+        if case .failure(let error) = validateManagedRules(updated) {
+            showError(validationMessage(error))
+            return false
+        }
+        rules = updated
+        hideError()
+        return true
     }
 
     private func showError(_ message: String) {
