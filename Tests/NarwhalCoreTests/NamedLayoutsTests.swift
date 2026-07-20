@@ -97,6 +97,108 @@ struct NamedLayoutsTests {
         #expect(resolved == .leaf(editorID))
     }
 
+    @Test("Application replaces the selected Space tree and leaves unmatched windows floating")
+    func applicationBuildsPlannedWorld() throws {
+        let displayID = DisplayID(raw: 1)
+        let spaceID = SpaceID(raw: 7)
+        let editor = candidate(id: 1, x: 0, displaySlot: 0).window
+        let browser = candidate(id: 2, bundleID: "com.example.browser", title: "Docs", x: 400, displaySlot: 0).window
+        let mail = candidate(id: 3, bundleID: "com.example.mail", title: "Inbox", x: 800, displaySlot: 0).window
+        let currentTree = try Split.create(axis: .horizontal, cells: [
+            try Cell.create(weight: 1, node: .leaf(editor.id)).get(),
+            try Cell.create(weight: 1, node: .leaf(mail.id)).get()
+        ]).get()
+        let world = World(
+            displays: [displayID: DisplayInfo(
+                id: displayID,
+                slot: 0,
+                fingerprint: "display",
+                frame: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                visibleFrame: CGRect(x: 0, y: 0, width: 1200, height: 800)
+            )],
+            activeSpace: spaceID,
+            spaces: [spaceID: SpaceState(
+                id: spaceID,
+                displays: [displayID: DisplaySpaceState(
+                    displayID: displayID,
+                    tree: .split(currentTree),
+                    floating: [browser.id]
+                )],
+                focused: editor.id
+            )],
+            windows: [editor.id: editor, browser.id: browser, mail.id: mail],
+            windowDisplay: [editor.id: displayID, browser.id: displayID, mail.id: displayID],
+            windowSpace: [editor.id: spaceID, browser.id: spaceID, mail.id: spaceID],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        let application = try applyNamedLayout(
+            sampleLayout(),
+            to: spaceID,
+            in: world,
+            allowPartial: false
+        ).get()
+
+        let state = try #require(application.world.spaces[spaceID]?.displays[displayID])
+        #expect(occupiedWindows(in: state.tree) == [editor.id, browser.id])
+        #expect(state.floating == [mail.id])
+        #expect(Set(application.layout.tiled.keys) == [editor.id, browser.id])
+    }
+
+    @Test("Saving a tree never stores a window ID and only includes requested title hints")
+    func capturesSemanticTemplate() throws {
+        let displayID = DisplayID(raw: 1)
+        let spaceID = SpaceID(raw: 7)
+        let editor = candidate(id: 1, title: "Secret Project", x: 0, displaySlot: 0).window
+        let world = World(
+            displays: [displayID: DisplayInfo(
+                id: displayID,
+                slot: 0,
+                fingerprint: nil,
+                frame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+                visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 800)
+            )],
+            activeSpace: spaceID,
+            spaces: [spaceID: SpaceState(
+                id: spaceID,
+                displays: [displayID: DisplaySpaceState(displayID: displayID, tree: .leaf(editor.id), floating: [])],
+                focused: editor.id
+            )],
+            windows: [editor.id: editor],
+            windowDisplay: [editor.id: displayID],
+            windowSpace: [editor.id: spaceID],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        let withoutTitle = try namedLayout(
+            id: NamedLayoutID(rawValue: "saved"),
+            name: "Saved",
+            revision: 1,
+            from: spaceID,
+            in: world
+        ).get()
+        let withTitle = try namedLayout(
+            id: NamedLayoutID(rawValue: "saved"),
+            name: "Saved",
+            revision: 2,
+            from: spaceID,
+            in: world,
+            includeTitleHints: [editor.id]
+        ).get()
+
+        guard case .slot(let plainSlot) = withoutTitle.displays[0].root,
+              case .slot(let titledSlot) = withTitle.displays[0].root else {
+            Issue.record("Expected captured slots")
+            return
+        }
+        #expect(plainSlot.matcher.title == nil)
+        #expect(titledSlot.matcher.title == .exact("Secret Project"))
+    }
+
     private func sampleLayout() -> NamedLayout {
         NamedLayout(
             id: NamedLayoutID(rawValue: "coding"),

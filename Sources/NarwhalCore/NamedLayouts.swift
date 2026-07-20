@@ -140,6 +140,26 @@ public struct NamedLayoutMatchResult: Equatable, Sendable {
     }
 }
 
+public struct NamedLayoutApplication: Equatable, Sendable {
+    public let world: World
+    public let layout: Layout
+    public let match: NamedLayoutMatchResult
+
+    public init(world: World, layout: Layout, match: NamedLayoutMatchResult) {
+        self.world = world
+        self.layout = layout
+        self.match = match
+    }
+}
+
+public enum NamedLayoutApplicationError: Error, Equatable, Sendable {
+    case validation(NamedLayoutValidationError)
+    case inactiveSpace(SpaceID)
+    case partialMatch(NamedLayoutMatchResult)
+    case noMatchingWindows
+    case unsatisfiable(UnsatisfiableLayout)
+}
+
 public enum NamedLayoutValidationError: Error, Equatable, Sendable {
     case emptyID
     case emptyName
@@ -280,6 +300,139 @@ public func resolvedTemplateNode(
     }
 }
 
+public func applyNamedLayout(
+    _ namedLayout: NamedLayout,
+    to spaceID: SpaceID,
+    in world: World,
+    allowPartial: Bool
+) -> Result<NamedLayoutApplication, NamedLayoutApplicationError> {
+    let activeDisplayIDs = world.activeSpaceByDisplay
+        .filter { $0.value == spaceID }
+        .map(\.key)
+    guard !activeDisplayIDs.isEmpty else {
+        return .failure(.inactiveSpace(spaceID))
+    }
+    let displaysBySlot = Dictionary(
+        world.displays.values
+            .filter { activeDisplayIDs.contains($0.id) }
+            .map { ($0.slot, $0) },
+        uniquingKeysWith: { existing, _ in existing }
+    )
+    let currentSpace = world.spaces[spaceID] ?? SpaceState(id: spaceID, displays: [:], focused: nil)
+    let tracked = windowIDs(in: currentSpace)
+    let candidates = world.windows.values
+        .filter { window in
+            guard window.isResizable, !window.isMinimized else { return false }
+            return world.windowSpace[window.id] == spaceID || tracked.contains(window.id)
+        }
+        .map { window in
+            NamedLayoutCandidate(
+                window: window,
+                currentDisplaySlot: world.windowDisplay[window.id].flatMap { world.displays[$0]?.slot }
+            )
+        }
+
+    let match: NamedLayoutMatchResult
+    switch matchNamedLayout(
+        namedLayout,
+        candidates: candidates,
+        availableDisplaySlots: Set(displaysBySlot.keys)
+    ) {
+    case .failure(let error):
+        return .failure(.validation(error))
+    case .success(let result):
+        match = result
+    }
+    guard allowPartial || match.isComplete else { return .failure(.partialMatch(match)) }
+    guard !match.matches.isEmpty else { return .failure(.noMatchingWindows) }
+
+    let assignments = Dictionary(
+        match.matches.map { ($0.slotID, $0.windowID) },
+        uniquingKeysWith: { existing, _ in existing }
+    )
+    let assignedWindowIDs = Set(assignments.values)
+    var displayStates = currentSpace.displays.mapValues { state in
+        let retained = Set(occupiedWindows(in: state.tree)).subtracting(assignedWindowIDs)
+        return DisplaySpaceState(
+            displayID: state.displayID,
+            tree: pruneTree(state.tree, keeping: retained),
+            floating: state.floating.filter { !assignedWindowIDs.contains($0) }
+        )
+    }
+
+    for template in namedLayout.displays.sorted(by: { $0.displaySlot < $1.displaySlot }) {
+        guard let display = displaysBySlot[template.displaySlot] else { continue }
+        let current = displayStates[display.id] ?? DisplaySpaceState(displayID: display.id, tree: .void, floating: [])
+        let currentOrder = current.floating + occupiedWindows(in: current.tree)
+        let floating = stableUnique(currentOrder.filter { !assignedWindowIDs.contains($0) })
+        displayStates[display.id] = DisplaySpaceState(
+            displayID: display.id,
+            tree: resolvedTemplateNode(template.root, assignments: assignments),
+            floating: floating
+        )
+    }
+
+    let nextSpace = SpaceState(id: spaceID, displays: displayStates, focused: currentSpace.focused)
+    let targetDisplayByWindow = Dictionary(
+        match.matches.compactMap { match in
+            displaysBySlot[match.targetDisplaySlot].map { (match.windowID, $0.id) }
+        },
+        uniquingKeysWith: { existing, _ in existing }
+    )
+    let nextWorld = World(
+        displays: world.displays,
+        activeSpace: world.activeSpace,
+        activeSpaceByDisplay: world.activeSpaceByDisplay,
+        spaces: world.spaces.setting(spaceID, to: nextSpace),
+        windows: world.windows,
+        windowDisplay: world.windowDisplay.merging(targetDisplayByWindow) { _, target in target },
+        windowSpace: world.windowSpace.merging(
+            Dictionary(uniqueKeysWithValues: assignedWindowIDs.map { ($0, spaceID) })
+        ) { _, target in target },
+        observedVisibleWindows: world.observedVisibleWindows,
+        windowConstraints: world.windowConstraints,
+        pendingRules: world.pendingRules,
+        config: world.config
+    )
+    switch flattenedLayout(of: nextWorld) {
+    case .success(let layout):
+        return .success(NamedLayoutApplication(world: nextWorld, layout: layout, match: match))
+    case .failure(let error):
+        return .failure(.unsatisfiable(error))
+    }
+}
+
+public func namedLayout(
+    id: NamedLayoutID,
+    name: String,
+    revision: Int,
+    from spaceID: SpaceID,
+    in world: World,
+    includeTitleHints: Set<WindowID> = []
+) -> Result<NamedLayout, NamedLayoutValidationError> {
+    guard let space = world.spaces[spaceID] else { return .failure(.emptyDisplays) }
+    let displays = space.displays.values.compactMap { state -> DisplayLayoutTemplate? in
+        guard let display = world.displays[state.displayID] else { return nil }
+        return DisplayLayoutTemplate(
+            displaySlot: display.slot,
+            root: templateNode(
+                from: state.tree,
+                displaySlot: display.slot,
+                path: [],
+                windows: world.windows,
+                includeTitleHints: includeTitleHints
+            )
+        )
+    }
+    .sorted { $0.displaySlot < $1.displaySlot }
+    return validateNamedLayout(NamedLayout(
+        id: id,
+        name: name,
+        revision: revision,
+        displays: displays
+    ))
+}
+
 private func validateTemplateNode(
     _ node: LayoutTemplateNode,
     displaySlot: Int,
@@ -387,4 +540,52 @@ private func candidateScreenOrder(_ lhs: NamedLayoutCandidate, _ rhs: NamedLayou
     }
     if lhs.window.title != rhs.window.title { return lhs.window.title < rhs.window.title }
     return lhs.window.id.raw < rhs.window.id.raw
+}
+
+private func stableUnique(_ windowIDs: [WindowID]) -> [WindowID] {
+    windowIDs.reduce(into: (seen: Set<WindowID>(), values: [WindowID]())) { result, windowID in
+        if result.seen.insert(windowID).inserted {
+            result.values.append(windowID)
+        }
+    }.values
+}
+
+private func templateNode(
+    from node: Node,
+    displaySlot: Int,
+    path: NodePath,
+    windows: [WindowID: WindowMetadata],
+    includeTitleHints: Set<WindowID>
+) -> LayoutTemplateNode {
+    switch node {
+    case .void:
+        return .empty
+    case .leaf(let windowID):
+        guard let window = windows[windowID] else { return .empty }
+        let pathComponent = path.isEmpty ? "root" : path.map(String.init).joined(separator: "-")
+        return .slot(LayoutTemplateSlot(
+            id: LayoutSlotID(rawValue: "display-\(displaySlot)-\(pathComponent)"),
+            matcher: LayoutWindowMatcher(
+                bundleID: window.bundleID.raw,
+                role: window.role,
+                title: includeTitleHints.contains(windowID) ? .exact(window.title) : nil
+            )
+        ))
+    case .split(let split):
+        return .split(
+            axis: split.axis,
+            cells: split.cells.enumerated().map { index, cell in
+                LayoutTemplateCell(
+                    weight: cell.weight,
+                    node: templateNode(
+                        from: cell.node,
+                        displaySlot: displaySlot,
+                        path: path + [index],
+                        windows: windows,
+                        includeTitleHints: includeTitleHints
+                    )
+                )
+            }
+        )
+    }
 }
