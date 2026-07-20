@@ -123,7 +123,8 @@ final class LayoutCanvasView: NSView {
 
         let context = NSGraphicsContext.current?.cgContext
         context?.saveGState()
-        context?.setStrokeColor(borderColor(for: window).cgColor)
+        let strokeColor = selectedWindowID == window.id ? NSColor.labelColor : borderColor(for: window)
+        context?.setStrokeColor(strokeColor.cgColor)
         context?.setLineWidth(selectedWindowID == window.id ? 3 : 2)
         context?.setLineDash(phase: 0, lengths: dashPattern(for: window.state))
         context?.stroke(tileRect.insetBy(dx: 1, dy: 1))

@@ -43,9 +43,11 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
     private let redoButton = NSButton(title: "Redo", target: nil, action: nil)
     private let layoutPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let railContainer = NSView()
+    private let railScrollView = NSScrollView()
+    private let railDocumentView = WorkbenchScrollDocumentView()
     private let inspectorContainer = NSView()
     private let inspectorScrollView = NSScrollView()
-    private let inspectorDocumentView = WorkbenchInspectorDocumentView()
+    private let inspectorDocumentView = WorkbenchScrollDocumentView()
 
     init(
         worldActor: WorldActor,
@@ -117,6 +119,10 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
 
     func debugManagedRuleCount() -> Int {
         managedRules.count
+    }
+
+    func debugRailHasVerticalScroller() -> Bool {
+        railScrollView.hasVerticalScroller
     }
 
 #if NARWHAL_ENABLE_VERIFIERS
@@ -209,13 +215,31 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         railStack.alignment = .leading
         railStack.spacing = 6
         railStack.translatesAutoresizingMaskIntoConstraints = false
+
+        railScrollView.drawsBackground = false
+        railScrollView.borderType = .noBorder
+        railScrollView.hasHorizontalScroller = false
+        railScrollView.hasVerticalScroller = true
+        railScrollView.autohidesScrollers = true
+        railScrollView.translatesAutoresizingMaskIntoConstraints = false
+        railScrollView.contentView.drawsBackground = false
+        railDocumentView.translatesAutoresizingMaskIntoConstraints = false
+        railDocumentView.addSubview(railStack)
+        railScrollView.documentView = railDocumentView
         let heading = sectionHeading("WORKSPACES")
-        railContainer.addSubview(railStack)
+        railContainer.addSubview(railScrollView)
         railStack.addArrangedSubview(heading)
         NSLayoutConstraint.activate([
-            railStack.leadingAnchor.constraint(equalTo: railContainer.leadingAnchor, constant: 12),
-            railStack.trailingAnchor.constraint(equalTo: railContainer.trailingAnchor, constant: -12),
-            railStack.topAnchor.constraint(equalTo: railContainer.topAnchor, constant: 14)
+            railScrollView.leadingAnchor.constraint(equalTo: railContainer.leadingAnchor),
+            railScrollView.trailingAnchor.constraint(equalTo: railContainer.trailingAnchor),
+            railScrollView.topAnchor.constraint(equalTo: railContainer.topAnchor),
+            railScrollView.bottomAnchor.constraint(equalTo: railContainer.bottomAnchor),
+            railDocumentView.widthAnchor.constraint(equalTo: railScrollView.contentView.widthAnchor),
+            railDocumentView.heightAnchor.constraint(greaterThanOrEqualTo: railScrollView.contentView.heightAnchor),
+            railStack.leadingAnchor.constraint(equalTo: railDocumentView.leadingAnchor, constant: 12),
+            railStack.trailingAnchor.constraint(equalTo: railDocumentView.trailingAnchor, constant: -12),
+            railStack.topAnchor.constraint(equalTo: railDocumentView.topAnchor, constant: 14),
+            railStack.bottomAnchor.constraint(equalTo: railDocumentView.bottomAnchor, constant: -14)
         ])
     }
 
@@ -241,6 +265,7 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
             inspectorScrollView.topAnchor.constraint(equalTo: inspectorContainer.topAnchor),
             inspectorScrollView.bottomAnchor.constraint(equalTo: inspectorContainer.bottomAnchor),
             inspectorDocumentView.widthAnchor.constraint(equalTo: inspectorScrollView.contentView.widthAnchor),
+            inspectorDocumentView.heightAnchor.constraint(greaterThanOrEqualTo: inspectorScrollView.contentView.heightAnchor),
             inspectorStack.leadingAnchor.constraint(equalTo: inspectorDocumentView.leadingAnchor, constant: 14),
             inspectorStack.trailingAnchor.constraint(equalTo: inspectorDocumentView.trailingAnchor, constant: -14),
             inspectorStack.topAnchor.constraint(equalTo: inspectorDocumentView.topAnchor, constant: 14),
@@ -448,7 +473,7 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
             let subtitle = "\(active)  \(workspace.health.label)\n\(workspace.tiledCount) tiled · \(workspace.floatingCount) floating"
             let button = NSButton(title: title + "\n" + subtitle, target: self, action: #selector(selectWorkspace(_:)))
             button.tag = index
-            button.bezelStyle = .inline
+            button.isBordered = false
             button.alignment = .left
             button.attributedTitle = NSAttributedString(
                 string: title + "\n" + subtitle,
@@ -460,7 +485,7 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
                     .foregroundColor: NSColor.labelColor
                 ]
             )
-            button.state = selectedWorkspaceKey == workspace.key ? .on : .off
+            button.state = .off
             button.toolTip = "Display \(workspace.displaySlot), Space \(workspace.key.spaceID.raw), \(workspace.health.label)"
             button.setAccessibilityLabel("Display \(workspace.displaySlot), Space \(workspace.key.spaceID.raw)")
             button.setAccessibilityValue("\(active), \(workspace.health.label), \(workspace.tiledCount) tiled, \(workspace.floatingCount) floating")
@@ -942,7 +967,7 @@ private final class WorkbenchRootView: NSView {
     }
 }
 
-private final class WorkbenchInspectorDocumentView: NSView {
+private final class WorkbenchScrollDocumentView: NSView {
     override var isFlipped: Bool { true }
 }
 
