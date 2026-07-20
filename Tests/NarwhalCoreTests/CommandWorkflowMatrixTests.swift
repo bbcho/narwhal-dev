@@ -21,8 +21,11 @@ struct CommandWorkflowMatrixTests {
         ]
 
         for command in commands {
-            if case .success(let next) = apply(command, to: world) {
-                #expect(next == world, "Unexpected mutation for \(command)")
+            switch apply(command, to: world) {
+            case .failure:
+                break
+            case .success(let next):
+                #expect(Bool(false), "Expected \(command) to fail, but it produced \(next)")
             }
         }
 

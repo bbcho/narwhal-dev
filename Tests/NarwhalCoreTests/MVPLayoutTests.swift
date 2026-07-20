@@ -284,8 +284,8 @@ struct MVPLayoutTests {
         #expect(result[second] == CGRect(x: 0, y: 400, width: 600, height: 400))
     }
 
-    @Test("Moving a stacked window between sides expands the window left behind")
-    func movingStackedWindowCompactsItsVacatedBranch() {
+    @Test("pushIntoTree compacts a nested branch before reinserting its window")
+    func pushPrimitiveCompactsVacatedNestedBranch() {
         let leftWindow = WindowID(raw: 1)
         let terminal = WindowID(raw: 2)
         let movedWindow = WindowID(raw: 3)
@@ -318,6 +318,10 @@ struct MVPLayoutTests {
         let terminal = WindowID(raw: 2)
         let movedWindow = WindowID(raw: 3)
         let initialTree = pushIntoTree(terminal, .right, pushIntoTree(leftWindow, .left, .void))
+        let initialFrames = frames(for: initialTree)
+        #expect(initialFrames[leftWindow] == CGRect(x: 0, y: 0, width: 600, height: 800))
+        #expect(initialFrames[terminal] == CGRect(x: 600, y: 0, width: 600, height: 800))
+        #expect(initialFrames[movedWindow] == nil)
         var world = World(
             displays: [display: self.display(display, x: 0, width: 1200)],
             activeSpace: space,
@@ -325,7 +329,7 @@ struct MVPLayoutTests {
                 space: SpaceState(
                     id: space,
                     displays: [
-                        display: DisplaySpaceState(displayID: display, tree: initialTree, floating: [])
+                        display: DisplaySpaceState(displayID: display, tree: initialTree, floating: [movedWindow])
                     ],
                     focused: leftWindow
                 )
@@ -346,7 +350,9 @@ struct MVPLayoutTests {
                 apply(.push(movedWindow, direction), to: world),
                 "Expected runtime push \(direction.rawValue) to succeed"
             )
-            let tree = try #require(world.spaces[space]?.displays[display]?.tree)
+            let displayState = try #require(world.spaces[space]?.displays[display])
+            #expect(displayState.floating.isEmpty)
+            let tree = displayState.tree
             let result = frames(for: tree)
             if direction == .right {
                 #expect(result[leftWindow] == CGRect(x: 0, y: 0, width: 600, height: 800))
