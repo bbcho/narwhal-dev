@@ -6,6 +6,7 @@ import Darwin
 import Foundation
 import NarwhalAppSupport
 import NarwhalCore
+import NarwhalIPC
 import Testing
 
 @MainActor
@@ -44,6 +45,13 @@ struct RealAppWindowVerificationTests {
         _ = NSApplication.shared
         VerifierAppDelegate.installIfNeeded()
         try expectPassed(await RealAppWindowVerification.verifyRealAppCommandWorkflows())
+    }
+
+    @Test("Production runtime moves real Terminal windows and owns current borders")
+    func productionRuntimeMovesRealWindowsAndBorders() async throws {
+        _ = NSApplication.shared
+        VerifierAppDelegate.installIfNeeded()
+        try expectPassed(await RealAppWindowVerification.verifyProductionRuntimeIPCWorkflow())
     }
 
     @Test("Chrome and Firefox complete real manual tile resize")
@@ -231,7 +239,7 @@ enum RealAppWindowVerification {
 
                 for axis in Axis.allCases {
                     overlay.render(.empty)
-                    try await applyRealAxisLayout(
+                    _ = try await applyRealAxisLayout(
                         originals,
                         axis: axis,
                         label: "Terminal \(count)-tile \(axis.rawValue)",
@@ -296,6 +304,137 @@ enum RealAppWindowVerification {
         }
     }
 
+    static func verifyProductionRuntimeIPCWorkflow() async -> (passed: Bool, message: String) {
+        let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
+        var originals: [RealAppOriginal] = []
+        var runtime: ProductionRuntime?
+        do {
+            try waitForUnlockedSession()
+            guard !FileManager.default.fileExists(atPath: IPCDefaults.socketPath) else {
+                throw RealAppWindowVerifierFailure(
+                    "production runtime verifier requires no existing Narwhal IPC socket"
+                )
+            }
+
+            let displays = DisplayClient().currentDisplays()
+            let targetDisplay = try manualResizeVerificationDisplay(displays)
+            var selectedIDs = Set<WindowID>()
+            for index in 1...3 {
+                let original = try await launchTrackedWindow(
+                    spec: terminalSpec(),
+                    using: axClient,
+                    requiringNewWindow: true,
+                    excluding: selectedIDs,
+                    token: "production-runtime-\(index)"
+                )
+                selectedIDs.insert(original.metadata.id)
+                originals.append(original)
+            }
+            try await stageTerminalPushSequenceWindows(
+                originals,
+                on: targetDisplay,
+                using: axClient
+            )
+
+            let activeRuntime = try startProductionRuntime()
+            runtime = activeRuntime
+            try await waitForProductionRuntime(activeRuntime)
+            await settleLiveVerifier(for: 0.8)
+
+            try sendProductionCommand(.push(windowID: originals[0].metadata.id, direction: .left))
+            try sendProductionCommand(.push(windowID: originals[1].metadata.id, direction: .right))
+            try sendProductionCommand(.push(windowID: originals[2].metadata.id, direction: .left))
+            await settleLiveVerifier(for: 0.25)
+
+            let beforeTransfer = try productionTerminalFrames(originals, using: axClient)
+            try requireProductionSideTransferLayout(
+                frames: beforeTransfer,
+                fullHeightWindow: originals[1].metadata.id,
+                stackedWindows: [originals[0].metadata.id, originals[2].metadata.id],
+                fullHeightSide: .right,
+                display: targetDisplay,
+                context: "production runtime before side transfer"
+            )
+            try requirePlannedRealFramesVisible(
+                originals,
+                plannedFrames: beforeTransfer,
+                using: axClient,
+                context: "production runtime before side transfer"
+            )
+            try requireProductionBorders(
+                frames: beforeTransfer,
+                ownerPID: activeRuntime.process.processIdentifier,
+                display: targetDisplay,
+                context: "production runtime before side transfer"
+            )
+
+            let leftWindowID = originals[0].metadata.id
+            guard let oldLeftWindowFrame = beforeTransfer[leftWindowID] else {
+                throw RealAppWindowVerifierFailure(
+                    "production runtime omitted the left Terminal before side transfer"
+                )
+            }
+            let oldLeftBorderFrame = productionBorderFrame(
+                forAXFrame: oldLeftWindowFrame,
+                on: targetDisplay
+            )
+            try runProductionPushAndCheckBorderClearing(
+                executable: activeRuntime.ctlURL,
+                windowID: originals[2].metadata.id,
+                direction: .right,
+                movedWindowID: leftWindowID,
+                oldWindowFrame: oldLeftWindowFrame,
+                oldBorderFrame: oldLeftBorderFrame,
+                ownerPID: activeRuntime.process.processIdentifier,
+                axClient: axClient
+            )
+            await settleLiveVerifier(for: 0.25)
+
+            let afterTransfer = try productionTerminalFrames(originals, using: axClient)
+            try requireProductionSideTransferLayout(
+                frames: afterTransfer,
+                fullHeightWindow: originals[0].metadata.id,
+                stackedWindows: [originals[1].metadata.id, originals[2].metadata.id],
+                fullHeightSide: .left,
+                display: targetDisplay,
+                context: "production runtime after side transfer"
+            )
+            try requirePlannedRealFramesVisible(
+                originals,
+                plannedFrames: afterTransfer,
+                using: axClient,
+                context: "production runtime after side transfer"
+            )
+            try requireProductionBorders(
+                frames: afterTransfer,
+                ownerPID: activeRuntime.process.processIdentifier,
+                display: targetDisplay,
+                context: "production runtime after side transfer"
+            )
+
+            try await cleanupApps(originals, using: axClient)
+            originals.removeAll()
+            try stopProductionRuntime(activeRuntime)
+            runtime = nil
+            return (
+                true,
+                "production AppDelegate and IPC side transfer passed with real AX, WindowServer, and border frames"
+            )
+        } catch let error as RealAppWindowVerifierFailure {
+            await cleanupAppsBestEffort(originals, using: axClient, context: "PRODUCTION RUNTIME VERIFY")
+            if let runtime {
+                stopProductionRuntimeBestEffort(runtime)
+            }
+            return (false, error.message)
+        } catch {
+            await cleanupAppsBestEffort(originals, using: axClient, context: "PRODUCTION RUNTIME VERIFY")
+            if let runtime {
+                stopProductionRuntimeBestEffort(runtime)
+            }
+            return (false, "production runtime verification failed: \(String(describing: error))")
+        }
+    }
+
     static func verifyOutlookTerminalSideTransfer() async -> (passed: Bool, message: String) {
         let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
         var originals: [RealAppOriginal] = []
@@ -354,6 +493,314 @@ enum RealAppWindowVerification {
         } catch {
             await cleanupAppsBestEffort(originals, using: axClient, context: "REAL OUTLOOK SIDE TRANSFER VERIFY")
             return (false, "Outlook side-transfer verification failed: \(String(describing: error))")
+        }
+    }
+
+    private struct ProductionRuntime {
+        let process: Process
+        let temporaryRoot: URL
+        let logURL: URL
+        let ctlURL: URL
+        let consoleHandle: FileHandle
+    }
+
+    private static func startProductionRuntime() throws -> ProductionRuntime {
+        let appURL = try builtProduct(named: "NarwhalApp")
+        let ctlURL = try builtProduct(named: "NarwhalCtl")
+        let temporaryRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("narwhal-production-runtime-\(UUID().uuidString)", isDirectory: true)
+        let configDirectory = temporaryRoot.appendingPathComponent("config", isDirectory: true)
+        let stateDirectory = temporaryRoot.appendingPathComponent("state", isDirectory: true)
+        let logDirectory = temporaryRoot.appendingPathComponent("log", isDirectory: true)
+        try FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+
+        let configURL = configDirectory.appendingPathComponent("init.lua")
+        let sourceConfig = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("DefaultConfig/init.lua")
+        try FileManager.default.copyItem(at: sourceConfig, to: configURL)
+        let stateURL = stateDirectory.appendingPathComponent("state.json")
+        let logURL = logDirectory.appendingPathComponent("narwhal.log")
+        let consoleURL = logDirectory.appendingPathComponent("console.log")
+        _ = FileManager.default.createFile(atPath: consoleURL.path, contents: nil)
+        let consoleHandle = try FileHandle(forWritingTo: consoleURL)
+
+        let process = Process()
+        process.executableURL = appURL
+        process.arguments = [
+            "--config", configURL.path,
+            "--restore-state", stateURL.path
+        ]
+        var environment = ProcessInfo.processInfo.environment
+        environment["NARWHAL_LOG_PATH"] = logURL.path
+        process.environment = environment
+        process.standardOutput = consoleHandle
+        process.standardError = consoleHandle
+        do {
+            try process.run()
+        } catch {
+            try? consoleHandle.close()
+            try? FileManager.default.removeItem(at: temporaryRoot)
+            throw error
+        }
+        return ProductionRuntime(
+            process: process,
+            temporaryRoot: temporaryRoot,
+            logURL: logURL,
+            ctlURL: ctlURL,
+            consoleHandle: consoleHandle
+        )
+    }
+
+    private static func builtProduct(named name: String) throws -> URL {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let candidate = packageRoot
+            .appendingPathComponent(".build/debug", isDirectory: true)
+            .appendingPathComponent(name)
+        guard FileManager.default.isExecutableFile(atPath: candidate.path) else {
+            throw RealAppWindowVerifierFailure("could not locate built product at \(candidate.path)")
+        }
+        return candidate
+    }
+
+    private static func waitForProductionRuntime(_ runtime: ProductionRuntime) async throws {
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            guard runtime.process.isRunning else {
+                throw RealAppWindowVerifierFailure(
+                    "production NarwhalApp exited during startup with status \(runtime.process.terminationStatus)"
+                )
+            }
+            let log = (try? String(contentsOf: runtime.logURL, encoding: .utf8)) ?? ""
+            if log.contains("Accessibility trusted"),
+               log.contains("Layout command loop ready"),
+               FileManager.default.fileExists(atPath: IPCDefaults.socketPath) {
+                return
+            }
+            await settleLiveVerifier(for: 0.1)
+        }
+        throw RealAppWindowVerifierFailure("production NarwhalApp did not become AX and IPC ready")
+    }
+
+    private static func sendProductionCommand(_ command: IPCCommandDTO) throws {
+        let reply = try IPCClient(ioTimeout: 5).send(command)
+        guard case .ok = reply else {
+            throw RealAppWindowVerifierFailure("production IPC command failed: \(reply)")
+        }
+    }
+
+    private static func stopProductionRuntime(_ runtime: ProductionRuntime) throws {
+        if runtime.process.isRunning {
+            try sendProductionCommand(.quit)
+            let deadline = Date().addingTimeInterval(10)
+            while runtime.process.isRunning, Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+        }
+        guard !runtime.process.isRunning else {
+            throw RealAppWindowVerifierFailure("production NarwhalApp did not exit after IPC quit")
+        }
+        try runtime.consoleHandle.close()
+        try FileManager.default.removeItem(at: runtime.temporaryRoot)
+    }
+
+    private static func stopProductionRuntimeBestEffort(_ runtime: ProductionRuntime) {
+        if runtime.process.isRunning {
+            _ = try? IPCClient(ioTimeout: 1).send(.quit)
+            let deadline = Date().addingTimeInterval(2)
+            while runtime.process.isRunning, Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+            if runtime.process.isRunning {
+                runtime.process.terminate()
+            }
+        }
+        try? runtime.consoleHandle.close()
+        try? FileManager.default.removeItem(at: runtime.temporaryRoot)
+    }
+
+    private static func productionTerminalFrames(
+        _ originals: [RealAppOriginal],
+        using axClient: AXClient
+    ) throws -> [WindowID: CGRect] {
+        try Dictionary(uniqueKeysWithValues: originals.map { original in
+            let metadata = try currentWorkflowMetadata(for: original, using: axClient)
+            return (metadata.id, metadata.frame)
+        })
+    }
+
+    private static func requireProductionSideTransferLayout(
+        frames: [WindowID: CGRect],
+        fullHeightWindow: WindowID,
+        stackedWindows: [WindowID],
+        fullHeightSide: Direction,
+        display: DisplayInfo,
+        context: String
+    ) throws {
+        guard let full = frames[fullHeightWindow],
+              stackedWindows.count == 2,
+              let firstStacked = frames[stackedWindows[0]],
+              let secondStacked = frames[stackedWindows[1]]
+        else {
+            throw RealAppWindowVerifierFailure("\(context) omitted expected Terminal frames")
+        }
+        let visible = display.visibleFrame
+        let edgeTolerance: CGFloat = 8
+        let expectedFullX = fullHeightSide == .left ? visible.minX : visible.midX
+        guard abs(full.minX - expectedFullX) <= edgeTolerance,
+              abs(full.width - visible.width / 2) <= edgeTolerance,
+              abs(full.minY - visible.minY) <= edgeTolerance,
+              abs(full.maxY - visible.maxY) <= edgeTolerance
+        else {
+            throw RealAppWindowVerifierFailure("\(context) did not expand the vacated side: frame=\(full)")
+        }
+
+        let expectedStackX = fullHeightSide == .left ? visible.midX : visible.minX
+        let stack = [firstStacked, secondStacked].sorted { $0.minY < $1.minY }
+        guard stack.allSatisfy({
+            abs($0.minX - expectedStackX) <= edgeTolerance
+                && abs($0.width - visible.width / 2) <= edgeTolerance
+        }),
+        abs(stack[0].minY - visible.minY) <= edgeTolerance,
+        abs(stack[1].maxY - visible.maxY) <= edgeTolerance,
+        framesDoNotVisiblyOverlap(stack[0], stack[1], tolerance: 0.5)
+        else {
+            throw RealAppWindowVerifierFailure("\(context) did not leave a disjoint opposite-side stack: \(stack)")
+        }
+    }
+
+    private static func productionBorderFrame(
+        forAXFrame frame: CGRect,
+        on display: DisplayInfo
+    ) -> CGRect {
+        let proposed = appKitFrame(forAXFrame: frame, on: display).insetBy(dx: -1, dy: -1)
+        return axFrame(
+            forAppKitFrame: constrainBorderFrameToVisibleScreen(proposed, on: display),
+            on: display
+        )
+    }
+
+    private static func requireProductionBorders(
+        frames: [WindowID: CGRect],
+        ownerPID: pid_t,
+        display: DisplayInfo,
+        context: String
+    ) throws {
+        let expected = frames.values.map { productionBorderFrame(forAXFrame: $0, on: display) }
+        let deadline = Date().addingTimeInterval(1.2)
+        var actual: [CGRect] = []
+        while Date() < deadline {
+            actual = productionOverlayFrames(ownerPID: ownerPID)
+            if uniquelyMatches(expected: expected, actual: actual, tolerance: 0.5) {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        }
+        throw RealAppWindowVerifierFailure(
+            "\(context) production borders did not match current Terminal frames: "
+                + "expected=\(expected) ownerFrames=\(actual)"
+        )
+    }
+
+    private static func uniquelyMatches(
+        expected: [CGRect],
+        actual: [CGRect],
+        tolerance: CGFloat
+    ) -> Bool {
+        var remaining = actual
+        for frame in expected {
+            guard let index = remaining.firstIndex(where: { $0.matches(frame, tolerance: tolerance) }) else {
+                return false
+            }
+            remaining.remove(at: index)
+        }
+        return true
+    }
+
+    private static func productionOverlayFrames(ownerPID: pid_t) -> [CGRect] {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else { return [] }
+
+        return windows.compactMap { window in
+            guard let pid = window[kCGWindowOwnerPID as String] as? pid_t,
+                  pid == ownerPID,
+                  let layer = window[kCGWindowLayer as String] as? Int,
+                  layer == NSWindow.Level.normal.rawValue,
+                  let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds),
+                  frame.narwhalIsFinitePositive
+            else {
+                return nil
+            }
+            return frame
+        }
+    }
+
+    private static func runProductionPushAndCheckBorderClearing(
+        executable: URL,
+        windowID: WindowID,
+        direction: Direction,
+        movedWindowID: WindowID,
+        oldWindowFrame: CGRect,
+        oldBorderFrame: CGRect,
+        ownerPID: pid_t,
+        axClient: AXClient
+    ) throws {
+        let output = Pipe()
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = [
+            "push", direction.rawValue,
+            "--window", String(windowID.raw)
+        ]
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+
+        var observedMovement = false
+        var staleBorderAfterMovement = false
+        let deadline = Date().addingTimeInterval(8)
+        while process.isRunning, Date() < deadline {
+            if let current = axClient.windowSnapshot().windows.first(where: { $0.id == movedWindowID })?.frame,
+               !current.narwhalApproximatelyEquals(oldWindowFrame, tolerance: 0.5) {
+                observedMovement = true
+                if productionOverlayFrames(ownerPID: ownerPID).contains(where: {
+                    $0.matches(oldBorderFrame, tolerance: 0.5)
+                }) {
+                    staleBorderAfterMovement = true
+                }
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        guard !process.isRunning else {
+            process.terminate()
+            throw RealAppWindowVerifierFailure("production narwhalctl push timed out")
+        }
+        let outputData = output.fileHandleForReading.readDataToEndOfFile()
+        let outputText = String(decoding: outputData, as: UTF8.self)
+        guard process.terminationStatus == 0, outputText.hasPrefix("ok ipc-") else {
+            throw RealAppWindowVerifierFailure(
+                "production narwhalctl push failed with status \(process.terminationStatus): \(outputText)"
+            )
+        }
+        guard observedMovement else {
+            throw RealAppWindowVerifierFailure(
+                "production side transfer completed without an observable real-window transition"
+            )
+        }
+        guard !staleBorderAfterMovement else {
+            throw RealAppWindowVerifierFailure(
+                "production tile border remained on the vacated frame after its Terminal window moved"
+            )
         }
     }
 
