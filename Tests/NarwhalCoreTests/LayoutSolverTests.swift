@@ -270,7 +270,7 @@ struct LayoutSolverTests {
         ) == true)
     }
 
-    @Test("Containment retries can cross a larger app grid threshold")
+    @Test("The final containment retry can cross a larger app grid threshold")
     func containmentRetryMarginCanGrow() {
         let target = CGRect(x: 0, y: 551, width: 3008, height: 521)
         let actual = CGRect(x: 0, y: 550, width: 3008, height: 522)
@@ -279,9 +279,9 @@ struct LayoutSolverTests {
             target: target,
             actual: actual,
             tolerance: 4,
-            correctionMargin: 16
+            correctionMargin: 32
         )
-        #expect(correction == CGRect(x: 0, y: 568, width: 3008, height: 504))
+        #expect(correction == CGRect(x: 0, y: 584, width: 3008, height: 488))
     }
 
     @Test("Frames already inside their cells need no containment correction")

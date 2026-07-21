@@ -153,6 +153,11 @@ func axFrameWriteSettledInsideTarget(target: CGRect, actual: CGRect) -> Bool {
         )
 }
 
+func axFrameWriteRequiresElementRefresh(_ error: AXClientError) -> Bool {
+    guard case .setAttributeFailed(_, let axError) = error else { return false }
+    return axError == .invalidUIElement
+}
+
 func confirmedObservedConstraints(
     target: CGRect,
     actualFrames: [CGRect],
@@ -173,7 +178,8 @@ func confirmedObservedConstraints(
 @MainActor
 private struct CoordinatedFrameWrite {
     let windowID: WindowID
-    let element: AXUIElement
+    let metadata: WindowMetadata
+    var element: AXUIElement
     let target: CGRect
     var appliedTarget: CGRect
     var observedFrames: [CGRect]
@@ -185,6 +191,7 @@ struct AXClient {
     private let settleStrategy: AXSettleStrategy
     private let runtimeMetrics: RuntimeMetrics?
     private static let messagingTimeout: Float = 1.0
+    private static let frameWriteAttemptCount = 4
     private static let frameWriteSettleInterval: TimeInterval = 0.08
     private static let constraintConfirmationInterval: TimeInterval = 0.20
 
@@ -408,7 +415,7 @@ struct AXClient {
     func setFocusedWindowFrame(_ frame: CGRect) async -> AXFrameWriteOutcome {
         switch focusedWindowElement() {
         case .success(let window):
-            return await setFrame(window, to: frame)
+            return await setFrame(window, matching: nil, to: frame)
         case .failure(let error):
             return .failed(error)
         }
@@ -418,7 +425,7 @@ struct AXClient {
     func setFrame(_ window: WindowMetadata, to frame: CGRect) async -> AXFrameWriteOutcome {
         switch await windowElement(matching: window) {
         case .success(let element):
-            return await setFrame(element, to: frame)
+            return await setFrame(element, matching: window, to: frame)
         case .failure(let error):
             return .failed(error)
         }
@@ -438,6 +445,7 @@ struct AXClient {
             case .success(let element):
                 pending.append(CoordinatedFrameWrite(
                     windowID: request.window.id,
+                    metadata: request.window,
                     element: element,
                     target: request.frame,
                     appliedTarget: request.frame,
@@ -449,7 +457,7 @@ struct AXClient {
             }
         }
 
-        for attempt in 1...3 where !pending.isEmpty {
+        for attempt in 1...Self.frameWriteAttemptCount where !pending.isEmpty {
             var ready: [CoordinatedFrameWrite] = []
             for var write in pending {
                 switch focusedWindowFrame(write.element) {
@@ -477,49 +485,70 @@ struct AXClient {
             guard !pending.isEmpty else { break }
 
             var didWritePositionFirst = false
-            pending = pending.filter { write in
-                guard write.positionFirst else { return true }
-                switch setPosition(write.appliedTarget.origin, on: write.element) {
-                case .success:
+            var positionedFirst: [CoordinatedFrameWrite] = []
+            for var write in pending {
+                guard write.positionFirst else {
+                    positionedFirst.append(write)
+                    continue
+                }
+                switch await retryingInvalidWindowElement(
+                    write.element,
+                    matching: write.metadata,
+                    write: { setPosition(write.appliedTarget.origin, on: $0) }
+                ) {
+                case .success(let refreshed):
+                    write.element = refreshed
                     didWritePositionFirst = true
-                    return true
+                    positionedFirst.append(write)
                 case .failure(let error):
                     outcomes[write.windowID] = .failed(error)
-                    return false
                 }
             }
+            pending = positionedFirst
             if didWritePositionFirst {
                 await settle(for: Self.frameWriteSettleInterval)
             }
             guard !pending.isEmpty else { break }
 
             var didWriteSize = false
-            pending = pending.filter { write in
-                switch setSize(write.appliedTarget.size, on: write.element) {
-                case .success:
+            var sized: [CoordinatedFrameWrite] = []
+            for var write in pending {
+                switch await retryingInvalidWindowElement(
+                    write.element,
+                    matching: write.metadata,
+                    write: { setSize(write.appliedTarget.size, on: $0) }
+                ) {
+                case .success(let refreshed):
+                    write.element = refreshed
                     didWriteSize = true
-                    return true
+                    sized.append(write)
                 case .failure(let error):
                     outcomes[write.windowID] = .failed(error)
-                    return false
                 }
             }
+            pending = sized
             if didWriteSize {
                 await settle(for: Self.frameWriteSettleInterval)
             }
             guard !pending.isEmpty else { break }
 
             var didWritePosition = false
-            pending = pending.filter { write in
-                switch setPosition(write.appliedTarget.origin, on: write.element) {
-                case .success:
+            var positioned: [CoordinatedFrameWrite] = []
+            for var write in pending {
+                switch await retryingInvalidWindowElement(
+                    write.element,
+                    matching: write.metadata,
+                    write: { setPosition(write.appliedTarget.origin, on: $0) }
+                ) {
+                case .success(let refreshed):
+                    write.element = refreshed
                     didWritePosition = true
-                    return true
+                    positioned.append(write)
                 case .failure(let error):
                     outcomes[write.windowID] = .failed(error)
-                    return false
                 }
             }
+            pending = positioned
             if didWritePosition {
                 await settle(for: Self.frameWriteSettleInterval)
             }
@@ -896,13 +925,18 @@ struct AXClient {
     }
 
     @MainActor
-    private func setFrame(_ window: AXUIElement, to frame: CGRect) async -> AXFrameWriteOutcome {
+    private func setFrame(
+        _ initialElement: AXUIElement,
+        matching metadata: WindowMetadata?,
+        to frame: CGRect
+    ) async -> AXFrameWriteOutcome {
         var observedFrames: [CGRect] = []
         var appliedFrame = frame
+        var element = initialElement
 
-        for attempt in 1...3 {
+        for attempt in 1...Self.frameWriteAttemptCount {
             let currentFrame: CGRect?
-            switch focusedWindowFrame(window) {
+            switch focusedWindowFrame(element) {
             case .success(let current):
                 if axFrameWriteSettledInsideTarget(target: frame, actual: current) {
                     return .converged(actual: current)
@@ -922,29 +956,44 @@ struct AXClient {
             let positionFirst = axFrameWriteOrder(current: currentFrame, target: appliedFrame) == .positionThenSize
 
             if positionFirst {
-                switch setPosition(appliedFrame.origin, on: window) {
-                case .success:
+                switch await retryingInvalidWindowElement(
+                    element,
+                    matching: metadata,
+                    write: { setPosition(appliedFrame.origin, on: $0) }
+                ) {
+                case .success(let refreshed):
+                    element = refreshed
                     await settle(for: Self.frameWriteSettleInterval)
                 case .failure(let error):
                     return .failed(error)
                 }
             }
 
-            switch setSize(appliedFrame.size, on: window) {
-            case .success:
+            switch await retryingInvalidWindowElement(
+                element,
+                matching: metadata,
+                write: { setSize(appliedFrame.size, on: $0) }
+            ) {
+            case .success(let refreshed):
+                element = refreshed
                 await settle(for: Self.frameWriteSettleInterval)
             case .failure(let error):
                 return .failed(error)
             }
 
-            switch setPosition(appliedFrame.origin, on: window) {
-            case .success:
+            switch await retryingInvalidWindowElement(
+                element,
+                matching: metadata,
+                write: { setPosition(appliedFrame.origin, on: $0) }
+            ) {
+            case .success(let refreshed):
+                element = refreshed
                 await settle(for: Self.frameWriteSettleInterval)
             case .failure(let error):
                 return .failed(error)
             }
 
-            switch focusedWindowFrame(window) {
+            switch focusedWindowFrame(element) {
             case .success(let actual):
                 if axFrameWriteSettledInsideTarget(target: frame, actual: actual) {
                     return .converged(actual: actual)
@@ -956,7 +1005,7 @@ struct AXClient {
         }
 
         await settle(for: Self.constraintConfirmationInterval)
-        switch focusedWindowFrame(window) {
+        switch focusedWindowFrame(element) {
         case .success(let actual):
             if axFrameWriteSettledInsideTarget(target: frame, actual: actual) {
                 return .converged(actual: actual)
@@ -965,6 +1014,28 @@ struct AXClient {
             return frameWriteDidNotConverge(target: frame, actualFrames: observedFrames)
         case .failure(let error):
             return .failed(error)
+        }
+    }
+
+    @MainActor
+    private func retryingInvalidWindowElement(
+        _ element: AXUIElement,
+        matching metadata: WindowMetadata?,
+        write: (AXUIElement) -> Result<Void, AXClientError>
+    ) async -> Result<AXUIElement, AXClientError> {
+        switch write(element) {
+        case .success:
+            return .success(element)
+        case .failure(let error) where axFrameWriteRequiresElementRefresh(error):
+            guard let metadata else { return .failure(error) }
+            switch await windowElement(matching: metadata) {
+            case .success(let refreshed):
+                return write(refreshed).map { refreshed }
+            case .failure(let refreshError):
+                return .failure(refreshError)
+            }
+        case .failure(let error):
+            return .failure(error)
         }
     }
 

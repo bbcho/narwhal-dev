@@ -1,3 +1,4 @@
+import ApplicationServices
 import CoreGraphics
 import NarwhalCore
 import Testing
@@ -97,6 +98,28 @@ struct AXFrameWritePolicyTests {
         case .clamped, .failed:
             #expect(Bool(false), "Expected the contained Terminal frame to converge")
         }
+    }
+
+    @Test("Contained browser and Terminal grid undershoot remains settled")
+    func containedAppGridUndershootIsSettled() {
+        #expect(axFrameWriteSettledInsideTarget(
+            target: CGRect(x: 0, y: 551, width: 3008, height: 521),
+            actual: CGRect(x: 0, y: 551, width: 2966, height: 521)
+        ))
+        #expect(axFrameWriteSettledInsideTarget(
+            target: CGRect(x: 0, y: 1280, width: 3008, height: 312),
+            actual: CGRect(x: 0, y: 1280, width: 3005, height: 287)
+        ))
+    }
+
+    @Test("Only an invalid AX element retries against a refreshed window")
+    func staleElementRefreshPolicy() {
+        #expect(axFrameWriteRequiresElementRefresh(
+            .setAttributeFailed("AXPosition", .invalidUIElement)
+        ))
+        #expect(!axFrameWriteRequiresElementRefresh(
+            .setAttributeFailed("AXPosition", .illegalArgument)
+        ))
     }
 
     @Test("A stale contained frame with excessive dimension drift is not converged")
