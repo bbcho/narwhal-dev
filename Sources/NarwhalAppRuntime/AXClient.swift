@@ -449,7 +449,7 @@ struct AXClient {
             }
         }
 
-        for _ in 0..<3 where !pending.isEmpty {
+        for attempt in 1...3 where !pending.isEmpty {
             var ready: [CoordinatedFrameWrite] = []
             for var write in pending {
                 switch focusedWindowFrame(write.element) {
@@ -461,7 +461,8 @@ struct AXClient {
                     write.appliedTarget = frameWriteContainmentCorrection(
                         target: write.target,
                         actual: current,
-                        tolerance: Double(frameWriteSettleTolerance)
+                        tolerance: Double(frameWriteSettleTolerance),
+                        correctionMargin: Double(frameWriteSettleTolerance) * pow(2, Double(attempt - 1))
                     ) ?? write.target
                     write.positionFirst = axFrameWriteOrder(
                         current: current,
@@ -899,7 +900,7 @@ struct AXClient {
         var observedFrames: [CGRect] = []
         var appliedFrame = frame
 
-        for _ in 0..<3 {
+        for attempt in 1...3 {
             let currentFrame: CGRect?
             switch focusedWindowFrame(window) {
             case .success(let current):
@@ -910,7 +911,8 @@ struct AXClient {
                 appliedFrame = frameWriteContainmentCorrection(
                     target: frame,
                     actual: current,
-                    tolerance: Double(frameWriteSettleTolerance)
+                    tolerance: Double(frameWriteSettleTolerance),
+                    correctionMargin: Double(frameWriteSettleTolerance) * pow(2, Double(attempt - 1))
                 ) ?? frame
             case .failure:
                 currentFrame = nil

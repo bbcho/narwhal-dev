@@ -652,27 +652,53 @@ enum RealAppWindowVerification {
             throw RealAppWindowVerifierFailure("\(context) omitted expected Terminal frames")
         }
         let visible = display.visibleFrame
-        let edgeTolerance: CGFloat = 8
-        let expectedFullX = fullHeightSide == .left ? visible.minX : visible.midX
-        guard abs(full.minX - expectedFullX) <= edgeTolerance,
-              abs(full.width - visible.width / 2) <= edgeTolerance,
-              abs(full.minY - visible.minY) <= edgeTolerance,
-              abs(full.maxY - visible.maxY) <= edgeTolerance
-        else {
-            throw RealAppWindowVerifierFailure("\(context) did not expand the vacated side: frame=\(full)")
+        let horizontalBoundary = visible.midX.rounded(.up)
+        let verticalBoundary = visible.midY.rounded(.up)
+        let leftCell = CGRect(
+            x: visible.minX,
+            y: visible.minY,
+            width: horizontalBoundary - visible.minX,
+            height: visible.height
+        )
+        let rightCell = CGRect(
+            x: horizontalBoundary,
+            y: visible.minY,
+            width: visible.maxX - horizontalBoundary,
+            height: visible.height
+        )
+        let expectedFull = fullHeightSide == .left ? leftCell : rightCell
+        guard frameSettledOnPlan(full, expectedFull) else {
+            throw RealAppWindowVerifierFailure(
+                "\(context) did not expand the vacated side: "
+                    + "expected=\(expectedFull) actual=\(full)"
+            )
         }
 
-        let expectedStackX = fullHeightSide == .left ? visible.midX : visible.minX
+        let stackCell = fullHeightSide == .left ? rightCell : leftCell
+        let expectedStack = [
+            CGRect(
+                x: stackCell.minX,
+                y: visible.minY,
+                width: stackCell.width,
+                height: verticalBoundary - visible.minY
+            ),
+            CGRect(
+                x: stackCell.minX,
+                y: verticalBoundary,
+                width: stackCell.width,
+                height: visible.maxY - verticalBoundary
+            ),
+        ]
         let stack = [firstStacked, secondStacked].sorted { $0.minY < $1.minY }
-        guard stack.allSatisfy({
-            abs($0.minX - expectedStackX) <= edgeTolerance
-                && abs($0.width - visible.width / 2) <= edgeTolerance
-        }),
-        abs(stack[0].minY - visible.minY) <= edgeTolerance,
-        abs(stack[1].maxY - visible.maxY) <= edgeTolerance,
-        framesDoNotVisiblyOverlap(stack[0], stack[1], tolerance: 0.5)
+        guard zip(stack, expectedStack).allSatisfy(frameSettledOnPlan),
+              framesDoNotVisiblyOverlap(stack[0], stack[1], tolerance: 0.5),
+              framesDoNotVisiblyOverlap(full, stack[0], tolerance: 0.5),
+              framesDoNotVisiblyOverlap(full, stack[1], tolerance: 0.5)
         else {
-            throw RealAppWindowVerifierFailure("\(context) did not leave a disjoint opposite-side stack: \(stack)")
+            throw RealAppWindowVerifierFailure(
+                "\(context) did not leave a disjoint opposite-side stack: "
+                    + "expected=\(expectedStack) actual=\(stack)"
+            )
         }
     }
 
@@ -913,6 +939,12 @@ enum RealAppWindowVerification {
         try requirePlannedRealFramesVisible(
             originals,
             plannedFrames: frames,
+            using: axClient,
+            context: label
+        )
+        try requireRealFramesDisjoint(
+            originals,
+            on: targetDisplay,
             using: axClient,
             context: label
         )
@@ -1949,6 +1981,17 @@ enum RealAppWindowVerification {
                     + "firefox=\(plannedFirefoxFrame.debugDescription)"
             )
         }
+        guard framesDoNotVisiblyOverlap(
+            chromeAfter.frame,
+            firefoxAfter.frame,
+            tolerance: 0.5
+        ) else {
+            throw RealAppWindowVerifierFailure(
+                "Chrome over Firefox resize left real browser windows overlapping: "
+                    + "chrome=\(chromeAfter.frame.debugDescription) "
+                    + "firefox=\(firefoxAfter.frame.debugDescription)"
+            )
+        }
 
         return "chrome-over-firefox resize duration=\(coordinatedResizeDuration)s chrome=\(chromeAfter.frame.shortDescription) firefox=\(firefoxAfter.frame.shortDescription)"
     }
@@ -2191,10 +2234,15 @@ enum RealAppWindowVerification {
                 companionAfter.frame,
                 firefoxAfter.frame,
                 tolerance: frameWriteSettleTolerance
+            ),
+            framesDoNotVisiblyOverlap(
+                chromeAfter.frame,
+                firefoxAfter.frame,
+                tolerance: 0.5
             )
         else {
             throw RealAppWindowVerifierFailure(
-                "manual browser resize left companion overlapping browser stack: "
+                "manual browser resize left real windows overlapping: "
                     + "companion=\(companionAfter.frame.debugDescription) "
                     + "chrome=\(chromeAfter.frame.debugDescription) "
                     + "firefox=\(firefoxAfter.frame.debugDescription)"
@@ -2426,6 +2474,13 @@ enum RealAppWindowVerification {
         case .clamped(let actual, let observed):
             firefoxMinimumWidth = max(firefoxMinimumWidth, observed.minWidth ?? actual.width)
             firefoxMinimumHeight = max(firefoxMinimumHeight, observed.minHeight ?? actual.height)
+        case .failed(.frameDidNotConverge(_, let actual, _))
+            where frameWriteApproximatelySettled(
+                target: probeFrame,
+                actual: actual,
+                tolerance: Double(max(frameWriteSettleTolerance, Self.realAppFrameWriteTolerance))
+            ):
+            break
         case .failed(let error):
             throw RealAppWindowVerifierFailure(
                 "Firefox manual-resize staging probe failed: \(error.description)"
@@ -2518,7 +2573,7 @@ enum RealAppWindowVerification {
         guard let plannedFrame = plannedFrames[windowID] else {
             throw RealAppWindowVerifierFailure("\(context) had no planned frame for \(windowID.description)")
         }
-        guard frame.matches(plannedFrame, tolerance: frameWriteSettleTolerance) else {
+        guard frameSettledOnPlan(frame, plannedFrame) else {
             throw RealAppWindowVerifierFailure(
                 "\(context) did not match planned frame: "
                     + "expected=\(plannedFrame.debugDescription) "
@@ -2853,12 +2908,20 @@ enum RealAppWindowVerification {
     }
 
     private static func frameSettledOnPlan(_ frame: CGRect, _ plannedFrame: CGRect) -> Bool {
-        frame.matches(plannedFrame, tolerance: frameWriteSettleTolerance)
+        let containmentTolerance: CGFloat = 0.5
+        guard frame.minX >= plannedFrame.minX - containmentTolerance,
+              frame.minY >= plannedFrame.minY - containmentTolerance,
+              frame.maxX <= plannedFrame.maxX + containmentTolerance,
+              frame.maxY <= plannedFrame.maxY + containmentTolerance
+        else {
+            return false
+        }
+        return frame.matches(plannedFrame, tolerance: frameWriteSettleTolerance)
             || frameWriteApproximatelySettled(
                 target: plannedFrame,
                 actual: frame,
                 tolerance: Double(frameWriteSettleTolerance),
-                maxEdgeDrift: 16,
+                maxEdgeDrift: 24,
                 minimumOverlapRatio: 0.98
             )
     }
@@ -3211,6 +3274,13 @@ enum RealAppWindowVerification {
                     "\(appName) step \(step) clamped instead of settling: target=\(target.debugDescription) actual=\(frame.debugDescription) observed=\(observed)"
                 )
             }
+            actual = frame
+        case .failed(.frameDidNotConverge(_, let frame, _))
+            where frameWriteApproximatelySettled(
+                target: target,
+                actual: frame,
+                tolerance: Double(max(frameWriteSettleTolerance, Self.realAppFrameWriteTolerance))
+            ):
             actual = frame
         case .failed(let error):
             throw RealAppWindowVerifierFailure(

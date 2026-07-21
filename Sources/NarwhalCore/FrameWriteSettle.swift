@@ -38,7 +38,8 @@ public func frameWriteContainmentCorrection(
     target: CGRect,
     actual: CGRect,
     tolerance: Double,
-    containmentTolerance: Double = 0.5
+    containmentTolerance: Double = 0.5,
+    correctionMargin: Double? = nil
 ) -> CGRect? {
     guard frameWriteApproximatelySettled(
         target: target,
@@ -61,7 +62,7 @@ public func frameWriteContainmentCorrection(
         return nil
     }
 
-    let margin = CGFloat(max(0, tolerance))
+    let margin = CGFloat(max(0, correctionMargin ?? tolerance))
     let leadingXCorrection = leadingX > containmentTolerance ? leadingX + margin : 0
     let trailingXCorrection = trailingX > containmentTolerance ? trailingX + margin : 0
     let leadingYCorrection = leadingY > containmentTolerance ? leadingY + margin : 0
