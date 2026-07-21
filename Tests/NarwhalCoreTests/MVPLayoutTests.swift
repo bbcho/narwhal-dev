@@ -3685,9 +3685,9 @@ struct MVPLayoutTests {
             gaps: Config.default.gaps
         ).tiled
 
-        #expect(result[a] == CGRect(x: 0, y: 33, width: 504, height: 436.5))
-        #expect(result[e] == CGRect(x: 504, y: 33, width: 504, height: 436.5))
-        #expect(result[b] == CGRect(x: 1008, y: 33, width: 504, height: 436.5))
+        #expect(result[a] == CGRect(x: 0, y: 33, width: 504, height: 437))
+        #expect(result[e] == CGRect(x: 504, y: 33, width: 504, height: 437))
+        #expect(result[b] == CGRect(x: 1008, y: 33, width: 504, height: 437))
         #expect(result.values.allSatisfy { $0.width >= 500 })
     }
 
