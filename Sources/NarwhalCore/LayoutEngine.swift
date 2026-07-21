@@ -55,7 +55,7 @@ public func reflowSnappedFrames(
     actual: [WindowID: CGRect],
     innerGap: Double,
     anchoredWindowIDs: Set<WindowID> = [],
-    tolerance: Double = 0.5
+    tolerance: Double = Double(configuredGapTolerance)
 ) -> Result<[WindowID: CGRect], SnappedFrameGapConflict> {
     let gap = CGFloat(max(0, innerGap))
     let tolerance = CGFloat(max(0, tolerance))
@@ -97,7 +97,7 @@ public func innerGapViolations(
     planned: [WindowID: CGRect],
     actual: [WindowID: CGRect],
     innerGap: Double,
-    tolerance: Double = 0.5
+    tolerance: Double = Double(configuredGapTolerance)
 ) -> [InnerGapViolation] {
     let gap = CGFloat(max(0, innerGap))
     let tolerance = CGFloat(max(0, tolerance))

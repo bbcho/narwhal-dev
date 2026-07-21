@@ -65,6 +65,34 @@ struct SnappedFrameGapTests {
         #expect(innerGapViolations(planned: planned, actual: reflowed, innerGap: 8).isEmpty)
     }
 
+    @Test("Gap validation does not inherit the looser frame settle tolerance")
+    func strictGapTolerance() {
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let firstFrame = CGRect(x: 0, y: 0, width: 500, height: 800)
+        let planned = [
+            first: firstFrame,
+            second: CGRect(x: 500, y: 0, width: 500, height: 800),
+        ]
+
+        #expect(innerGapViolations(
+            planned: planned,
+            actual: [
+                first: firstFrame,
+                second: CGRect(x: 500.75, y: 0, width: 499.25, height: 800),
+            ],
+            innerGap: 0
+        ).count == 1)
+        #expect(innerGapViolations(
+            planned: planned,
+            actual: [
+                first: firstFrame,
+                second: CGRect(x: 500.25, y: 0, width: 499.75, height: 800),
+            ],
+            innerGap: 0
+        ).isEmpty)
+    }
+
     @Test("A branched seam aligns every adjacent window")
     func branchedSeam() throws {
         let left = WindowID(raw: 1)

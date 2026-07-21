@@ -2,10 +2,12 @@ import CoreGraphics
 
 public enum GeometryTolerances {
     public static let frameWriteSettle: CGFloat = 4
+    public static let configuredGap: CGFloat = 0.5
     public static let externalResizeDirection: CGFloat = 1
 }
 
 public let frameWriteSettleTolerance: CGFloat = GeometryTolerances.frameWriteSettle
+public let configuredGapTolerance: CGFloat = GeometryTolerances.configuredGap
 
 func splitFrames(_ frame: CGRect, axis: Axis, weights: [Double]) -> [CGRect] {
     let total = weights.reduce(0, +)
