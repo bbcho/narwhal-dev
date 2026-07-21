@@ -20,21 +20,21 @@ struct GeometryTests {
         })
     }
 
-    @Test("Thirds use representable shared boundaries without losing outer extent")
+    @Test("Thirds use AX-compatible shared boundaries without losing outer extent")
     func thirdsUseRepresentableSharedBoundaries() {
         let frame = CGRect(x: 0, y: 30, width: 3_008, height: 1_562)
 
         let horizontal = splitFrames(frame, axis: .horizontal, weights: [1, 1, 1])
         #expect(horizontal == [
             CGRect(x: 0, y: 30, width: 1_003, height: 1_562),
-            CGRect(x: 1_003, y: 30, width: 1_002.5, height: 1_562),
-            CGRect(x: 2_005.5, y: 30, width: 1_002.5, height: 1_562)
+            CGRect(x: 1_003, y: 30, width: 1_003, height: 1_562),
+            CGRect(x: 2_006, y: 30, width: 1_002, height: 1_562)
         ])
 
         let nested = splitFrames(horizontal[0], axis: .horizontal, weights: [1, 1])
         #expect(nested == [
-            CGRect(x: 0, y: 30, width: 501.5, height: 1_562),
-            CGRect(x: 501.5, y: 30, width: 501.5, height: 1_562)
+            CGRect(x: 0, y: 30, width: 502, height: 1_562),
+            CGRect(x: 502, y: 30, width: 501, height: 1_562)
         ])
     }
 

@@ -94,7 +94,7 @@ private func framesFromLengths(_ frame: CGRect, axis: Axis, lengths: [CGFloat]) 
 }
 
 private func quantizedSplitBoundary(_ value: CGFloat) -> CGFloat {
-    (value * 2).rounded(.up) / 2
+    value.rounded(.up)
 }
 
 public extension CGRect {

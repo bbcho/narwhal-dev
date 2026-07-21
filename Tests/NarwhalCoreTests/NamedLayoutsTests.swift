@@ -321,13 +321,13 @@ struct NamedLayoutsTests {
         }
         let internalBoundariesAreRepresentable = frames.dropFirst().allSatisfy { frame in
             let boundary = axis == .horizontal ? frame.minX : frame.minY
-            return abs(boundary * 2 - (boundary * 2).rounded()) <= 0.000_001
+            return abs(boundary - boundary.rounded()) <= 0.000_001
         }
         return coversOuter
             && sharedEdges
             && crossAxisMatches
             && internalBoundariesAreRepresentable
-            && maximumLength - minimumLength <= 0.5
+            && maximumLength - minimumLength <= 1
     }
 
     private func slot(
