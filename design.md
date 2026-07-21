@@ -377,6 +377,47 @@ For MVP, the fallback policy is conservative:
 
 Later policies may add "float newest window", "stack within lane", or "move to another display", but those are explicit user-facing policies, not hidden solver behavior.
 
+### Actual-frame gap reconciliation
+
+The configured gap is a contract between visible window frames, not only between
+ideal solver cells. Some applications quantize AX size writes to character or
+browser-chrome increments, so a successful size write may produce a contained
+frame that is smaller than its planned tile.
+
+Data and invariants:
+
+- `plannedFrames` defines which window pairs are adjacent and the configured
+  seam between them.
+- `actualFrames` supplies the sizes accepted by the applications.
+- Adjacent actual frames must satisfy `after.min - before.max == gaps.inner`
+  within the AX settle tolerance on the relevant axis.
+- Reconciliation changes origins only. It never invents a size the application
+  has not already accepted.
+- Residual space caused by quantization is centered at the outside of each
+  connected tile group. It is never accumulated at interior seams.
+- A manually resized source window is a fixed anchor. Other windows move around
+  it; the source is not rewritten.
+
+`[CORE] reflowSnappedFrames(planned:actual:innerGap:anchoredWindowIDs:tolerance:)`
+builds adjacency constraints from the plan and returns reconciled frame values.
+Inconsistent constraints are an explicit `SnappedFrameGapConflict`; they are not
+silently weakened to a larger gap. `[CORE] innerGapViolations(...)` validates the
+same visible-frame invariant after AX writes.
+
+`[SHELL] LayoutApplier.apply` performs the existing bounded size pass, measures
+the returned frames, computes one pure reconciliation, and performs a bounded
+position correction before the plan is committed. AX reads and writes remain on
+the main actor; the core functions have no I/O or mutable state. Missing metadata,
+an inconsistent physical arrangement, or a correction that does not converge is
+a normal layout-apply failure with the involved window IDs in the diagnostic.
+
+Verification covers horizontal and vertical 4–8 window runs, non-zero configured
+gaps, branched seams, fixed manual-resize anchors, and inconsistent physical
+constraints in pure tests. The live gate additionally checks the configured gap
+on real AX frames, confirms those frames through WindowServer, and verifies the
+visible border windows. No new configuration option or adapter abstraction is
+introduced.
+
 ---
 
 ## 0. MVP build ladder
