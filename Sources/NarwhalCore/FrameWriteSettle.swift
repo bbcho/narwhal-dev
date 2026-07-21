@@ -19,6 +19,11 @@ public func frameWriteApproximatelySettled(
         && abs(target.maxX - actual.maxX) <= maxDrift
         && abs(target.maxY - actual.maxY) <= maxDrift
     guard edgesAreClose else { return false }
+    guard abs(target.width - actual.width) <= maxDrift,
+          abs(target.height - actual.height) <= maxDrift
+    else {
+        return false
+    }
     guard expandedDimensionsAreEdgeNormalized(target: target, actual: actual, tolerance: tolerance) else {
         return false
     }

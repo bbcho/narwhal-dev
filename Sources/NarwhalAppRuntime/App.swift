@@ -2489,8 +2489,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showFocusBorder: Bool = true,
         preserving preservedFrames: [WindowID: CGRect] = [:],
         writeStrategy: LayoutFrameWriteStrategy = .sequential,
+        clampRetryState: LayoutClampRetryState? = nil,
         replanAfterClamp: () async -> Result<CommandPlanResult, CommandError>
     ) async -> Bool {
+        if !result.desiredLayout.delta.moves.isEmpty {
+            setTiledBorders([])
+        }
         let applyResult = await LayoutApplier(
             axClient: axClient,
             reporter: reporter,
@@ -2528,6 +2532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case .fail(let appliedFrames, let failureCount, let summary):
             await worldActor.recordAppliedFrames(appliedFrames)
+            await updateTiledBordersFromWorld()
             reporter.error(
                 "\(operation) failed applying \(failureCount) window(s); planned layout was not committed: \(summary)"
             )
@@ -2540,15 +2545,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await worldActor.recordObservedConstraints(observedConstraints)
             }
 
-            guard shouldRetry else {
+            let retryState = clampRetryState
+                ?? LayoutClampRetryState(maxAttempts: result.desiredLayout.delta.moves.count)
+            guard shouldRetry,
+                  let nextRetryState = retryState.recording(observedConstraints)
+            else {
+                await updateTiledBordersFromWorld()
                 reporter.error(
-                    "\(operation) still clamped after min-size re-solve; planned layout was not committed: \(summary)"
+                    "\(operation) still clamped without a new bounded constraint observation; "
+                        + "planned layout was not committed: \(summary)"
                 )
                 showOperatorFeedback("\(operation) clamped by app minimum size", tone: .warning)
                 return false
             }
 
-            reporter.info("\(operation) observed app min-size clamp; re-solving once: \(summary)")
+            reporter.info(
+                "\(operation) observed a new app size constraint; re-solving "
+                    + "with \(nextRetryState.remainingAttempts) bounded attempt(s) remaining: \(summary)"
+            )
             showOperatorFeedback("\(operation) re-solving after size clamp", tone: .warning)
             switch await replanAfterClamp() {
             case .success(let retry):
@@ -2556,12 +2570,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     retry,
                     operation: operation,
                     persistReason: persistReason,
-                    retryOnClamp: false,
+                    retryOnClamp: retryOnClamp,
                     preserving: preservedFrames,
                     writeStrategy: writeStrategy,
+                    clampRetryState: nextRetryState,
                     replanAfterClamp: replanAfterClamp
                 )
             case .failure(let error):
+                await updateTiledBordersFromWorld()
                 reporter.error("\(operation) rejected after min-size observation: \(error.message)")
                 showOperatorFeedback("\(operation) failed after clamp: \(error.message)", tone: .error)
                 return false

@@ -78,6 +78,38 @@ public enum PlannedLayoutApplyDecision: Equatable, Sendable {
     )
 }
 
+public struct LayoutClampRetryState: Equatable, Sendable {
+    public let remainingAttempts: Int
+    public let observedConstraints: [WindowID: WindowConstraints]
+
+    public init(maxAttempts: Int) {
+        remainingAttempts = max(0, maxAttempts)
+        observedConstraints = [:]
+    }
+
+    private init(
+        remainingAttempts: Int,
+        observedConstraints: [WindowID: WindowConstraints]
+    ) {
+        self.remainingAttempts = remainingAttempts
+        self.observedConstraints = observedConstraints
+    }
+
+    public func recording(
+        _ observations: [WindowID: WindowConstraints]
+    ) -> LayoutClampRetryState? {
+        guard remainingAttempts > 0 else { return nil }
+        let merged = observedConstraints.merging(observations) { existing, observation in
+            existing.merged(with: observation)
+        }
+        guard merged != observedConstraints else { return nil }
+        return LayoutClampRetryState(
+            remainingAttempts: remainingAttempts - 1,
+            observedConstraints: merged
+        )
+    }
+}
+
 public func plannedLayoutApplyDecision(
     plan: CommandPlanResult,
     applyResult: LayoutApplyResult,

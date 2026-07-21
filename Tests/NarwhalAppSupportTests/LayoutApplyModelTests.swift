@@ -311,6 +311,33 @@ struct LayoutApplyModelTests {
         }
     }
 
+    @Test("Clamp retries continue only for new observations within the attempt bound")
+    func clampRetryStateRequiresBoundedProgress() throws {
+        let first = WindowID(raw: 80)
+        let second = WindowID(raw: 81)
+        let initial = LayoutClampRetryState(maxAttempts: 2)
+
+        let afterFirst = try #require(initial.recording([
+            first: WindowConstraints(minHeight: 119)
+        ]))
+        #expect(afterFirst.remainingAttempts == 1)
+        #expect(afterFirst.recording([
+            first: WindowConstraints(minHeight: 119)
+        ]) == nil)
+
+        let afterSecond = try #require(afterFirst.recording([
+            second: WindowConstraints(minHeight: 119)
+        ]))
+        #expect(afterSecond.remainingAttempts == 0)
+        #expect(afterSecond.observedConstraints == [
+            first: WindowConstraints(minHeight: 119),
+            second: WindowConstraints(minHeight: 119)
+        ])
+        #expect(afterSecond.recording([
+            WindowID(raw: 82): WindowConstraints(minHeight: 119)
+        ]) == nil)
+    }
+
     private func commandPlanFixture(
         focused: WindowID?,
         tiled: [WindowID: CGRect],

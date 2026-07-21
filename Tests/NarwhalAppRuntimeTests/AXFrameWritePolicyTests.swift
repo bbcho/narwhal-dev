@@ -98,4 +98,25 @@ struct AXFrameWritePolicyTests {
             #expect(Bool(false), "Expected the contained Terminal frame to converge")
         }
     }
+
+    @Test("A stale contained frame with excessive dimension drift is not converged")
+    func staleContainedFrameIsNotConverged() {
+        let target = CGRect(x: 1_880, y: 1_354, width: 376, height: 238)
+        let actual = CGRect(x: 1_880, y: 1_397, width: 373, height: 189)
+
+        #expect(!frameWriteApproximatelySettled(
+            target: target,
+            actual: actual,
+            tolerance: Double(frameWriteSettleTolerance)
+        ))
+        switch AXClient().frameWriteDidNotConverge(
+            target: target,
+            actualFrames: [actual, actual]
+        ) {
+        case .failed, .clamped:
+            break
+        case .converged:
+            #expect(Bool(false), "Expected a stale frame not to converge")
+        }
+    }
 }
