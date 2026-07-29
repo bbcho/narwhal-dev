@@ -205,6 +205,16 @@ enum RealAppWindowVerification {
     static func verifyTerminalTileMatrix() async -> (passed: Bool, message: String) {
         let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
         let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
+        let axisConfig = Config(
+            keymap: Config.default.keymap,
+            rules: Config.default.rules,
+            zones: Config.default.zones,
+            gaps: Gaps(inner: 8, outer: Config.default.gaps.outer),
+            border: Config.default.border,
+            hud: Config.default.hud,
+            dragModifier: Config.default.dragModifier,
+            managedRules: Config.default.managedRules
+        )
         let sequenceFilter = ProcessInfo.processInfo.environment["NARWHAL_TERMINAL_SEQUENCE_FILTER"]
         var matchedSequenceFilter = sequenceFilter == nil
         defer { overlay.stop() }
@@ -245,7 +255,8 @@ enum RealAppWindowVerification {
                         label: "Terminal \(count)-tile \(axis.rawValue)",
                         targetDisplay: targetDisplay,
                         axClient: axClient,
-                        displays: displays
+                        displays: displays,
+                        config: axisConfig
                     )
                     _ = try renderTerminalBorders(
                         originals,
@@ -700,6 +711,49 @@ enum RealAppWindowVerification {
                     + "expected=\(expectedStack) actual=\(stack)"
             )
         }
+        let sortedStackedWindows = stackedWindows.sorted {
+            (frames[$0]?.minY ?? 0) < (frames[$1]?.minY ?? 0)
+        }
+        let expectedFrames = [
+            fullHeightWindow: expectedFull,
+            sortedStackedWindows[0]: expectedStack[0],
+            sortedStackedWindows[1]: expectedStack[1],
+        ]
+        try requireConfiguredInnerGaps(
+            plannedFrames: expectedFrames,
+            actualFrames: frames,
+            context: "\(context) AX",
+            innerGap: Config.default.gaps.inner
+        )
+        try requireConfiguredInnerGaps(
+            plannedFrames: expectedFrames,
+            actualFrames: try matchingWindowServerFrames(frames, context: context),
+            context: "\(context) WindowServer",
+            innerGap: Config.default.gaps.inner
+        )
+    }
+
+    private static func matchingWindowServerFrames(
+        _ axFrames: [WindowID: CGRect],
+        context: String
+    ) throws -> [WindowID: CGRect] {
+        try Dictionary(uniqueKeysWithValues: axFrames.map { windowID, axFrame in
+            let serverFrame = LiveWindowServerVerification.waitForFrame(
+                windowNumber: Int(windowID.raw),
+                matching: axFrame,
+                tolerance: frameWriteSettleTolerance
+            )
+            guard let serverFrame,
+                  serverFrame.matches(axFrame, tolerance: frameWriteSettleTolerance)
+            else {
+                throw RealAppWindowVerifierFailure(
+                    "\(context) WindowServer frame mismatch for \(windowID.description): "
+                        + "expected AX=\(axFrame.debugDescription) "
+                        + "actual=\(serverFrame?.debugDescription ?? "nil")"
+                )
+            }
+            return (windowID, serverFrame)
+        })
     }
 
     private static func productionBorderFrame(
@@ -885,7 +939,8 @@ enum RealAppWindowVerification {
         label: String,
         targetDisplay: DisplayInfo,
         axClient: AXClient,
-        displays: [DisplayID: DisplayInfo]
+        displays: [DisplayID: DisplayInfo],
+        config: Config = .default
     ) async throws -> [WindowID: CGRect] {
         guard originals.count >= 2, let first = originals.first else {
             throw RealAppWindowVerifierFailure("\(label) requires at least two real windows")
@@ -896,7 +951,7 @@ enum RealAppWindowVerification {
             on: targetDisplay,
             using: axClient
         )
-        let worldActor = WorldActor(config: .default)
+        let worldActor = WorldActor(config: config)
         let reporter = StartupReporter(logPath: "/tmp/narwhal-real-axis-layout.log")
         let applier = LayoutApplier(axClient: axClient, reporter: reporter)
         let windowIDs = Set(originals.map(\.metadata.id))
@@ -927,6 +982,7 @@ enum RealAppWindowVerification {
             worldActor: worldActor,
             applier: applier,
             allowNoMove: true,
+            requireNearPlan: false,
             strategy: .coordinated
         )
         try requireEqualAxisLayout(
@@ -934,13 +990,16 @@ enum RealAppWindowVerification {
             windowIDs: windowIDs,
             axis: axis,
             visibleFrame: targetDisplay.visibleFrame,
+            gaps: config.gaps,
             context: label
         )
         try requirePlannedRealFramesVisible(
             originals,
             plannedFrames: frames,
             using: axClient,
-            context: label
+            context: label,
+            requireNearPlan: false,
+            innerGap: config.gaps.inner
         )
         try requireRealFramesDisjoint(
             originals,
@@ -1016,7 +1075,8 @@ enum RealAppWindowVerification {
                 pushed,
                 plannedFrames: plannedFrames,
                 using: axClient,
-                context: "Terminal push sequence \(keys) step \(index + 1)"
+                context: "Terminal push sequence \(keys) step \(index + 1)",
+                gapTolerance: frameWriteSettleTolerance
             )
             try requireRealFramesDisjoint(
                 pushed,
@@ -1254,7 +1314,8 @@ enum RealAppWindowVerification {
             originals,
             plannedFrames: targets,
             using: axClient,
-            context: "Terminal push-sequence staging"
+            context: "Terminal push-sequence staging",
+            verifyConfiguredGaps: false
         )
         try requireRealFramesDisjoint(
             originals,
@@ -1373,6 +1434,7 @@ enum RealAppWindowVerification {
         windowIDs: Set<WindowID>,
         axis: Axis,
         visibleFrame: CGRect,
+        gaps: Gaps,
         context: String
     ) throws {
         guard Set(frames.keys) == windowIDs else {
@@ -1386,28 +1448,35 @@ enum RealAppWindowVerification {
         let lengths = actual.map { axis == .horizontal ? $0.width : $0.height }
         let minimumLength = lengths.min() ?? 0
         let maximumLength = lengths.max() ?? 0
+        let usableFrame = CGRect(
+            x: visibleFrame.minX + gaps.outer.left,
+            y: visibleFrame.minY + gaps.outer.top,
+            width: visibleFrame.width - gaps.outer.left - gaps.outer.right,
+            height: visibleFrame.height - gaps.outer.top - gaps.outer.bottom
+        )
+        let tiledBounds = usableFrame.insetBy(dx: gaps.inner / 2, dy: gaps.inner / 2)
         let coversOuterFrame = actual.first.map {
             axis == .horizontal
-                ? abs($0.minX - visibleFrame.minX) <= 0.001
-                : abs($0.minY - visibleFrame.minY) <= 0.001
+                ? abs($0.minX - tiledBounds.minX) <= 0.001
+                : abs($0.minY - tiledBounds.minY) <= 0.001
         } == true && actual.last.map {
             axis == .horizontal
-                ? abs($0.maxX - visibleFrame.maxX) <= 0.001
-                : abs($0.maxY - visibleFrame.maxY) <= 0.001
+                ? abs($0.maxX - tiledBounds.maxX) <= 0.001
+                : abs($0.maxY - tiledBounds.maxY) <= 0.001
         } == true
         let sharedEdges = zip(actual, actual.dropFirst()).allSatisfy { leading, trailing in
             axis == .horizontal
-                ? abs(leading.maxX - trailing.minX) <= 0.001
-                : abs(leading.maxY - trailing.minY) <= 0.001
+                ? abs(trailing.minX - leading.maxX - gaps.inner) <= 0.001
+                : abs(trailing.minY - leading.maxY - gaps.inner) <= 0.001
         }
         let crossAxisMatches = actual.allSatisfy { cell in
             switch axis {
             case .horizontal:
-                abs(cell.minY - visibleFrame.minY) <= 0.001
-                    && abs(cell.height - visibleFrame.height) <= 0.001
+                abs(cell.minY - tiledBounds.minY) <= 0.001
+                    && abs(cell.height - tiledBounds.height) <= 0.001
             case .vertical:
-                abs(cell.minX - visibleFrame.minX) <= 0.001
-                    && abs(cell.width - visibleFrame.width) <= 0.001
+                abs(cell.minX - tiledBounds.minX) <= 0.001
+                    && abs(cell.width - tiledBounds.width) <= 0.001
             }
         }
         let internalBoundariesAreRepresentable = actual.dropFirst().allSatisfy { cell in
@@ -2405,8 +2474,14 @@ enum RealAppWindowVerification {
         _ originals: [RealAppOriginal],
         plannedFrames: [WindowID: CGRect],
         using axClient: AXClient,
-        context: String
+        context: String,
+        verifyConfiguredGaps: Bool = true,
+        requireNearPlan: Bool = true,
+        innerGap: Double = Config.default.gaps.inner,
+        gapTolerance: CGFloat = configuredGapTolerance
     ) throws {
+        var actualFrames: [WindowID: CGRect] = [:]
+        var serverFrames: [WindowID: CGRect] = [:]
         for original in originals {
             let metadata = try currentWorkflowMetadata(for: original, using: axClient)
             guard let plannedFrame = plannedFrames[metadata.id] else {
@@ -2414,25 +2489,66 @@ enum RealAppWindowVerification {
                     "\(context) omitted \(original.spec.name) from the planned layout"
                 )
             }
-            guard frameSettledOnPlan(metadata.frame, plannedFrame) else {
+            guard !requireNearPlan || frameSettledOnPlan(metadata.frame, plannedFrame) else {
                 throw RealAppWindowVerifierFailure(
                     "\(context) AX frame mismatch for \(original.spec.name): "
-                        + "expected=\(plannedFrame.debugDescription) actual=\(metadata.frame.debugDescription)"
+                    + "expected=\(plannedFrame.debugDescription) actual=\(metadata.frame.debugDescription)"
                 )
             }
+            actualFrames[metadata.id] = metadata.frame
             let serverFrame = LiveWindowServerVerification.waitForFrame(
                 windowNumber: Int(metadata.id.raw),
                 matching: metadata.frame,
                 tolerance: frameWriteSettleTolerance
             )
-            guard serverFrame?.matches(metadata.frame, tolerance: frameWriteSettleTolerance) == true else {
+            guard let visibleFrame = serverFrame,
+                  visibleFrame.matches(metadata.frame, tolerance: frameWriteSettleTolerance)
+            else {
                 throw RealAppWindowVerifierFailure(
                     "\(context) WindowServer frame mismatch for \(original.spec.name): "
                         + "expected AX=\(metadata.frame.debugDescription) "
                         + "actual=\(serverFrame?.debugDescription ?? "nil")"
                 )
             }
+            serverFrames[metadata.id] = visibleFrame
         }
+        if verifyConfiguredGaps {
+            try requireConfiguredInnerGaps(
+                plannedFrames: plannedFrames,
+                actualFrames: actualFrames,
+                context: "\(context) AX",
+                innerGap: innerGap,
+                tolerance: gapTolerance
+            )
+            try requireConfiguredInnerGaps(
+                plannedFrames: plannedFrames,
+                actualFrames: serverFrames,
+                context: "\(context) WindowServer",
+                innerGap: innerGap,
+                tolerance: gapTolerance
+            )
+        }
+    }
+
+    private static func requireConfiguredInnerGaps(
+        plannedFrames: [WindowID: CGRect],
+        actualFrames: [WindowID: CGRect],
+        context: String,
+        innerGap: Double,
+        tolerance: CGFloat = configuredGapTolerance
+    ) throws {
+        let violations = innerGapViolations(
+            planned: plannedFrames,
+            actual: actualFrames,
+            innerGap: innerGap,
+            tolerance: Double(tolerance)
+        )
+        guard let violation = violations.first else { return }
+        throw RealAppWindowVerifierFailure(
+            "\(context) did not preserve configured \(violation.axis.rawValue) gap: "
+                + "before=\(violation.before.description) after=\(violation.after.description) "
+                + "expected=\(violation.expected) actual=\(violation.actual)"
+        )
     }
 
     private static func stageManualResizeWindows(
@@ -2649,6 +2765,7 @@ enum RealAppWindowVerification {
         applier: LayoutApplier,
         allowNoMove: Bool = false,
         allowConstraintRetry: Bool = true,
+        requireNearPlan: Bool = true,
         strategy: LayoutFrameWriteStrategy = .sequential
     ) async throws -> [WindowID: CGRect] {
         let first = try await requireWorkflowPlan(name, plan(), allowNoMove: allowNoMove)
@@ -2670,7 +2787,12 @@ enum RealAppWindowVerification {
             ) {
             case .commit(let appliedFrames, _):
                 await worldActor.commit(current, appliedFrames: appliedFrames)
-                try requireAppliedFramesVisible(appliedFrames, plan: current, context: name)
+                try requireAppliedFramesVisible(
+                    appliedFrames,
+                    plan: current,
+                    context: name,
+                    requireNearPlan: requireNearPlan
+                )
                 return current.desiredLayout.layout.tiled
 
             case .fail(_, let failureCount, let summary):
@@ -2865,7 +2987,8 @@ enum RealAppWindowVerification {
     private static func requireAppliedFramesVisible(
         _ appliedFrames: [WindowID: CGRect],
         plan: CommandPlanResult,
-        context: String
+        context: String,
+        requireNearPlan: Bool = true
     ) throws {
         guard !appliedFrames.isEmpty else {
             throw RealAppWindowVerifierFailure("\(context) applied no frames")
@@ -2885,7 +3008,7 @@ enum RealAppWindowVerification {
                     "\(context) applied unplanned frame for \(windowID.description): actual=\(frame.debugDescription)"
                 )
             }
-            guard frameSettledOnPlan(frame, plannedFrame) else {
+            guard !requireNearPlan || frameSettledOnPlan(frame, plannedFrame) else {
                 throw RealAppWindowVerifierFailure(
                     "\(context) AX frame did not settle on plan for \(windowID.description): "
                         + "expected=\(plannedFrame.debugDescription) "
@@ -2908,22 +3031,11 @@ enum RealAppWindowVerification {
     }
 
     private static func frameSettledOnPlan(_ frame: CGRect, _ plannedFrame: CGRect) -> Bool {
-        let containmentTolerance: CGFloat = 0.5
-        guard frame.minX >= plannedFrame.minX - containmentTolerance,
-              frame.minY >= plannedFrame.minY - containmentTolerance,
-              frame.maxX <= plannedFrame.maxX + containmentTolerance,
-              frame.maxY <= plannedFrame.maxY + containmentTolerance
-        else {
-            return false
-        }
-        return frame.matches(plannedFrame, tolerance: frameWriteSettleTolerance)
-            || frameWriteApproximatelySettled(
-                target: plannedFrame,
-                actual: frame,
-                tolerance: Double(frameWriteSettleTolerance),
-                maxEdgeDrift: 24,
-                minimumOverlapRatio: 0.98
-            )
+        frameWriteNearTarget(
+            target: plannedFrame,
+            actual: frame,
+            tolerance: Double(frameWriteSettleTolerance)
+        )
     }
 
     private static func focusIfPossible(

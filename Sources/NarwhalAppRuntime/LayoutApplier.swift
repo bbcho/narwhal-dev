@@ -28,12 +28,234 @@ struct LayoutApplier {
         reporter.info("Applying layout generation=\(result.desiredLayout.generation.raw) tiledCount=\(result.desiredLayout.layout.tiled.count)")
 
         let intents = layoutFrameWriteIntents(for: result, excluding: Set(preservedFrames.keys))
+        let initial: LayoutApplyResult
         switch strategy {
         case .sequential:
-            return await applySequentially(intents, startingWith: applyResult)
+            initial = await applySequentially(intents, startingWith: applyResult)
         case .coordinated:
-            return await applyCoordinated(intents, startingWith: applyResult)
+            initial = await applyCoordinated(intents, startingWith: applyResult)
         }
+        guard initial.succeeded else { return initial }
+        return await reconcileConfiguredGaps(
+            for: result,
+            after: initial,
+            preserving: Set(preservedFrames.keys),
+            strategy: strategy
+        )
+    }
+
+    private func reconcileConfiguredGaps(
+        for plan: CommandPlanResult,
+        after initial: LayoutApplyResult,
+        preserving preservedWindowIDs: Set<WindowID>,
+        strategy: LayoutFrameWriteStrategy
+    ) async -> LayoutApplyResult {
+        let plannedFrames = plan.desiredLayout.layout.tiled
+        let observedFrames = plannedFrames.reduce(into: [WindowID: CGRect]()) { frames, entry in
+            if let frame = initial.applied[entry.key] ?? plan.windows[entry.key]?.frame {
+                frames[entry.key] = frame
+            }
+        }
+        guard observedFrames.count == plannedFrames.count else {
+            let missing = plannedFrames.keys
+                .filter { observedFrames[$0] == nil }
+                .sorted { $0.raw < $1.raw }
+            guard let windowID = missing.first, let target = plannedFrames[windowID] else { return initial }
+            return recordLayoutFrameWrite(
+                windowID: windowID,
+                targetFrame: target,
+                observation: .failed(message: "missing actual frame for configured-gap reconciliation"),
+                in: initial
+            ).result
+        }
+
+        var reflowed = observedFrames
+        var idsByDisplay: [DisplayID: [WindowID]] = [:]
+        for windowID in plannedFrames.keys {
+            guard let displayID = plan.plannedWorld.windowDisplay[windowID] else { continue }
+            idsByDisplay[displayID, default: []].append(windowID)
+        }
+        guard idsByDisplay.values.reduce(0, { $0 + $1.count }) == plannedFrames.count else {
+            let missing = plannedFrames.keys
+                .filter { plan.plannedWorld.windowDisplay[$0] == nil }
+                .sorted { $0.raw < $1.raw }
+            guard let windowID = missing.first, let target = plannedFrames[windowID] else { return initial }
+            return recordLayoutFrameWrite(
+                windowID: windowID,
+                targetFrame: target,
+                observation: .failed(message: "missing display ownership for configured-gap reconciliation"),
+                in: initial
+            ).result
+        }
+        var bestEffortDisplays = Set<DisplayID>()
+        for (displayID, windowIDs) in idsByDisplay {
+            let ids = Set(windowIDs)
+            let displayPlanned = plannedFrames.filter { ids.contains($0.key) }
+            let displayActual = observedFrames.filter { ids.contains($0.key) }
+            switch reflowSnappedFrames(
+                planned: displayPlanned,
+                actual: displayActual,
+                innerGap: plan.plannedWorld.config.gaps.inner,
+                anchoredWindowIDs: preservedWindowIDs.intersection(ids),
+                tolerance: Double(configuredGapTolerance)
+            ) {
+            case .success(let frames):
+                reflowed.merge(frames) { _, replacement in replacement }
+            case .failure(let conflict):
+                switch reflowSnappedFramesBestEffort(
+                    planned: displayPlanned,
+                    actual: displayActual,
+                    innerGap: plan.plannedWorld.config.gaps.inner,
+                    anchoredWindowIDs: preservedWindowIDs.intersection(ids),
+                    tolerance: Double(configuredGapTolerance)
+                ) {
+                case .success(let frames):
+                    let stableFrames = frames.reduce(into: [WindowID: CGRect]()) { result, entry in
+                        guard let observed = displayActual[entry.key] else {
+                            result[entry.key] = entry.value
+                            return
+                        }
+                        var origin = entry.value.origin
+                        if abs(origin.x - observed.minX) <= frameWriteSettleTolerance {
+                            origin.x = observed.minX
+                        }
+                        if abs(origin.y - observed.minY) <= frameWriteSettleTolerance {
+                            origin.y = observed.minY
+                        }
+                        result[entry.key] = CGRect(origin: origin, size: entry.value.size)
+                    }
+                    let residuals = innerGapViolations(
+                        planned: displayPlanned,
+                        actual: stableFrames,
+                        innerGap: plan.plannedWorld.config.gaps.inner,
+                        tolerance: Double(configuredGapTolerance)
+                    )
+                    guard residuals.allSatisfy({
+                        $0.actual >= -Double(configuredGapTolerance)
+                            && abs($0.actual - $0.expected) <= Double(frameWriteSettleTolerance)
+                    }) else {
+                        return gapConflictFailure(
+                            conflict,
+                            plannedFrames: plannedFrames,
+                            startingWith: initial
+                        )
+                    }
+                    bestEffortDisplays.insert(displayID)
+                    reflowed.merge(stableFrames) { _, replacement in replacement }
+                    reporter.info(
+                        "Using bounded gap reconciliation display=\(displayID.raw) "
+                            + "maximumDeviation=\(residuals.map { abs($0.actual - $0.expected) }.max() ?? 0)"
+                    )
+                case .failure:
+                    return gapConflictFailure(
+                        conflict,
+                        plannedFrames: plannedFrames,
+                        startingWith: initial
+                    )
+                }
+            }
+        }
+
+        let correctionFrames = reflowed.mapValues { frame in
+            CGRect(
+                x: frame.minX.rounded(),
+                y: frame.minY.rounded(),
+                width: frame.width,
+                height: frame.height
+            )
+        }
+        let corrections = correctionFrames.keys
+            .filter { windowID in
+                guard !preservedWindowIDs.contains(windowID),
+                      let before = observedFrames[windowID],
+                      let after = correctionFrames[windowID]
+                else {
+                    return false
+                }
+                let tolerance = plan.plannedWorld.windowDisplay[windowID].map {
+                    bestEffortDisplays.contains($0)
+                        ? frameWriteSettleTolerance
+                        : configuredGapTolerance
+                } ?? configuredGapTolerance
+                return !before.origin.narwhalApproximatelyEquals(
+                    after.origin,
+                    tolerance: tolerance
+                )
+            }
+            .sorted { $0.raw < $1.raw }
+            .map { windowID -> LayoutFrameWriteIntent in
+                guard let metadata = plan.windows[windowID], let frame = correctionFrames[windowID] else {
+                    return .missingMetadata(windowID: windowID, targetFrame: plannedFrames[windowID] ?? .null)
+                }
+                return .write(windowID: windowID, metadata: metadata, targetFrame: frame)
+            }
+
+        var reconciled = LayoutApplyResult(
+            applied: observedFrames,
+            clamps: initial.clamps,
+            failures: initial.failures
+        )
+        if !corrections.isEmpty {
+            reporter.info("Reconciling configured gaps correctionCount=\(corrections.count)")
+            switch strategy {
+            case .sequential:
+                reconciled = await applySequentially(corrections, startingWith: reconciled)
+            case .coordinated:
+                reconciled = await applyCoordinated(corrections, startingWith: reconciled)
+            }
+        }
+        guard reconciled.succeeded else { return reconciled }
+
+        for (displayID, windowIDs) in idsByDisplay {
+            let ids = Set(windowIDs)
+            let violations = innerGapViolations(
+                planned: plannedFrames.filter { ids.contains($0.key) },
+                actual: reconciled.applied.filter { ids.contains($0.key) },
+                innerGap: plan.plannedWorld.config.gaps.inner,
+                tolerance: Double(configuredGapTolerance)
+            )
+            let violation = bestEffortDisplays.contains(displayID)
+                ? violations.first {
+                    $0.actual < -Double(configuredGapTolerance)
+                        || abs($0.actual - $0.expected) > Double(frameWriteSettleTolerance)
+                }
+                : violations.first
+            guard let violation,
+                  let target = plannedFrames[violation.after]
+            else {
+                continue
+            }
+            return recordLayoutFrameWrite(
+                windowID: violation.after,
+                targetFrame: target,
+                observation: .failed(
+                    message: "configured gap expected=\(violation.expected) actual=\(violation.actual)"
+                ),
+                in: reconciled
+            ).result
+        }
+        return reconciled
+    }
+
+    private func gapConflictFailure(
+        _ conflict: SnappedFrameGapConflict,
+        plannedFrames: [WindowID: CGRect],
+        startingWith result: LayoutApplyResult
+    ) -> LayoutApplyResult {
+        guard let windowID = conflict.windows.first,
+              let target = plannedFrames[windowID]
+        else {
+            return result
+        }
+        let windows = conflict.windows.map(\.description).joined(separator: ",")
+        return recordLayoutFrameWrite(
+            windowID: windowID,
+            targetFrame: target,
+            observation: .failed(
+                message: "configured \(conflict.axis.rawValue) gap is physically inconsistent for \(windows)"
+            ),
+            in: result
+        ).result
     }
 
     private func applySequentially(
