@@ -113,22 +113,39 @@ public func frameWriteGridSnapSettled(
 ) -> Bool {
     guard target.narwhalIsFinitePositive, actual.narwhalIsFinitePositive else { return false }
     let tolerance = CGFloat(max(0, tolerance))
-    guard abs(target.minX - actual.minX) <= tolerance,
-          abs(target.minY - actual.minY) <= tolerance
-    else {
-        return false
-    }
-
     let maximumExpansion = CGFloat(max(0, maximumExpansion))
-    guard actual.width - target.width <= maximumExpansion,
-          actual.height - target.height <= maximumExpansion
-    else {
-        return false
-    }
-
     let maximumDimensionDrift = CGFloat(max(0, maximumDimensionDrift))
-    return abs(target.width - actual.width) <= maximumDimensionDrift
-        && abs(target.height - actual.height) <= maximumDimensionDrift
+    func dimensionSettled(
+        targetMin: CGFloat,
+        targetMax: CGFloat,
+        targetLength: CGFloat,
+        actualMin: CGFloat,
+        actualMax: CGFloat,
+        actualLength: CGFloat
+    ) -> Bool {
+        guard abs(targetLength - actualLength) <= maximumDimensionDrift,
+              actualLength - targetLength <= maximumExpansion
+        else {
+            return false
+        }
+        return abs(targetMin - actualMin) <= tolerance
+            || abs(targetMax - actualMax) <= tolerance
+    }
+    return dimensionSettled(
+        targetMin: target.minX,
+        targetMax: target.maxX,
+        targetLength: target.width,
+        actualMin: actual.minX,
+        actualMax: actual.maxX,
+        actualLength: actual.width
+    ) && dimensionSettled(
+        targetMin: target.minY,
+        targetMax: target.maxY,
+        targetLength: target.height,
+        actualMin: actual.minY,
+        actualMax: actual.maxY,
+        actualLength: actual.height
+    )
 }
 
 public func frameSizeApproximatelySettled(

@@ -3,11 +3,15 @@ import CoreGraphics
 public enum GeometryTolerances {
     public static let frameWriteSettle: CGFloat = 4
     public static let configuredGap: CGFloat = 0.5
+    public static let appGridGapFallback: CGFloat = 8
+    public static let appGridOuterDrift: CGFloat = 12
     public static let externalResizeDirection: CGFloat = 1
 }
 
 public let frameWriteSettleTolerance: CGFloat = GeometryTolerances.frameWriteSettle
 public let configuredGapTolerance: CGFloat = GeometryTolerances.configuredGap
+public let appGridGapFallbackTolerance: CGFloat = GeometryTolerances.appGridGapFallback
+public let appGridOuterDriftTolerance: CGFloat = GeometryTolerances.appGridOuterDrift
 
 func splitFrames(_ frame: CGRect, axis: Axis, weights: [Double]) -> [CGRect] {
     let total = weights.reduce(0, +)

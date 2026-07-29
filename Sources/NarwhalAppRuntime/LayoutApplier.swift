@@ -88,6 +88,7 @@ struct LayoutApplier {
             ).result
         }
         var bestEffortDisplays = Set<DisplayID>()
+        var stableBestEffortDisplays = Set<DisplayID>()
         for (displayID, windowIDs) in idsByDisplay {
             let ids = Set(windowIDs)
             let displayPlanned = plannedFrames.filter { ids.contains($0.key) }
@@ -107,7 +108,8 @@ struct LayoutApplier {
                     actual: displayActual,
                     innerGap: plan.plannedWorld.config.gaps.inner,
                     anchoredWindowIDs: preservedWindowIDs.intersection(ids),
-                    tolerance: Double(configuredGapTolerance)
+                    tolerance: Double(configuredGapTolerance),
+                    maximumOuterDrift: Double(appGridOuterDriftTolerance)
                 ) {
                 case .success(let frames):
                     let stableFrames = frames.reduce(into: [WindowID: CGRect]()) { result, entry in
@@ -116,23 +118,36 @@ struct LayoutApplier {
                             return
                         }
                         var origin = entry.value.origin
-                        if abs(origin.x - observed.minX) <= frameWriteSettleTolerance {
+                        if abs(origin.x - observed.minX) <= appGridGapFallbackTolerance {
                             origin.x = observed.minX
                         }
-                        if abs(origin.y - observed.minY) <= frameWriteSettleTolerance {
+                        if abs(origin.y - observed.minY) <= appGridGapFallbackTolerance {
                             origin.y = observed.minY
                         }
                         result[entry.key] = CGRect(origin: origin, size: entry.value.size)
                     }
-                    let residuals = innerGapViolations(
+                    let stableResiduals = innerGapViolations(
                         planned: displayPlanned,
                         actual: stableFrames,
                         innerGap: plan.plannedWorld.config.gaps.inner,
                         tolerance: Double(configuredGapTolerance)
                     )
+                    let stableFramesAreBounded = stableResiduals.allSatisfy {
+                        $0.actual >= -Double(configuredGapTolerance)
+                            && abs($0.actual - $0.expected) <= Double(appGridGapFallbackTolerance)
+                    }
+                    let candidateFrames = stableFramesAreBounded ? stableFrames : frames
+                    let residuals = stableFramesAreBounded
+                        ? stableResiduals
+                        : innerGapViolations(
+                            planned: displayPlanned,
+                            actual: frames,
+                            innerGap: plan.plannedWorld.config.gaps.inner,
+                            tolerance: Double(configuredGapTolerance)
+                        )
                     guard residuals.allSatisfy({
                         $0.actual >= -Double(configuredGapTolerance)
-                            && abs($0.actual - $0.expected) <= Double(frameWriteSettleTolerance)
+                            && abs($0.actual - $0.expected) <= Double(appGridGapFallbackTolerance)
                     }) else {
                         return gapConflictFailure(
                             conflict,
@@ -141,7 +156,10 @@ struct LayoutApplier {
                         )
                     }
                     bestEffortDisplays.insert(displayID)
-                    reflowed.merge(stableFrames) { _, replacement in replacement }
+                    if stableFramesAreBounded {
+                        stableBestEffortDisplays.insert(displayID)
+                    }
+                    reflowed.merge(candidateFrames) { _, replacement in replacement }
                     reporter.info(
                         "Using bounded gap reconciliation display=\(displayID.raw) "
                             + "maximumDeviation=\(residuals.map { abs($0.actual - $0.expected) }.max() ?? 0)"
@@ -173,8 +191,8 @@ struct LayoutApplier {
                     return false
                 }
                 let tolerance = plan.plannedWorld.windowDisplay[windowID].map {
-                    bestEffortDisplays.contains($0)
-                        ? frameWriteSettleTolerance
+                    stableBestEffortDisplays.contains($0)
+                        ? appGridGapFallbackTolerance
                         : configuredGapTolerance
                 } ?? configuredGapTolerance
                 return !before.origin.narwhalApproximatelyEquals(
@@ -217,7 +235,7 @@ struct LayoutApplier {
             let violation = bestEffortDisplays.contains(displayID)
                 ? violations.first {
                     $0.actual < -Double(configuredGapTolerance)
-                        || abs($0.actual - $0.expected) > Double(frameWriteSettleTolerance)
+                        || abs($0.actual - $0.expected) > Double(appGridGapFallbackTolerance)
                 }
                 : violations.first
             guard let violation,

@@ -84,6 +84,22 @@ struct AXFrameWritePolicyTests {
         }
     }
 
+    @Test("Stable Firefox grid expansion anchored to the trailing edge reaches topology reconciliation")
+    func stableFirefoxTrailingEdgeExpansionConvergesAfterRetries() {
+        let target = CGRect(x: 0, y: 551, width: 3_008, height: 521)
+        let actual = CGRect(x: 0, y: 546, width: 3_000, height: 526)
+
+        switch AXClient().frameWriteDidNotConverge(
+            target: target,
+            actualFrames: [actual, actual]
+        ) {
+        case .converged(let settled):
+            #expect(settled == actual)
+        case .clamped, .failed:
+            #expect(Bool(false), "Expected stable edge-anchored Firefox snapping to reach topology reconciliation")
+        }
+    }
+
     @Test("A corrected Terminal frame inside its planned cell is successful")
     func correctedTerminalFrameIsConverged() {
         let target = CGRect(x: 1504, y: 550.666_666_666_7, width: 1504, height: 520.666_666_666_7)

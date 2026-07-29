@@ -98,10 +98,12 @@ public func reflowSnappedFramesBestEffort(
     actual: [WindowID: CGRect],
     innerGap: Double,
     anchoredWindowIDs: Set<WindowID> = [],
-    tolerance: Double = Double(configuredGapTolerance)
+    tolerance: Double = Double(configuredGapTolerance),
+    maximumOuterDrift: Double = Double(configuredGapTolerance)
 ) -> Result<[WindowID: CGRect], SnappedFrameGapConflict> {
     let gap = CGFloat(max(0, innerGap))
     let tolerance = CGFloat(max(0, tolerance))
+    let maximumOuterDrift = CGFloat(max(0, maximumOuterDrift))
     let relations = plannedGapRelations(planned: planned, gap: gap, tolerance: tolerance)
     var reflowed = actual
 
@@ -113,7 +115,8 @@ public func reflowSnappedFramesBestEffort(
             axis: axis,
             gap: gap,
             anchoredWindowIDs: anchoredWindowIDs,
-            tolerance: tolerance
+            tolerance: tolerance,
+            maximumOuterDrift: maximumOuterDrift
         ) {
         case .success(let frames):
             reflowed = frames
@@ -249,7 +252,8 @@ private func reflowSnappedFramesBestEffort(
     axis: Axis,
     gap: CGFloat,
     anchoredWindowIDs: Set<WindowID>,
-    tolerance: CGFloat
+    tolerance: CGFloat,
+    maximumOuterDrift: CGFloat
 ) -> Result<[WindowID: CGRect], SnappedFrameGapConflict> {
     var graph: [WindowID: [SnappedFrameOffset]] = [:]
     for relation in relations {
@@ -269,6 +273,38 @@ private func reflowSnappedFramesBestEffort(
             actual[windowID].map { (windowID, $0.origin(on: axis)) }
         })
         let anchors = component.intersection(anchoredWindowIDs)
+        let componentRelations = relations
+            .filter { component.contains($0.before) && component.contains($0.after) }
+            .sorted {
+                $0.before.raw == $1.before.raw
+                    ? $0.after.raw < $1.after.raw
+                    : $0.before.raw < $1.before.raw
+            }
+
+        for _ in component {
+            var changed = false
+            for relation in componentRelations {
+                guard let beforeOrigin = origins[relation.before],
+                      let beforeFrame = actual[relation.before],
+                      let afterOrigin = origins[relation.after]
+                else {
+                    continue
+                }
+                let requiredAfterOrigin = beforeOrigin + beforeFrame.length(on: axis)
+                guard requiredAfterOrigin - afterOrigin > tolerance else { continue }
+                if !anchors.contains(relation.after) {
+                    origins[relation.after] = requiredAfterOrigin
+                } else if !anchors.contains(relation.before) {
+                    origins[relation.before] = afterOrigin - beforeFrame.length(on: axis)
+                } else {
+                    return .failure(SnappedFrameGapConflict(axis: axis, windows: ordered))
+                }
+                changed = true
+            }
+            if !changed {
+                break
+            }
+        }
 
         for iteration in 0..<128 {
             var maximumChange: CGFloat = 0
@@ -312,14 +348,22 @@ private func reflowSnappedFramesBestEffort(
                 maximumChange = max(maximumChange, abs(replacement - current))
             }
 
-            if anchors.isEmpty {
+            if anchors.isEmpty && !componentFitsPlannedBounds(
+                component,
+                relativeOrigins: origins,
+                shift: 0,
+                planned: planned,
+                actual: actual,
+                axis: axis,
+                tolerance: maximumOuterDrift
+            ) {
                 guard centerSnappedFrameComponent(
                     component,
                     origins: &origins,
                     planned: planned,
                     actual: actual,
                     axis: axis,
-                    tolerance: tolerance
+                    tolerance: maximumOuterDrift
                 ) else {
                     return .failure(SnappedFrameGapConflict(axis: axis, windows: ordered))
                 }
@@ -336,11 +380,11 @@ private func reflowSnappedFramesBestEffort(
             planned: planned,
             actual: actual,
             axis: axis,
-            tolerance: tolerance
+            tolerance: maximumOuterDrift
         ) else {
             return .failure(SnappedFrameGapConflict(axis: axis, windows: ordered))
         }
-        for relation in relations where component.contains(relation.before) && component.contains(relation.after) {
+        for relation in componentRelations {
             guard let beforeOrigin = origins[relation.before],
                   let beforeFrame = actual[relation.before],
                   let afterOrigin = origins[relation.after],
@@ -377,7 +421,7 @@ private func centerSnappedFrameComponent(
     }
     let requiredLength = actualMax - actualMin
     let availableLength = plannedMax - plannedMin
-    guard requiredLength <= availableLength + tolerance else { return false }
+    guard requiredLength <= availableLength + 2 * tolerance else { return false }
     let shift = plannedMin + (availableLength - requiredLength) / 2 - actualMin
     for windowID in component where origins[windowID] != nil {
         origins[windowID, default: 0] += shift

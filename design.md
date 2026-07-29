@@ -402,7 +402,8 @@ Data and invariants:
   example, one accepted Terminal width need not equal two accepted Terminal
   widths plus an arbitrary configured gap. In that case, a constrained
   best-effort pass distributes the residual without overlap. Each residual must
-  remain within the bounded frame-settle tolerance or the apply fails.
+  remain within the bounded app-grid fallback tolerance (8 points, less than one
+  Terminal row increment) or the apply fails.
 
 `[CORE] reflowSnappedFrames(planned:actual:innerGap:anchoredWindowIDs:tolerance:)`
 builds adjacency constraints from the plan and returns reconciled frame values.
@@ -410,7 +411,11 @@ builds adjacency constraints from the plan and returns reconciled frame values.
 cycles, preserving accepted sizes and enforcing non-overlap.
 `[CORE] innerGapViolations(...)` validates the visible-frame invariant after AX
 writes. Inconsistency beyond the bounded fallback remains an explicit
-`SnappedFrameGapConflict`.
+`SnappedFrameGapConflict`. A manually anchored or app-expanded group may use up
+to 12 points outside an ideal group edge, matching the accepted single-window
+grid expansion allowance. A group that already fits that bound keeps its
+existing edge instead of being re-centered; this avoids changing an
+already-stable window merely to distribute a small edge drift.
 
 `[SHELL] LayoutApplier.apply` performs the existing bounded size pass, measures
 the returned frames, computes one pure reconciliation, and performs a bounded

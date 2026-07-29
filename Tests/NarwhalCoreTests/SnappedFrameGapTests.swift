@@ -211,6 +211,106 @@ struct SnappedFrameGapTests {
         #expect(reflowed.allSatisfy { actual[$0.key]?.size == $0.value.size })
     }
 
+    @Test("Best-effort reconciliation separates expanded browser rows within bounded outer drift")
+    func bestEffortExpandedBrowserStack() throws {
+        let first = WindowID(raw: 1)
+        let second = WindowID(raw: 2)
+        let third = WindowID(raw: 3)
+        let planned = [
+            first: CGRect(x: 0, y: 30, width: 3_008, height: 521),
+            second: CGRect(x: 0, y: 551, width: 3_008, height: 521),
+            third: CGRect(x: 0, y: 1_072, width: 3_008, height: 520),
+        ]
+        let actual = [
+            first: CGRect(x: 0, y: 30, width: 3_008, height: 521),
+            second: CGRect(x: 0, y: 546, width: 3_000, height: 526),
+            third: CGRect(x: 0, y: 1_068, width: 2_991, height: 524),
+        ]
+
+        let reflowed = try reflowSnappedFramesBestEffort(
+            planned: planned,
+            actual: actual,
+            innerGap: 0,
+            maximumOuterDrift: Double(appGridOuterDriftTolerance)
+        ).get()
+
+        #expect(innerGapViolations(planned: planned, actual: reflowed, innerGap: 0).isEmpty)
+        #expect(reflowed[first]?.minY == actual[first]?.minY)
+        #expect((reflowed.values.map(\.maxY).max() ?? 0) <= 1_604)
+        #expect(reflowed.allSatisfy { actual[$0.key]?.size == $0.value.size })
+    }
+
+    @Test("A manual browser resize remains anchored when its sibling needs one point of outer drift")
+    func bestEffortManualBrowserAnchor() throws {
+        let source = WindowID(raw: 1)
+        let sibling = WindowID(raw: 2)
+        let planned = [
+            source: CGRect(x: 0, y: 30, width: 1_504, height: 688),
+            sibling: CGRect(x: 0, y: 718, width: 1_504, height: 874),
+        ]
+        let actual = [
+            source: CGRect(x: 2, y: 35, width: 1_504, height: 688),
+            sibling: CGRect(x: 0, y: 722, width: 1_504, height: 870),
+        ]
+
+        let reflowed = try reflowSnappedFramesBestEffort(
+            planned: planned,
+            actual: actual,
+            innerGap: 0,
+            anchoredWindowIDs: [source],
+            maximumOuterDrift: 4
+        ).get()
+
+        #expect(reflowed[source] == actual[source])
+        #expect(reflowed[sibling]?.minY == 723)
+        #expect(reflowed[sibling]?.maxY == 1_593)
+        #expect(innerGapViolations(planned: planned, actual: reflowed, innerGap: 0).isEmpty)
+    }
+
+    @Test("Nested Terminal seams remain disjoint within one app-grid fallback")
+    func bestEffortNestedTerminalSeams() throws {
+        let topLeft = WindowID(raw: 1)
+        let topRight = WindowID(raw: 2)
+        let middleRight = WindowID(raw: 3)
+        let middleLeft = WindowID(raw: 4)
+        let lowerLeft = WindowID(raw: 5)
+        let bottom = WindowID(raw: 6)
+        let planned = [
+            topLeft: CGRect(x: 0, y: 30, width: 1_504, height: 781),
+            topRight: CGRect(x: 1_504, y: 30, width: 1_504, height: 391),
+            middleRight: CGRect(x: 2_256, y: 421, width: 752, height: 390),
+            middleLeft: CGRect(x: 1_504, y: 421, width: 752, height: 195),
+            lowerLeft: CGRect(x: 1_504, y: 616, width: 752, height: 195),
+            bottom: CGRect(x: 0, y: 811, width: 3_008, height: 781),
+        ]
+        let actual = [
+            topLeft: CGRect(x: 0, y: 30, width: 1_500, height: 777),
+            topRight: CGRect(x: 1_504, y: 30, width: 1_500, height: 385),
+            middleRight: CGRect(x: 2_256, y: 421, width: 751, height: 385),
+            middleLeft: CGRect(x: 1_504, y: 421, width: 751, height: 189),
+            lowerLeft: CGRect(x: 1_504, y: 616, width: 751, height: 189),
+            bottom: CGRect(x: 0, y: 811, width: 3_005, height: 777),
+        ]
+
+        let reflowed = try reflowSnappedFramesBestEffort(
+            planned: planned,
+            actual: actual,
+            innerGap: 0,
+            maximumOuterDrift: 4
+        ).get()
+        let residuals = innerGapViolations(
+            planned: planned,
+            actual: reflowed,
+            innerGap: 0
+        )
+
+        #expect(residuals.allSatisfy {
+            $0.actual >= -Double(configuredGapTolerance)
+                && abs($0.actual) <= Double(appGridGapFallbackTolerance)
+        })
+        #expect(reflowed.allSatisfy { actual[$0.key]?.size == $0.value.size })
+    }
+
     @Test("Four through eight tiles keep exact horizontal and vertical gaps")
     func fourThroughEightTiles() throws {
         for count in 4...8 {
