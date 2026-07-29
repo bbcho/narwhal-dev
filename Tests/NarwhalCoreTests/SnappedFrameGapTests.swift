@@ -173,46 +173,102 @@ struct SnappedFrameGapTests {
         }
     }
 
+    @Test("Best-effort reconciliation distributes an impossible Terminal grid seam without overlap")
+    func bestEffortTerminalGridSeam() throws {
+        let left = WindowID(raw: 1)
+        let topMiddle = WindowID(raw: 2)
+        let bottomLeft = WindowID(raw: 3)
+        let bottomRight = WindowID(raw: 4)
+        let right = WindowID(raw: 5)
+        let planned = [
+            left: CGRect(x: 0, y: 0, width: 1_500, height: 1_000),
+            topMiddle: CGRect(x: 1_500, y: 0, width: 751, height: 500),
+            bottomLeft: CGRect(x: 1_500, y: 500, width: 375, height: 500),
+            bottomRight: CGRect(x: 1_875, y: 500, width: 376, height: 500),
+            right: CGRect(x: 2_251, y: 0, width: 751, height: 1_000),
+        ]
+        let actual = [
+            left: CGRect(x: 0, y: 0, width: 1_500, height: 990),
+            topMiddle: CGRect(x: 1_500, y: 0, width: 751, height: 490),
+            bottomLeft: CGRect(x: 1_500, y: 500, width: 373, height: 490),
+            bottomRight: CGRect(x: 1_875, y: 500, width: 373, height: 490),
+            right: CGRect(x: 2_251, y: 0, width: 751, height: 990),
+        ]
+
+        let reflowed = try reflowSnappedFramesBestEffort(
+            planned: planned,
+            actual: actual,
+            innerGap: 0
+        ).get()
+        let violations = innerGapViolations(
+            planned: planned,
+            actual: reflowed,
+            innerGap: 0
+        )
+
+        #expect(violations.allSatisfy { $0.actual >= -Double(configuredGapTolerance) })
+        #expect(violations.map(\.actual).max() ?? 0 <= 2)
+        #expect(reflowed.allSatisfy { actual[$0.key]?.size == $0.value.size })
+    }
+
     @Test("Four through eight tiles keep exact horizontal and vertical gaps")
     func fourThroughEightTiles() throws {
         for count in 4...8 {
-            let lengths = wholePointLengths(total: 1_562, count: count)
-            let horizontalPlan = horizontalFrames(widths: lengths, height: 800)
-            let horizontalActual = horizontalPlan.mapValues { frame in
-                CGRect(x: frame.minX, y: frame.minY, width: frame.width - 7, height: frame.height - 3)
-            }
-            let horizontal = try reflowSnappedFrames(
-                planned: horizontalPlan,
-                actual: horizontalActual,
-                innerGap: 0
-            ).get()
-            #expect(innerGapViolations(planned: horizontalPlan, actual: horizontal, innerGap: 0).isEmpty)
+            for innerGap in [CGFloat(0), 8] {
+                let lengths = wholePointLengths(total: 1_562, count: count)
+                let horizontalPlan = horizontalFrames(widths: lengths, height: 800, gap: innerGap)
+                let horizontalActual = horizontalPlan.mapValues { frame in
+                    CGRect(x: frame.minX, y: frame.minY, width: frame.width - 7, height: frame.height - 3)
+                }
+                let horizontal = try reflowSnappedFrames(
+                    planned: horizontalPlan,
+                    actual: horizontalActual,
+                    innerGap: Double(innerGap)
+                ).get()
+                #expect(innerGapViolations(
+                    planned: horizontalPlan,
+                    actual: horizontal,
+                    innerGap: Double(innerGap)
+                ).isEmpty)
 
-            let verticalPlan = verticalFrames(heights: lengths, width: 1_200)
-            let verticalActual = verticalPlan.mapValues { frame in
-                CGRect(x: frame.minX, y: frame.minY, width: frame.width - 3, height: frame.height - 7)
+                let verticalPlan = verticalFrames(heights: lengths, width: 1_200, gap: innerGap)
+                let verticalActual = verticalPlan.mapValues { frame in
+                    CGRect(x: frame.minX, y: frame.minY, width: frame.width - 3, height: frame.height - 7)
+                }
+                let vertical = try reflowSnappedFrames(
+                    planned: verticalPlan,
+                    actual: verticalActual,
+                    innerGap: Double(innerGap)
+                ).get()
+                #expect(innerGapViolations(
+                    planned: verticalPlan,
+                    actual: vertical,
+                    innerGap: Double(innerGap)
+                ).isEmpty)
             }
-            let vertical = try reflowSnappedFrames(
-                planned: verticalPlan,
-                actual: verticalActual,
-                innerGap: 0
-            ).get()
-            #expect(innerGapViolations(planned: verticalPlan, actual: vertical, innerGap: 0).isEmpty)
         }
     }
 
-    private func horizontalFrames(widths: [CGFloat], height: CGFloat) -> [WindowID: CGRect] {
+    private func horizontalFrames(
+        widths: [CGFloat],
+        height: CGFloat,
+        gap: CGFloat = 0
+    ) -> [WindowID: CGRect] {
         var x: CGFloat = 0
         return Dictionary(uniqueKeysWithValues: widths.enumerated().map { index, width in
-            defer { x += width }
+            defer { x += width + gap }
             return (WindowID(raw: UInt32(index + 1)), CGRect(x: x, y: 0, width: width, height: height))
         })
     }
 
-    private func verticalFrames(heights: [CGFloat], width: CGFloat) -> [WindowID: CGRect] {
+    private func verticalFrames(
+        heights: [CGFloat],
+        width: CGFloat,
+        gap: CGFloat = 0
+    ) -> [WindowID: CGRect] {
         var y: CGFloat = 0
         return Dictionary(uniqueKeysWithValues: heights.enumerated().map { index, height in
-            defer { y += height }
+            defer { y += height + gap }
             return (WindowID(raw: UInt32(index + 1)), CGRect(x: 0, y: y, width: width, height: height))
         })
     }

@@ -389,20 +389,28 @@ Data and invariants:
 - `plannedFrames` defines which window pairs are adjacent and the configured
   seam between them.
 - `actualFrames` supplies the sizes accepted by the applications.
-- Adjacent actual frames must satisfy `after.min - before.max == gaps.inner`
-  within the AX settle tolerance on the relevant axis.
+- Adjacent actual frames satisfy `after.min - before.max == gaps.inner` within
+  the configured-gap tolerance whenever the accepted application sizes make
+  those seam equations consistent.
 - Reconciliation changes origins only. It never invents a size the application
   has not already accepted.
 - Residual space caused by quantization is centered at the outside of each
   connected tile group. It is never accumulated at interior seams.
 - A manually resized source window is a fixed anchor. Other windows move around
   it; the source is not rewritten.
+- Character-grid window chrome can make a branched seam inconsistent: for
+  example, one accepted Terminal width need not equal two accepted Terminal
+  widths plus an arbitrary configured gap. In that case, a constrained
+  best-effort pass distributes the residual without overlap. Each residual must
+  remain within the bounded frame-settle tolerance or the apply fails.
 
 `[CORE] reflowSnappedFrames(planned:actual:innerGap:anchoredWindowIDs:tolerance:)`
 builds adjacency constraints from the plan and returns reconciled frame values.
-Inconsistent constraints are an explicit `SnappedFrameGapConflict`; they are not
-silently weakened to a larger gap. `[CORE] innerGapViolations(...)` validates the
-same visible-frame invariant after AX writes.
+`[CORE] reflowSnappedFramesBestEffort(...)` handles only inconsistent seam
+cycles, preserving accepted sizes and enforcing non-overlap.
+`[CORE] innerGapViolations(...)` validates the visible-frame invariant after AX
+writes. Inconsistency beyond the bounded fallback remains an explicit
+`SnappedFrameGapConflict`.
 
 `[SHELL] LayoutApplier.apply` performs the existing bounded size pass, measures
 the returned frames, computes one pure reconciliation, and performs a bounded
@@ -412,11 +420,12 @@ an inconsistent physical arrangement, or a correction that does not converge is
 a normal layout-apply failure with the involved window IDs in the diagnostic.
 
 Verification covers horizontal and vertical 4–8 window runs, non-zero configured
-gaps, branched seams, fixed manual-resize anchors, and inconsistent physical
-constraints in pure tests. The live gate additionally checks the configured gap
-on real AX frames, confirms those frames through WindowServer, and verifies the
-visible border windows. No new configuration option or adapter abstraction is
-introduced.
+gaps, branched seams, fixed manual-resize anchors, and bounded inconsistent
+physical constraints in pure tests. The live gate additionally checks exact
+configured gaps for representable axis layouts, bounded non-overlapping seams
+for character-grid conflicts, confirms AX frames through WindowServer, and
+verifies the visible border windows. No new configuration option or adapter
+abstraction is introduced.
 
 ---
 
