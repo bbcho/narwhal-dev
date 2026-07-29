@@ -233,6 +233,11 @@ struct LayoutSolverTests {
             maxEdgeDrift: 16,
             minimumOverlapRatio: 0.98
         ))
+        #expect(frameWriteContainmentCorrection(
+            target: target,
+            actual: actual,
+            tolerance: 4
+        ) == nil)
     }
 
     @Test("Terminal character-grid rounding settles without becoming a minimum height")
@@ -312,8 +317,8 @@ struct LayoutSolverTests {
         ) == true)
     }
 
-    @Test("Expansion beyond edge-rounding slack remains a minimum-size signal")
-    func expansionBeyondEdgeRoundingSlackDoesNotSettle() {
+    @Test("Small same-origin expansion is corrected before becoming a minimum-size signal")
+    func smallSameOriginExpansionGetsContainmentRetry() {
         let target = CGRect(x: 0, y: 0, width: 500, height: 500)
         let actual = CGRect(x: 0, y: 0, width: 500, height: 506)
 
@@ -326,8 +331,35 @@ struct LayoutSolverTests {
             target: target,
             actual: actual,
             tolerance: 4
-        ) == nil)
+        ) == CGRect(x: 0, y: 0, width: 500, height: 490))
         #expect(!frameWriteApproximatelySettled(target: target, actual: actual, tolerance: 4))
+    }
+
+    @Test("Full-height Terminal rounding receives a containment retry")
+    func fullHeightTerminalRoundingGetsContainmentRetry() {
+        let target = CGRect(x: 4, y: 34, width: 744, height: 1_554)
+        let actual = CGRect(x: 4, y: 34, width: 744, height: 1_561)
+
+        #expect(frameWriteContainmentCorrection(
+            target: target,
+            actual: actual,
+            tolerance: 4
+        ) == CGRect(x: 4, y: 34, width: 744, height: 1_543))
+        #expect(frameWriteGridSnapSettled(
+            target: target,
+            actual: actual,
+            tolerance: 4
+        ))
+        #expect(!frameWriteGridSnapSettled(
+            target: CGRect(x: 0, y: 33, width: 756, height: 357),
+            actual: CGRect(x: 0, y: 33, width: 756, height: 375),
+            tolerance: 4
+        ))
+        #expect(frameWriteNearTarget(
+            target: CGRect(x: 4, y: 34, width: 594, height: 1_554),
+            actual: CGRect(x: 27, y: 34, width: 576, height: 1_561),
+            tolerance: 4
+        ))
     }
 
     @Test("Minimum-size expansion is still inferred as a clamp")

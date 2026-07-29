@@ -158,6 +158,20 @@ func axFrameWriteRequiresElementRefresh(_ error: AXClientError) -> Bool {
     return axError == .invalidUIElement
 }
 
+func axFrameWriteRetryTarget(
+    target: CGRect,
+    actual: CGRect,
+    previousAttemptCount: Int
+) -> CGRect {
+    guard previousAttemptCount > 0 else { return target }
+    return frameWriteContainmentCorrection(
+        target: target,
+        actual: actual,
+        tolerance: Double(frameWriteSettleTolerance),
+        correctionMargin: Double(frameWriteSettleTolerance) * pow(2, Double(previousAttemptCount - 1))
+    ) ?? target
+}
+
 func confirmedObservedConstraints(
     target: CGRect,
     actualFrames: [CGRect],
@@ -457,7 +471,7 @@ struct AXClient {
             }
         }
 
-        for attempt in 1...Self.frameWriteAttemptCount where !pending.isEmpty {
+        for _ in 1...Self.frameWriteAttemptCount where !pending.isEmpty {
             var ready: [CoordinatedFrameWrite] = []
             for var write in pending {
                 switch focusedWindowFrame(write.element) {
@@ -466,12 +480,11 @@ struct AXClient {
                         outcomes[write.windowID] = .converged(actual: current)
                         continue
                     }
-                    write.appliedTarget = frameWriteContainmentCorrection(
+                    write.appliedTarget = axFrameWriteRetryTarget(
                         target: write.target,
                         actual: current,
-                        tolerance: Double(frameWriteSettleTolerance),
-                        correctionMargin: Double(frameWriteSettleTolerance) * pow(2, Double(attempt - 1))
-                    ) ?? write.target
+                        previousAttemptCount: write.observedFrames.count
+                    )
                     write.positionFirst = axFrameWriteOrder(
                         current: current,
                         target: write.appliedTarget
@@ -934,7 +947,7 @@ struct AXClient {
         var appliedFrame = frame
         var element = initialElement
 
-        for attempt in 1...Self.frameWriteAttemptCount {
+        for _ in 1...Self.frameWriteAttemptCount {
             let currentFrame: CGRect?
             switch focusedWindowFrame(element) {
             case .success(let current):
@@ -942,12 +955,11 @@ struct AXClient {
                     return .converged(actual: current)
                 }
                 currentFrame = current
-                appliedFrame = frameWriteContainmentCorrection(
+                appliedFrame = axFrameWriteRetryTarget(
                     target: frame,
                     actual: current,
-                    tolerance: Double(frameWriteSettleTolerance),
-                    correctionMargin: Double(frameWriteSettleTolerance) * pow(2, Double(attempt - 1))
-                ) ?? frame
+                    previousAttemptCount: observedFrames.count
+                )
             case .failure:
                 currentFrame = nil
                 appliedFrame = frame
@@ -1042,6 +1054,17 @@ struct AXClient {
     func frameWriteDidNotConverge(target: CGRect, actualFrames: [CGRect]) -> AXFrameWriteOutcome {
         guard let actual = actualFrames.last else {
             return .failed(.frameDidNotConverge(target: target, actual: .null, attempts: 0))
+        }
+        let repeatedStableFrame = actualFrames.dropLast().last.map {
+            $0.narwhalApproximatelyEquals(actual, tolerance: frameWriteSettleTolerance)
+        } == true
+        if repeatedStableFrame,
+           frameWriteGridSnapSettled(
+               target: target,
+               actual: actual,
+               tolerance: Double(frameWriteSettleTolerance)
+           ) {
+            return .converged(actual: actual)
         }
         if frameWriteContainmentCorrection(
             target: target,

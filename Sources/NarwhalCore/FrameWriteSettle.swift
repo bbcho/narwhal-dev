@@ -7,6 +7,29 @@ public func frameWriteApproximatelySettled(
     maxEdgeDrift: Double = 48,
     minimumOverlapRatio: Double = 0.90
 ) -> Bool {
+    guard frameWriteNearTarget(
+        target: target,
+        actual: actual,
+        tolerance: tolerance,
+        maxEdgeDrift: maxEdgeDrift,
+        minimumOverlapRatio: minimumOverlapRatio
+    ) else {
+        return false
+    }
+    return expandedDimensionsAreEdgeNormalized(
+        target: target,
+        actual: actual,
+        tolerance: CGFloat(max(0, tolerance))
+    )
+}
+
+public func frameWriteNearTarget(
+    target: CGRect,
+    actual: CGRect,
+    tolerance: Double,
+    maxEdgeDrift: Double = 48,
+    minimumOverlapRatio: Double = 0.90
+) -> Bool {
     let tolerance = CGFloat(max(0, tolerance))
     if target.narwhalApproximatelyEquals(actual, tolerance: tolerance) {
         return true
@@ -24,9 +47,6 @@ public func frameWriteApproximatelySettled(
     else {
         return false
     }
-    guard expandedDimensionsAreEdgeNormalized(target: target, actual: actual, tolerance: tolerance) else {
-        return false
-    }
 
     let intersection = target.intersection(actual)
     guard intersection.narwhalIsFinitePositive else { return false }
@@ -41,19 +61,27 @@ public func frameWriteContainmentCorrection(
     containmentTolerance: Double = 0.5,
     correctionMargin: Double? = nil
 ) -> CGRect? {
-    guard frameWriteApproximatelySettled(
+    guard target.narwhalIsFinitePositive, actual.narwhalIsFinitePositive else {
+        return nil
+    }
+
+    let tolerance = CGFloat(max(0, tolerance))
+    let leadingX = max(0, target.minX - actual.minX)
+    let trailingX = max(0, actual.maxX - target.maxX)
+    let leadingY = max(0, target.minY - actual.minY)
+    let trailingY = max(0, actual.maxY - target.maxY)
+    let maximumRoundingOverflow = max(tolerance * 2, 12)
+    let canRetrySmallOverflow = [leadingX, trailingX, leadingY, trailingY]
+        .allSatisfy { $0 <= maximumRoundingOverflow }
+    guard canRetrySmallOverflow || frameWriteApproximatelySettled(
         target: target,
         actual: actual,
-        tolerance: tolerance
+        tolerance: Double(tolerance)
     ) else {
         return nil
     }
 
     let containmentTolerance = CGFloat(max(0, containmentTolerance))
-    let leadingX = max(0, target.minX - actual.minX)
-    let trailingX = max(0, actual.maxX - target.maxX)
-    let leadingY = max(0, target.minY - actual.minY)
-    let trailingY = max(0, actual.maxY - target.maxY)
     guard leadingX > containmentTolerance
             || trailingX > containmentTolerance
             || leadingY > containmentTolerance
@@ -62,7 +90,7 @@ public func frameWriteContainmentCorrection(
         return nil
     }
 
-    let margin = CGFloat(max(0, correctionMargin ?? tolerance))
+    let margin = CGFloat(max(0, correctionMargin ?? Double(tolerance)))
     let leadingXCorrection = leadingX > containmentTolerance ? leadingX + margin : 0
     let trailingXCorrection = trailingX > containmentTolerance ? trailingX + margin : 0
     let leadingYCorrection = leadingY > containmentTolerance ? leadingY + margin : 0
@@ -74,6 +102,33 @@ public func frameWriteContainmentCorrection(
         height: target.height - leadingYCorrection - trailingYCorrection
     )
     return correction.narwhalIsFinitePositive ? correction : nil
+}
+
+public func frameWriteGridSnapSettled(
+    target: CGRect,
+    actual: CGRect,
+    tolerance: Double,
+    maximumExpansion: Double = 12,
+    maximumDimensionDrift: Double = 48
+) -> Bool {
+    guard target.narwhalIsFinitePositive, actual.narwhalIsFinitePositive else { return false }
+    let tolerance = CGFloat(max(0, tolerance))
+    guard abs(target.minX - actual.minX) <= tolerance,
+          abs(target.minY - actual.minY) <= tolerance
+    else {
+        return false
+    }
+
+    let maximumExpansion = CGFloat(max(0, maximumExpansion))
+    guard actual.width - target.width <= maximumExpansion,
+          actual.height - target.height <= maximumExpansion
+    else {
+        return false
+    }
+
+    let maximumDimensionDrift = CGFloat(max(0, maximumDimensionDrift))
+    return abs(target.width - actual.width) <= maximumDimensionDrift
+        && abs(target.height - actual.height) <= maximumDimensionDrift
 }
 
 public func frameSizeApproximatelySettled(

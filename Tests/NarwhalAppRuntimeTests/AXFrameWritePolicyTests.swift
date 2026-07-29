@@ -68,8 +68,8 @@ struct AXFrameWritePolicyTests {
         }
     }
 
-    @Test("Uncorrected Terminal character-grid spill is not accepted as a successful write")
-    func uncorrectedTerminalCharacterGridSpillIsNotConverged() {
+    @Test("Stable Terminal grid spill is deferred to topology reconciliation")
+    func stableTerminalGridSpillConvergesAfterRetries() {
         let target = CGRect(x: 1504, y: 550.666_666_666_7, width: 1504, height: 520.666_666_666_7)
         let actual = CGRect(x: 1504, y: 551, width: 1507, height: 525)
 
@@ -77,10 +77,10 @@ struct AXFrameWritePolicyTests {
             target: target,
             actualFrames: [actual, actual]
         ) {
-        case .failed:
-            break
-        case .converged, .clamped:
-            #expect(Bool(false), "Expected an uncorrected frame spill to fail")
+        case .converged(let settled):
+            #expect(settled == actual)
+        case .clamped, .failed:
+            #expect(Bool(false), "Expected stable grid snapping to reach topology reconciliation")
         }
     }
 
@@ -120,6 +120,30 @@ struct AXFrameWritePolicyTests {
         #expect(!axFrameWriteRequiresElementRefresh(
             .setAttributeFailed("AXPosition", .illegalArgument)
         ))
+    }
+
+    @Test("Initial write does not correct a stale pre-write position")
+    func initialWriteUsesRequestedTarget() {
+        let target = CGRect(x: 4, y: 57, width: 2_998, height: 371)
+        let stale = CGRect(x: 4, y: 34, width: 2_998, height: 371)
+
+        #expect(axFrameWriteRetryTarget(
+            target: target,
+            actual: stale,
+            previousAttemptCount: 0
+        ) == target)
+    }
+
+    @Test("A read-back overflow enables bounded containment correction")
+    func retryCorrectsObservedOverflow() {
+        let target = CGRect(x: 4, y: 34, width: 744, height: 1_554)
+        let observed = CGRect(x: 4, y: 34, width: 744, height: 1_561)
+
+        #expect(axFrameWriteRetryTarget(
+            target: target,
+            actual: observed,
+            previousAttemptCount: 1
+        ) == CGRect(x: 4, y: 34, width: 744, height: 1_543))
     }
 
     @Test("A stale contained frame with excessive dimension drift is not converged")
