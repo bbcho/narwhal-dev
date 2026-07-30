@@ -32,6 +32,7 @@ enum FocusedUnavailablePollingVerification {
         service.pollFocusedWindowNow()
         service.pollFocusedWindowNow()
         service.stop()
+        reporter.flush()
 
         guard emitted.isEmpty else {
             return (false, "focused-unavailable polling emitted unexpected AX events: \(emitted)")
