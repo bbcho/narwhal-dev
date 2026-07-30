@@ -180,18 +180,11 @@ public func layoutFrameWriteIntents(
 }
 
 private func layoutFrameWriteOrder(for plan: CommandPlanResult) -> [WindowID] {
-    let ordered = plan.desiredLayout.delta.moves.keys.sorted { $0.raw < $1.raw }
-    guard let focusedWindowID = plan.focusedWindowID,
-          ordered.contains(focusedWindowID)
-    else {
-        return ordered
-    }
-
-    let remaining = ordered.filter { $0 != focusedWindowID }
-    if plan.desiredLayout.delta.shows.contains(focusedWindowID) {
-        return [focusedWindowID] + remaining
-    }
-    return remaining + [focusedWindowID]
+    leadingFrameWriteOrder(
+        planned: plan.desiredLayout.layout.tiled,
+        candidates: Set(plan.desiredLayout.delta.moves.keys),
+        innerGap: plan.plannedWorld.config.gaps.inner
+    )
 }
 
 private func plannedLayoutFocusUpdate(

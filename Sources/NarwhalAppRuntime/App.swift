@@ -2314,8 +2314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             result,
             operation: "Resize \(direction.rawValue) \(deltas)",
             persistReason: "resize \(direction.rawValue) \(deltas)",
-            retryOnClamp: retryOnClamp,
-            writeStrategy: .coordinated
+            retryOnClamp: retryOnClamp
         ) {
             await self.worldActor.planResizeSequence(windowID, direction: direction, deltas: deltas)
         }
@@ -2492,7 +2491,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         retryOnClamp: Bool,
         showFocusBorder: Bool = true,
         preserving preservedFrames: [WindowID: CGRect] = [:],
-        writeStrategy: LayoutFrameWriteStrategy = .sequential,
         clampRetryState: LayoutClampRetryState? = nil,
         replanAfterClamp: () async -> Result<CommandPlanResult, CommandError>
     ) async -> Bool {
@@ -2503,7 +2501,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             axClient: axClient,
             reporter: reporter,
             echoSuppressor: echoSuppressor
-        ).apply(result, preserving: preservedFrames, strategy: writeStrategy)
+        ).apply(result, preserving: preservedFrames)
         switch plannedLayoutApplyDecision(plan: result, applyResult: applyResult, retryOnClamp: retryOnClamp) {
         case .commit(let appliedFrames, let focusUpdate):
             guard await worldActor.commit(result, appliedFrames: appliedFrames) else {
@@ -2576,7 +2574,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     persistReason: persistReason,
                     retryOnClamp: retryOnClamp,
                     preserving: preservedFrames,
-                    writeStrategy: writeStrategy,
                     clampRetryState: nextRetryState,
                     replanAfterClamp: replanAfterClamp
                 )
@@ -2861,8 +2858,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 persistReason: "manual resize",
                 retryOnClamp: true,
                 showFocusBorder: snapshot != nil,
-                preserving: preservedFrames,
-                writeStrategy: .coordinated
+                preserving: preservedFrames
             ) {
                 await self.replanExternalGeometryAfterClamp(result)
             }
@@ -3074,8 +3070,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 operation: "Display reflow",
                 persistReason: "display topology",
                 retryOnClamp: true,
-                showFocusBorder: false,
-                writeStrategy: .coordinated
+                showFocusBorder: false
             ) {
                 await self.currentLayoutRetryPlan()
             }

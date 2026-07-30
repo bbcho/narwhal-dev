@@ -4,6 +4,24 @@ import Testing
 
 @Suite("Snapped application frame gaps")
 struct SnappedFrameGapTests {
+    @Test("Frame writes follow seam dependencies instead of window IDs")
+    func leadingWriteOrder() {
+        let left = WindowID(raw: 30)
+        let middle = WindowID(raw: 10)
+        let right = WindowID(raw: 20)
+        let planned = [
+            left: CGRect(x: 0, y: 0, width: 500, height: 800),
+            middle: CGRect(x: 508, y: 0, width: 500, height: 800),
+            right: CGRect(x: 1_016, y: 0, width: 500, height: 800),
+        ]
+
+        #expect(leadingFrameWriteOrder(
+            planned: planned,
+            candidates: Set(planned.keys),
+            innerGap: 8
+        ) == [left, middle, right])
+    }
+
     @Test("Terminal-sized horizontal tiles keep the configured interior gap")
     func horizontalTerminalFrames() throws {
         let planned = horizontalFrames(widths: [602, 602, 601, 602, 601], height: 781)

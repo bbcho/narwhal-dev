@@ -2,11 +2,6 @@ import CoreGraphics
 import NarwhalAppSupport
 import NarwhalCore
 
-enum LayoutFrameWriteStrategy {
-    case sequential
-    case coordinated
-}
-
 @MainActor
 struct LayoutApplier {
     let frameWriter: WindowFrameWriter
@@ -19,335 +14,195 @@ struct LayoutApplier {
         self.echoSuppressor = echoSuppressor
     }
 
-    func apply(
-        _ result: CommandPlanResult,
-        preserving preservedFrames: [WindowID: CGRect] = [:],
-        strategy: LayoutFrameWriteStrategy = .sequential
-    ) async -> LayoutApplyResult {
-        let applyResult = LayoutApplyResult(applied: preservedFrames, clamps: [], failures: [])
-        reporter.info("Applying layout generation=\(result.desiredLayout.generation.raw) tiledCount=\(result.desiredLayout.layout.tiled.count)")
-
-        let intents = layoutFrameWriteIntents(for: result, excluding: Set(preservedFrames.keys))
-        let initial: LayoutApplyResult
-        switch strategy {
-        case .sequential:
-            initial = await applySequentially(intents, startingWith: applyResult)
-        case .coordinated:
-            initial = await applyCoordinated(intents, startingWith: applyResult)
-        }
-        guard initial.succeeded else { return initial }
-        return await reconcileConfiguredGaps(
-            for: result,
-            after: initial,
-            preserving: Set(preservedFrames.keys),
-            strategy: strategy
-        )
+    init(
+        frameWriter: WindowFrameWriter,
+        reporter: StartupReporter,
+        echoSuppressor: AXEchoSuppressor? = nil
+    ) {
+        self.frameWriter = frameWriter
+        self.reporter = reporter
+        self.echoSuppressor = echoSuppressor
     }
 
-    private func reconcileConfiguredGaps(
-        for plan: CommandPlanResult,
-        after initial: LayoutApplyResult,
-        preserving preservedWindowIDs: Set<WindowID>,
-        strategy: LayoutFrameWriteStrategy
+    func apply(
+        _ plan: CommandPlanResult,
+        preserving preservedFrames: [WindowID: CGRect] = [:]
     ) async -> LayoutApplyResult {
-        let plannedFrames = plan.desiredLayout.layout.tiled
-        let observedFrames = plannedFrames.reduce(into: [WindowID: CGRect]()) { frames, entry in
-            if let frame = initial.applied[entry.key] ?? plan.windows[entry.key]?.frame {
-                frames[entry.key] = frame
-            }
-        }
-        guard observedFrames.count == plannedFrames.count else {
-            let missing = plannedFrames.keys
-                .filter { observedFrames[$0] == nil }
-                .sorted { $0.raw < $1.raw }
-            guard let windowID = missing.first, let target = plannedFrames[windowID] else { return initial }
-            return recordLayoutFrameWrite(
-                windowID: windowID,
-                targetFrame: target,
-                observation: .failed(message: "missing actual frame for configured-gap reconciliation"),
-                in: initial
-            ).result
-        }
+        let planned = plan.desiredLayout.layout.tiled.mapValues(canonicalFrameWriteTarget)
+        let movingWindowIDs = Set(plan.desiredLayout.delta.moves.keys)
+            .subtracting(preservedFrames.keys)
+        var result = LayoutApplyResult(
+            applied: initiallyAcceptedFrames(
+                planned: planned,
+                movingWindowIDs: movingWindowIDs,
+                windows: plan.windows,
+                preservedFrames: preservedFrames
+            ),
+            clamps: [],
+            failures: []
+        )
+        reporter.info(
+            "Applying layout generation=\(plan.desiredLayout.generation.raw) "
+                + "tiledCount=\(planned.count) writeCount=\(movingWindowIDs.count)"
+        )
 
-        var reflowed = observedFrames
-        var idsByDisplay: [DisplayID: [WindowID]] = [:]
-        for windowID in plannedFrames.keys {
-            guard let displayID = plan.plannedWorld.windowDisplay[windowID] else { continue }
-            idsByDisplay[displayID, default: []].append(windowID)
-        }
-        guard idsByDisplay.values.reduce(0, { $0 + $1.count }) == plannedFrames.count else {
-            let missing = plannedFrames.keys
-                .filter { plan.plannedWorld.windowDisplay[$0] == nil }
-                .sorted { $0.raw < $1.raw }
-            guard let windowID = missing.first, let target = plannedFrames[windowID] else { return initial }
-            return recordLayoutFrameWrite(
-                windowID: windowID,
-                targetFrame: target,
-                observation: .failed(message: "missing display ownership for configured-gap reconciliation"),
-                in: initial
-            ).result
-        }
-        var bestEffortDisplays = Set<DisplayID>()
-        var stableBestEffortDisplays = Set<DisplayID>()
-        for (displayID, windowIDs) in idsByDisplay {
-            let ids = Set(windowIDs)
-            let displayPlanned = plannedFrames.filter { ids.contains($0.key) }
-            let displayActual = observedFrames.filter { ids.contains($0.key) }
+        let orderedWindowIDs = leadingFrameWriteOrder(
+            planned: planned,
+            candidates: movingWindowIDs,
+            innerGap: plan.plannedWorld.config.gaps.inner
+        )
+        for windowID in orderedWindowIDs {
+            guard let metadata = plan.windows[windowID],
+                  let plannedFrame = planned[windowID]
+            else {
+                let target = planned[windowID] ?? .null
+                reporter.error("No metadata for \(windowID.description); stopping frame writes")
+                return recordLayoutFrameWrite(
+                    windowID: windowID,
+                    targetFrame: target,
+                    observation: .failed(message: "missing window metadata"),
+                    in: result
+                ).result
+            }
+
+            let actualAndPending = planned.merging(result.applied) { _, actual in actual }
+            let target: CGRect
             switch reflowSnappedFrames(
-                planned: displayPlanned,
-                actual: displayActual,
+                planned: planned,
+                actual: actualAndPending,
                 innerGap: plan.plannedWorld.config.gaps.inner,
-                anchoredWindowIDs: preservedWindowIDs.intersection(ids),
+                anchoredWindowIDs: Set(result.applied.keys),
                 tolerance: Double(configuredGapTolerance)
             ) {
-            case .success(let frames):
-                reflowed.merge(frames) { _, replacement in replacement }
+            case .success(let reflowed):
+                target = canonicalFrameWriteTarget(reflowed[windowID] ?? plannedFrame)
             case .failure(let conflict):
-                switch reflowSnappedFramesBestEffort(
-                    planned: displayPlanned,
-                    actual: displayActual,
-                    innerGap: plan.plannedWorld.config.gaps.inner,
-                    anchoredWindowIDs: preservedWindowIDs.intersection(ids),
-                    tolerance: Double(configuredGapTolerance),
-                    maximumOuterDrift: Double(appGridOuterDriftTolerance)
-                ) {
-                case .success(let frames):
-                    let stableFrames = frames.reduce(into: [WindowID: CGRect]()) { result, entry in
-                        guard let observed = displayActual[entry.key] else {
-                            result[entry.key] = entry.value
-                            return
-                        }
-                        var origin = entry.value.origin
-                        if abs(origin.x - observed.minX) <= appGridGapFallbackTolerance {
-                            origin.x = observed.minX
-                        }
-                        if abs(origin.y - observed.minY) <= appGridGapFallbackTolerance {
-                            origin.y = observed.minY
-                        }
-                        result[entry.key] = CGRect(origin: origin, size: entry.value.size)
-                    }
-                    let stableResiduals = innerGapViolations(
-                        planned: displayPlanned,
-                        actual: stableFrames,
-                        innerGap: plan.plannedWorld.config.gaps.inner,
-                        tolerance: Double(configuredGapTolerance)
-                    )
-                    let stableFramesAreBounded = stableResiduals.allSatisfy {
-                        $0.actual >= -Double(configuredGapTolerance)
-                            && abs($0.actual - $0.expected) <= Double(appGridGapFallbackTolerance)
-                    }
-                    let candidateFrames = stableFramesAreBounded ? stableFrames : frames
-                    let residuals = stableFramesAreBounded
-                        ? stableResiduals
-                        : innerGapViolations(
-                            planned: displayPlanned,
-                            actual: frames,
-                            innerGap: plan.plannedWorld.config.gaps.inner,
-                            tolerance: Double(configuredGapTolerance)
-                        )
-                    guard residuals.allSatisfy({
-                        $0.actual >= -Double(configuredGapTolerance)
-                            && abs($0.actual - $0.expected) <= Double(appGridGapFallbackTolerance)
-                    }) else {
-                        return gapConflictFailure(
-                            conflict,
-                            plannedFrames: plannedFrames,
-                            startingWith: initial
-                        )
-                    }
-                    bestEffortDisplays.insert(displayID)
-                    if stableFramesAreBounded {
-                        stableBestEffortDisplays.insert(displayID)
-                    }
-                    reflowed.merge(candidateFrames) { _, replacement in replacement }
-                    reporter.info(
-                        "Using bounded gap reconciliation display=\(displayID.raw) "
-                            + "maximumDeviation=\(residuals.map { abs($0.actual - $0.expected) }.max() ?? 0)"
-                    )
-                case .failure:
-                    return gapConflictFailure(
-                        conflict,
-                        plannedFrames: plannedFrames,
-                        startingWith: initial
-                    )
-                }
-            }
-        }
-
-        let correctionFrames = reflowed.mapValues { frame in
-            CGRect(
-                x: frame.minX.rounded(),
-                y: frame.minY.rounded(),
-                width: frame.width,
-                height: frame.height
-            )
-        }
-        let corrections = correctionFrames.keys
-            .filter { windowID in
-                guard !preservedWindowIDs.contains(windowID),
-                      let before = observedFrames[windowID],
-                      let after = correctionFrames[windowID]
-                else {
-                    return false
-                }
-                let tolerance = plan.plannedWorld.windowDisplay[windowID].map {
-                    stableBestEffortDisplays.contains($0)
-                        ? appGridGapFallbackTolerance
-                        : configuredGapTolerance
-                } ?? configuredGapTolerance
-                return !before.origin.narwhalApproximatelyEquals(
-                    after.origin,
-                    tolerance: tolerance
+                return gapConflictFailure(
+                    conflict,
+                    targetFrame: plannedFrame,
+                    startingWith: result
                 )
             }
-            .sorted { $0.raw < $1.raw }
-            .map { windowID -> LayoutFrameWriteIntent in
-                guard let metadata = plan.windows[windowID], let frame = correctionFrames[windowID] else {
-                    return .missingMetadata(windowID: windowID, targetFrame: plannedFrames[windowID] ?? .null)
-                }
-                return .write(windowID: windowID, metadata: metadata, targetFrame: frame)
-            }
 
-        var reconciled = LayoutApplyResult(
-            applied: observedFrames,
-            clamps: initial.clamps,
-            failures: initial.failures
-        )
-        if !corrections.isEmpty {
-            reporter.info("Reconciling configured gaps correctionCount=\(corrections.count)")
-            switch strategy {
-            case .sequential:
-                reconciled = await applySequentially(corrections, startingWith: reconciled)
-            case .coordinated:
-                reconciled = await applyCoordinated(corrections, startingWith: reconciled)
+            echoSuppressor?.expectFrame(windowID: windowID, targetFrame: target)
+            let adapter = metadata.bundleID.raw == "com.apple.Terminal" ? "Terminal bounds" : "Accessibility"
+            reporter.info(
+                "Writing \(windowID.description) adapter=\(adapter) target=\(target.debugDescription)"
+            )
+            let outcome = await frameWriter.setFrame(metadata, to: target)
+            result = record(outcome, windowID: windowID, targetFrame: target, in: result)
+            switch outcome {
+            case .converged, .constrained:
+                continue
+            case .clamped, .failed:
+                return result
             }
         }
-        guard reconciled.succeeded else { return reconciled }
 
-        for (displayID, windowIDs) in idsByDisplay {
-            let ids = Set(windowIDs)
-            let violations = innerGapViolations(
-                planned: plannedFrames.filter { ids.contains($0.key) },
-                actual: reconciled.applied.filter { ids.contains($0.key) },
-                innerGap: plan.plannedWorld.config.gaps.inner,
-                tolerance: Double(configuredGapTolerance)
-            )
-            let violation = bestEffortDisplays.contains(displayID)
-                ? violations.first {
-                    $0.actual < -Double(configuredGapTolerance)
-                        || abs($0.actual - $0.expected) > Double(appGridGapFallbackTolerance)
-                }
-                : violations.first
-            guard let violation,
-                  let target = plannedFrames[violation.after]
+        return validateAppliedLayout(plan: plan, planned: planned, result: result)
+    }
+
+    private func initiallyAcceptedFrames(
+        planned: [WindowID: CGRect],
+        movingWindowIDs: Set<WindowID>,
+        windows: [WindowID: WindowMetadata],
+        preservedFrames: [WindowID: CGRect]
+    ) -> [WindowID: CGRect] {
+        planned.reduce(into: preservedFrames) { accepted, entry in
+            guard !movingWindowIDs.contains(entry.key),
+                  accepted[entry.key] == nil,
+                  let frame = windows[entry.key]?.frame
             else {
-                continue
+                return
             }
+            accepted[entry.key] = frame
+        }
+    }
+
+    private func validateAppliedLayout(
+        plan: CommandPlanResult,
+        planned: [WindowID: CGRect],
+        result: LayoutApplyResult
+    ) -> LayoutApplyResult {
+        let missing = planned.keys
+            .filter { result.applied[$0] == nil }
+            .sorted { $0.raw < $1.raw }
+        if let windowID = missing.first, let target = planned[windowID] {
+            return recordLayoutFrameWrite(
+                windowID: windowID,
+                targetFrame: target,
+                observation: .failed(message: "missing final frame readback"),
+                in: result
+            ).result
+        }
+
+        let violations = innerGapViolations(
+            planned: planned,
+            actual: result.applied,
+            innerGap: plan.plannedWorld.config.gaps.inner,
+            tolerance: Double(configuredGapTolerance)
+        )
+        if let violation = violations.first,
+           let target = planned[violation.after] {
             return recordLayoutFrameWrite(
                 windowID: violation.after,
                 targetFrame: target,
                 observation: .failed(
                     message: "configured gap expected=\(violation.expected) actual=\(violation.actual)"
                 ),
-                in: reconciled
+                in: result
             ).result
         }
-        return reconciled
+
+        if let overlap = firstOverlap(in: result.applied),
+           let target = planned[overlap.second] {
+            return recordLayoutFrameWrite(
+                windowID: overlap.second,
+                targetFrame: target,
+                observation: .failed(
+                    message: "visible frames overlap \(overlap.first.description) and \(overlap.second.description)"
+                ),
+                in: result
+            ).result
+        }
+        return result
+    }
+
+    private func firstOverlap(
+        in frames: [WindowID: CGRect]
+    ) -> (first: WindowID, second: WindowID)? {
+        let ids = frames.keys.sorted { $0.raw < $1.raw }
+        for firstIndex in ids.indices {
+            for secondIndex in ids.indices.dropFirst(firstIndex + 1) {
+                let firstID = ids[firstIndex]
+                let secondID = ids[secondIndex]
+                guard let first = frames[firstID],
+                      let second = frames[secondID],
+                      first.intersection(second).narwhalArea > configuredGapTolerance
+                else {
+                    continue
+                }
+                return (firstID, secondID)
+            }
+        }
+        return nil
     }
 
     private func gapConflictFailure(
         _ conflict: SnappedFrameGapConflict,
-        plannedFrames: [WindowID: CGRect],
+        targetFrame: CGRect,
         startingWith result: LayoutApplyResult
     ) -> LayoutApplyResult {
-        guard let windowID = conflict.windows.first,
-              let target = plannedFrames[windowID]
-        else {
-            return result
-        }
         let windows = conflict.windows.map(\.description).joined(separator: ",")
+        let windowID = conflict.windows.first ?? WindowID(raw: 0)
         return recordLayoutFrameWrite(
             windowID: windowID,
-            targetFrame: target,
+            targetFrame: targetFrame,
             observation: .failed(
                 message: "configured \(conflict.axis.rawValue) gap is physically inconsistent for \(windows)"
             ),
             in: result
         ).result
-    }
-
-    private func applySequentially(
-        _ intents: [LayoutFrameWriteIntent],
-        startingWith initial: LayoutApplyResult
-    ) async -> LayoutApplyResult {
-        var applyResult = initial
-        applyLoop: for intent in intents {
-            switch intent {
-            case .missingMetadata(let windowID, let frame):
-                reporter.error("No metadata for \(windowID.description); skipping frame write")
-                applyResult = recordLayoutFrameWrite(
-                    windowID: windowID,
-                    targetFrame: frame,
-                    observation: .failed(message: "missing window metadata"),
-                    in: applyResult
-                ).result
-                break applyLoop
-
-            case .write(let windowID, let metadata, let frame):
-                let target = canonicalFrameWriteTarget(frame)
-                echoSuppressor?.expectFrame(windowID: windowID, targetFrame: target)
-                let outcome = await frameWriter.setFrame(metadata, to: target)
-                applyResult = record(outcome, windowID: windowID, targetFrame: target, in: applyResult)
-                guard case .converged = outcome else {
-                    if case .constrained = outcome {
-                        continue
-                    }
-                    break applyLoop
-                }
-            }
-        }
-
-        return applyResult
-    }
-
-    private func applyCoordinated(
-        _ intents: [LayoutFrameWriteIntent],
-        startingWith initial: LayoutApplyResult
-    ) async -> LayoutApplyResult {
-        var applyResult = initial
-        let missing = intents.compactMap { intent -> (WindowID, CGRect)? in
-            guard case .missingMetadata(let windowID, let frame) = intent else { return nil }
-            return (windowID, frame)
-        }
-        guard missing.isEmpty else {
-            for (windowID, frame) in missing {
-                reporter.error("No metadata for \(windowID.description); skipping coordinated frame writes")
-                applyResult = recordLayoutFrameWrite(
-                    windowID: windowID,
-                    targetFrame: frame,
-                    observation: .failed(message: "missing window metadata"),
-                    in: applyResult
-                ).result
-            }
-            return applyResult
-        }
-
-        let writes = intents.compactMap { intent -> (windowID: WindowID, metadata: WindowMetadata, frame: CGRect)? in
-            guard case .write(let windowID, let metadata, let frame) = intent else { return nil }
-            return (windowID, metadata, frame)
-        }
-        for write in writes {
-            let target = canonicalFrameWriteTarget(write.frame)
-            echoSuppressor?.expectFrame(windowID: write.windowID, targetFrame: target)
-            let outcome = await frameWriter.setFrame(write.metadata, to: target)
-            applyResult = record(
-                outcome,
-                windowID: write.windowID,
-                targetFrame: target,
-                in: applyResult
-            )
-        }
-        return applyResult
     }
 
     private func record(
@@ -358,7 +213,10 @@ struct LayoutApplier {
     ) -> LayoutApplyResult {
         switch outcome {
         case .converged(let actual):
-            reporter.info("Applied \(windowID.description) target=\(targetFrame.debugDescription) actual=\(actual.debugDescription)")
+            reporter.info(
+                "Applied \(windowID.description) target=\(targetFrame.debugDescription) "
+                    + "AX=\(actual.debugDescription) WindowServer=\(actual.debugDescription) outcome=exact"
+            )
             return recordLayoutFrameWrite(
                 windowID: windowID,
                 targetFrame: targetFrame,
@@ -367,7 +225,8 @@ struct LayoutApplier {
             ).result
         case .constrained(let actual):
             reporter.info(
-                "Constrained \(windowID.description) target=\(targetFrame.debugDescription) actual=\(actual.debugDescription)"
+                "Applied \(windowID.description) target=\(targetFrame.debugDescription) "
+                    + "AX=\(actual.debugDescription) WindowServer=\(actual.debugDescription) outcome=constrained"
             )
             return recordLayoutFrameWrite(
                 windowID: windowID,
@@ -377,7 +236,8 @@ struct LayoutApplier {
             ).result
         case .clamped(let actual, let observed):
             reporter.info(
-                "Clamped \(windowID.description) target=\(targetFrame.debugDescription) actual=\(actual.debugDescription) observed=\(observed.debugDescription)"
+                "Clamped \(windowID.description) target=\(targetFrame.debugDescription) "
+                    + "actual=\(actual.debugDescription) observed=\(observed.debugDescription)"
             )
             return recordLayoutFrameWrite(
                 windowID: windowID,

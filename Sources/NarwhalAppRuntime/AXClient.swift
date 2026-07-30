@@ -955,44 +955,22 @@ struct AXClient {
         matching metadata: WindowMetadata?,
         to frame: CGRect
     ) async -> AXFrameWriteOutcome {
-        var observedFrames: [CGRect] = []
-        var appliedFrame = frame
         var element = initialElement
+        let currentFrame = try? focusedWindowFrame(element).get()
+        if let currentFrame,
+           axFrameWriteSettledInsideTarget(target: frame, actual: currentFrame) {
+            return .converged(actual: currentFrame)
+        }
+        let positionFirst = axFrameWriteOrder(
+            current: currentFrame,
+            target: frame
+        ) == .positionThenSize
 
-        for _ in 1...Self.frameWriteAttemptCount {
-            let currentFrame: CGRect?
-            switch focusedWindowFrame(element) {
-            case .success(let current):
-                if axFrameWriteSettledInsideTarget(target: frame, actual: current) {
-                    return .converged(actual: current)
-                }
-                currentFrame = current
-                appliedFrame = frame
-            case .failure:
-                currentFrame = nil
-                appliedFrame = frame
-            }
-
-            let positionFirst = axFrameWriteOrder(current: currentFrame, target: appliedFrame) == .positionThenSize
-
-            if positionFirst {
-                switch await retryingInvalidWindowElement(
-                    element,
-                    matching: metadata,
-                    write: { setPosition(appliedFrame.origin, on: $0) }
-                ) {
-                case .success(let refreshed):
-                    element = refreshed
-                    await settle(for: Self.frameWriteSettleInterval)
-                case .failure(let error):
-                    return .failed(error)
-                }
-            }
-
+        if positionFirst {
             switch await retryingInvalidWindowElement(
                 element,
                 matching: metadata,
-                write: { setSize(appliedFrame.size, on: $0) }
+                write: { setPosition(frame.origin, on: $0) }
             ) {
             case .success(let refreshed):
                 element = refreshed
@@ -1000,41 +978,51 @@ struct AXClient {
             case .failure(let error):
                 return .failed(error)
             }
+        }
 
-            switch await retryingInvalidWindowElement(
-                element,
-                matching: metadata,
-                write: { setPosition(appliedFrame.origin, on: $0) }
-            ) {
-            case .success(let refreshed):
-                element = refreshed
-                await settle(for: Self.frameWriteSettleInterval)
-            case .failure(let error):
-                return .failed(error)
-            }
+        switch await retryingInvalidWindowElement(
+            element,
+            matching: metadata,
+            write: { setSize(frame.size, on: $0) }
+        ) {
+        case .success(let refreshed):
+            element = refreshed
+            await settle(for: Self.frameWriteSettleInterval)
+        case .failure(let error):
+            return .failed(error)
+        }
 
+        switch await retryingInvalidWindowElement(
+            element,
+            matching: metadata,
+            write: { setPosition(frame.origin, on: $0) }
+        ) {
+        case .success(let refreshed):
+            element = refreshed
+        case .failure(let error):
+            return .failed(error)
+        }
+
+        var observedFrames: [CGRect] = []
+        for _ in 0..<Self.frameWriteAttemptCount {
+            await settle(for: Self.frameWriteSettleInterval)
             switch focusedWindowFrame(element) {
             case .success(let actual):
                 if axFrameWriteSettledInsideTarget(target: frame, actual: actual) {
                     return .converged(actual: actual)
                 }
                 observedFrames.append(actual)
+                let isStable = observedFrames.dropLast().last.map {
+                    $0.narwhalApproximatelyEquals(actual, tolerance: configuredGapTolerance)
+                } == true
+                if isStable {
+                    return frameWriteDidNotConverge(target: frame, actualFrames: observedFrames)
+                }
             case .failure(let error):
                 return .failed(error)
             }
         }
-
-        await settle(for: Self.constraintConfirmationInterval)
-        switch focusedWindowFrame(element) {
-        case .success(let actual):
-            if axFrameWriteSettledInsideTarget(target: frame, actual: actual) {
-                return .converged(actual: actual)
-            }
-            observedFrames.append(actual)
-            return frameWriteDidNotConverge(target: frame, actualFrames: observedFrames)
-        case .failure(let error):
-            return .failed(error)
-        }
+        return frameWriteDidNotConverge(target: frame, actualFrames: observedFrames)
     }
 
     @MainActor
@@ -1064,7 +1052,7 @@ struct AXClient {
             return .failed(.frameDidNotConverge(target: target, actual: .null, attempts: 0))
         }
         let repeatedStableFrame = actualFrames.dropLast().last.map {
-            $0.narwhalApproximatelyEquals(actual, tolerance: frameWriteSettleTolerance)
+            $0.narwhalApproximatelyEquals(actual, tolerance: configuredGapTolerance)
         } == true
         if axFrameWriteSettledInsideTarget(target: target, actual: actual) {
             return .converged(actual: actual)

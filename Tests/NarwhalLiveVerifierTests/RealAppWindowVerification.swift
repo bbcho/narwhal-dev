@@ -982,8 +982,7 @@ enum RealAppWindowVerification {
             worldActor: worldActor,
             applier: applier,
             allowNoMove: true,
-            requireNearPlan: false,
-            strategy: .coordinated
+            requireNearPlan: false
         )
         try requireEqualAxisLayout(
             frames,
@@ -1906,8 +1905,7 @@ enum RealAppWindowVerification {
                 )
             },
             worldActor: worldActor,
-            applier: applier,
-            strategy: .coordinated
+            applier: applier
         )
 
         try await applyWorkflowCommand(
@@ -1994,8 +1992,7 @@ enum RealAppWindowVerification {
             "Chrome over Firefox Firefox reserve shrink room",
             plan: { await worldActor.planResize(firefoxBefore.id, direction: .up, delta: Self.browserResizeReserveDelta) },
             worldActor: worldActor,
-            applier: applier,
-            strategy: .coordinated
+            applier: applier
         )
 
         try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
@@ -2013,8 +2010,7 @@ enum RealAppWindowVerification {
             "Chrome over Firefox Chrome resize down",
             plan: { await worldActor.planResize(chromeBefore.id, direction: .down, delta: 0.10) },
             worldActor: worldActor,
-            applier: applier,
-            strategy: .coordinated
+            applier: applier
         )
         let coordinatedResizeDuration = ProcessInfo.processInfo.systemUptime - coordinatedResizeStarted
         guard coordinatedResizeDuration <= Self.coordinatedResizeDeadline else {
@@ -2141,8 +2137,7 @@ enum RealAppWindowVerification {
                 "manual browser resize Firefox reserve shrink room \(attempt)",
                 plan: { await worldActor.planResize(firefoxAfterReserve.id, direction: .up, delta: 0.35) },
                 worldActor: worldActor,
-                applier: applier,
-                strategy: .coordinated
+                applier: applier
             )
 
             try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
@@ -2778,8 +2773,7 @@ enum RealAppWindowVerification {
         applier: LayoutApplier,
         allowNoMove: Bool = false,
         allowConstraintRetry: Bool = true,
-        requireNearPlan: Bool = true,
-        strategy: LayoutFrameWriteStrategy = .sequential
+        requireNearPlan: Bool = true
     ) async throws -> [WindowID: CGRect] {
         let first = try await requireWorkflowPlan(name, plan(), allowNoMove: allowNoMove)
         var current = first
@@ -2792,7 +2786,7 @@ enum RealAppWindowVerification {
                 return current.desiredLayout.layout.tiled
             }
 
-            let applyResult = await applier.apply(current, strategy: strategy)
+            let applyResult = await applier.apply(current)
             switch plannedLayoutApplyDecision(
                 plan: current,
                 applyResult: applyResult,
@@ -2864,8 +2858,7 @@ enum RealAppWindowVerification {
         let preservedFrames = [sourceWindowID: sourceFrame]
         let firstResult = await applier.apply(
             first,
-            preserving: preservedFrames,
-            strategy: .coordinated
+            preserving: preservedFrames
         )
         switch plannedLayoutApplyDecision(plan: first, applyResult: firstResult, retryOnClamp: true) {
         case .commit(let appliedFrames, _):
@@ -2891,8 +2884,7 @@ enum RealAppWindowVerification {
             }
             let retryResult = await applier.apply(
                 retry,
-                preserving: preservedFrames,
-                strategy: .coordinated
+                preserving: preservedFrames
             )
             switch plannedLayoutApplyDecision(plan: retry, applyResult: retryResult, retryOnClamp: false) {
             case .commit(let retryAppliedFrames, _):
@@ -2917,8 +2909,7 @@ enum RealAppWindowVerification {
         _ context: String,
         plans: [(name: String, plan: () async -> Result<CommandPlanResult, CommandError>)],
         worldActor: WorldActor,
-        applier: LayoutApplier,
-        strategy: LayoutFrameWriteStrategy = .sequential
+        applier: LayoutApplier
     ) async throws {
         var rejected: [String] = []
         for entry in plans {
@@ -2928,8 +2919,7 @@ enum RealAppWindowVerification {
                     entry.name,
                     plan: entry.plan,
                     worldActor: worldActor,
-                    applier: applier,
-                    strategy: strategy
+                    applier: applier
                 )
                 return
             case .failure(let error):

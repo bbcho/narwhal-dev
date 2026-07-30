@@ -151,6 +151,46 @@ public func innerGapViolations(
     }
 }
 
+public func leadingFrameWriteOrder(
+    planned: [WindowID: CGRect],
+    candidates: Set<WindowID>,
+    innerGap: Double,
+    tolerance: Double = Double(configuredGapTolerance)
+) -> [WindowID] {
+    let relations = plannedGapRelations(
+        planned: planned,
+        gap: CGFloat(max(0, innerGap)),
+        tolerance: CGFloat(max(0, tolerance))
+    )
+    let predecessors = relations.reduce(into: [WindowID: Set<WindowID>]()) { result, relation in
+        result[relation.after, default: []].insert(relation.before)
+    }
+    var remaining = candidates
+    var ordered: [WindowID] = []
+
+    while !remaining.isEmpty {
+        let eligible = remaining.filter { windowID in
+            predecessors[windowID, default: []].isDisjoint(with: remaining)
+        }
+        let next = (eligible.isEmpty ? remaining : eligible).min {
+            guard let lhs = planned[$0], let rhs = planned[$1] else {
+                return $0.raw < $1.raw
+            }
+            if lhs.minY != rhs.minY {
+                return lhs.minY < rhs.minY
+            }
+            if lhs.minX != rhs.minX {
+                return lhs.minX < rhs.minX
+            }
+            return $0.raw < $1.raw
+        }
+        guard let next else { break }
+        ordered.append(next)
+        remaining.remove(next)
+    }
+    return ordered
+}
+
 private struct PlannedGapRelation {
     let axis: Axis
     let before: WindowID

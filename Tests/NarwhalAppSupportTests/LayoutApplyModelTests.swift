@@ -169,14 +169,14 @@ struct LayoutApplyModelTests {
         let intents = layoutFrameWriteIntents(for: plan)
 
         #expect(intents == [
+            .write(windowID: focused, metadata: focusedMetadata, targetFrame: focusedFrame),
             .write(windowID: other, metadata: otherMetadata, targetFrame: otherFrame),
-            .missingMetadata(windowID: missing, targetFrame: missingFrame),
-            .write(windowID: focused, metadata: focusedMetadata, targetFrame: focusedFrame)
+            .missingMetadata(windowID: missing, targetFrame: missingFrame)
         ])
     }
 
-    @Test("Newly tiled focused frame write is applied first")
-    func newlyTiledFocusedFrameWriteIsAppliedFirst() {
+    @Test("Frame writes follow seam dependencies from leading to trailing")
+    func frameWritesFollowSeamDependencies() {
         let right = WindowID(raw: 100)
         let topLeft = WindowID(raw: 101)
         let focusedBottomLeft = WindowID(raw: 102)
@@ -204,9 +204,9 @@ struct LayoutApplyModelTests {
         let intents = layoutFrameWriteIntents(for: plan)
 
         #expect(intents == [
+            .write(windowID: topLeft, metadata: topLeftMetadata, targetFrame: topLeftFrame),
             .write(windowID: focusedBottomLeft, metadata: focusedMetadata, targetFrame: focusedFrame),
-            .write(windowID: right, metadata: rightMetadata, targetFrame: rightFrame),
-            .write(windowID: topLeft, metadata: topLeftMetadata, targetFrame: topLeftFrame)
+            .write(windowID: right, metadata: rightMetadata, targetFrame: rightFrame)
         ])
     }
 
