@@ -1614,8 +1614,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
              .focusedWindowUnmatchedToCGWindow,
              .windowsAttributeInvalid,
              .setAttributeFailed,
+             .automationFailed,
              .frameDidNotConverge,
+             .frameReadbackDisagreed,
+             .invalidFrame,
              .visibleWindowListUnavailable,
+             .windowServerFrameUnavailable,
              .windowNotRaised:
             return false
         }

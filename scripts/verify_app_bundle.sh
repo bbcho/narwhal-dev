@@ -83,6 +83,11 @@ actual_identifier="$(plutil -extract CFBundleIdentifier raw "$info_plist")"
   echo "unexpected bundle identifier: $actual_identifier" >&2
   exit 1
 }
+automation_description="$(plutil -extract NSAppleEventsUsageDescription raw "$info_plist")"
+[ -n "$automation_description" ] || {
+  echo "missing Terminal Automation usage description" >&2
+  exit 1
+}
 actual_minimum="$(plutil -extract LSMinimumSystemVersion raw "$info_plist")"
 [ "$actual_minimum" = "26.0" ] || {
   echo "unexpected minimum macOS version: $actual_minimum" >&2

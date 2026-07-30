@@ -9,12 +9,12 @@ enum LayoutFrameWriteStrategy {
 
 @MainActor
 struct LayoutApplier {
-    let axClient: AXClient
+    let frameWriter: WindowFrameWriter
     let reporter: StartupReporter
     let echoSuppressor: AXEchoSuppressor?
 
     init(axClient: AXClient, reporter: StartupReporter, echoSuppressor: AXEchoSuppressor? = nil) {
-        self.axClient = axClient
+        frameWriter = WindowFrameWriter(axClient: axClient)
         self.reporter = reporter
         self.echoSuppressor = echoSuppressor
     }
@@ -294,9 +294,10 @@ struct LayoutApplier {
                 break applyLoop
 
             case .write(let windowID, let metadata, let frame):
-                echoSuppressor?.expectFrame(windowID: windowID, targetFrame: frame)
-                let outcome = await axClient.setFrame(metadata, to: frame)
-                applyResult = record(outcome, windowID: windowID, targetFrame: frame, in: applyResult)
+                let target = canonicalFrameWriteTarget(frame)
+                echoSuppressor?.expectFrame(windowID: windowID, targetFrame: target)
+                let outcome = await frameWriter.setFrame(metadata, to: target)
+                applyResult = record(outcome, windowID: windowID, targetFrame: target, in: applyResult)
                 guard case .converged = outcome else {
                     if case .constrained = outcome {
                         continue
@@ -333,18 +334,16 @@ struct LayoutApplier {
 
         let writes = intents.compactMap { intent -> (windowID: WindowID, metadata: WindowMetadata, frame: CGRect)? in
             guard case .write(let windowID, let metadata, let frame) = intent else { return nil }
-            echoSuppressor?.expectFrame(windowID: windowID, targetFrame: frame)
             return (windowID, metadata, frame)
         }
-        let outcomes = await axClient.setFramesCoordinated(writes.map { ($0.metadata, $0.frame) })
-
         for write in writes {
-            let outcome = outcomes[write.windowID]
-                ?? .failed(.frameDidNotConverge(target: write.frame, actual: .null, attempts: 0))
+            let target = canonicalFrameWriteTarget(write.frame)
+            echoSuppressor?.expectFrame(windowID: write.windowID, targetFrame: target)
+            let outcome = await frameWriter.setFrame(write.metadata, to: target)
             applyResult = record(
                 outcome,
                 windowID: write.windowID,
-                targetFrame: write.frame,
+                targetFrame: target,
                 in: applyResult
             )
         }

@@ -62,8 +62,12 @@ enum AXClientError: Error, CustomStringConvertible, Sendable {
     case setAttributeFailed(String, AXError)
     case performActionFailed(String, AXError)
     case applicationActivateFailed(pid_t)
+    case automationFailed(bundleID: String, message: String)
     case frameDidNotConverge(target: CGRect, actual: CGRect, attempts: Int)
+    case frameReadbackDisagreed(target: CGRect, accessibility: CGRect, windowServer: CGRect)
+    case invalidFrame(CGRect)
     case visibleWindowListUnavailable
+    case windowServerFrameUnavailable(WindowID)
     case windowNotRaised(WindowID, blocker: WindowID?)
 
     var description: String {
@@ -94,10 +98,18 @@ enum AXClientError: Error, CustomStringConvertible, Sendable {
             return "\(action) failed with \(error)"
         case .applicationActivateFailed(let pid):
             return "activating application pid=\(pid) failed"
+        case .automationFailed(let bundleID, let message):
+            return "Automation write to \(bundleID) failed: \(message)"
         case .frameDidNotConverge(let target, let actual, let attempts):
             return "frame write did not converge after \(attempts) attempts target=\(target.debugDescription) actual=\(actual.debugDescription)"
+        case .frameReadbackDisagreed(let target, let accessibility, let windowServer):
+            return "frame readback disagreed target=\(target.debugDescription) AX=\(accessibility.debugDescription) WindowServer=\(windowServer.debugDescription)"
+        case .invalidFrame(let frame):
+            return "invalid frame \(frame.debugDescription)"
         case .visibleWindowListUnavailable:
             return "visible CG window list unavailable"
+        case .windowServerFrameUnavailable(let windowID):
+            return "WindowServer frame unavailable for \(windowID.description)"
         case .windowNotRaised(let windowID, let blocker):
             if let blocker {
                 return "\(windowID.description) was not raised above overlapping window \(blocker.description)"
@@ -607,6 +619,13 @@ struct AXClient {
         case .failure(let error):
             return .failure(error)
         }
+    }
+
+    func windowServerFrame(of window: WindowMetadata) -> Result<CGRect, AXClientError> {
+        guard let frame = cgWindowInfo(matching: window.id, processID: window.pid)?.frame else {
+            return .failure(.windowServerFrameUnavailable(window.id))
+        }
+        return .success(frame)
     }
 
     @MainActor

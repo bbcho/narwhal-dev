@@ -28,5 +28,7 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Narwhal uses Terminal automation to apply exact tile bounds that Terminal quantizes through Accessibility.</string>
 </dict>
 </plist>
