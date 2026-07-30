@@ -1075,7 +1075,7 @@ enum RealAppWindowVerification {
                 plannedFrames: plannedFrames,
                 using: axClient,
                 context: "Terminal push sequence \(keys) step \(index + 1)",
-                gapTolerance: appGridGapFallbackTolerance
+                gapTolerance: configuredGapTolerance
             )
             try requireRealFramesDisjoint(
                 pushed,

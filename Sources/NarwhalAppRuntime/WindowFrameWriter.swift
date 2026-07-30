@@ -122,7 +122,9 @@ struct WindowFrameWriter {
                     return .failed(error)
                 }
             }
-            await settle()
+            if attempt < Self.readbackAttemptCount - 1 {
+                await settle()
+            }
         }
 
         guard let lastReadback else {

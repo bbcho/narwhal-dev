@@ -79,7 +79,7 @@ struct LayoutApplier {
             case .failure(let conflict):
                 return gapConflictFailure(
                     conflict,
-                    targetFrame: plannedFrame,
+                    planned: planned,
                     startingWith: result
                 )
             }
@@ -108,7 +108,8 @@ struct LayoutApplier {
         windows: [WindowID: WindowMetadata],
         preservedFrames: [WindowID: CGRect]
     ) -> [WindowID: CGRect] {
-        planned.reduce(into: preservedFrames) { accepted, entry in
+        let preserved = preservedFrames.filter { planned[$0.key] != nil }
+        return planned.reduce(into: preserved) { accepted, entry in
             guard !movingWindowIDs.contains(entry.key),
                   accepted[entry.key] == nil,
                   let frame = windows[entry.key]?.frame
@@ -190,14 +191,14 @@ struct LayoutApplier {
 
     private func gapConflictFailure(
         _ conflict: SnappedFrameGapConflict,
-        targetFrame: CGRect,
+        planned: [WindowID: CGRect],
         startingWith result: LayoutApplyResult
     ) -> LayoutApplyResult {
         let windows = conflict.windows.map(\.description).joined(separator: ",")
         let windowID = conflict.windows.first ?? WindowID(raw: 0)
         return recordLayoutFrameWrite(
             windowID: windowID,
-            targetFrame: targetFrame,
+            targetFrame: planned[windowID] ?? .null,
             observation: .failed(
                 message: "configured \(conflict.axis.rawValue) gap is physically inconsistent for \(windows)"
             ),
