@@ -158,28 +158,6 @@ enum AXSettleStrategy: Sendable {
     case servicingRunLoop
 }
 
-enum AXFrameWriteOrder: Equatable {
-    case sizeThenPosition
-    case positionThenSize
-}
-
-func axFrameWriteOrder(
-    current: CGRect?,
-    target: CGRect,
-    tolerance: CGFloat = frameWriteSettleTolerance
-) -> AXFrameWriteOrder {
-    guard let current else { return .sizeThenPosition }
-    let shrinksWidth = target.width < current.width - tolerance
-    let shrinksHeight = target.height < current.height - tolerance
-    guard !shrinksWidth, !shrinksHeight else { return .sizeThenPosition }
-
-    let expandsLeft = target.width > current.width + tolerance
-        && target.minX < current.minX - tolerance
-    let expandsUp = target.height > current.height + tolerance
-        && target.minY < current.minY - tolerance
-    return expandsLeft || expandsUp ? .positionThenSize : .sizeThenPosition
-}
-
 func axFrameWriteSettledInsideTarget(target: CGRect, actual: CGRect) -> Bool {
     target.narwhalApproximatelyEquals(actual, tolerance: configuredGapTolerance)
 }
@@ -816,29 +794,40 @@ struct AXClient {
         matching metadata: WindowMetadata?,
         to frame: CGRect
     ) async -> AXFrameWriteOutcome {
+        var processID = pid_t(0)
+        let pidError = AXUIElementGetPid(initialElement, &processID)
+        guard pidError == .success else {
+            return .failed(.pidUnavailable(pidError))
+        }
+
+        let enhancedUIOverride = disableEnhancedUserInterfaceIfNeeded(processID: processID)
+        let outcome = await writeFrame(initialElement, matching: metadata, to: frame)
+        if let enhancedUIOverride {
+            switch setBool(
+                true,
+                attribute: "AXEnhancedUserInterface",
+                on: enhancedUIOverride
+            ) {
+            case .success:
+                break
+            case .failure(let error):
+                return .failed(error)
+            }
+        }
+        return outcome
+    }
+
+    @MainActor
+    private func writeFrame(
+        _ initialElement: AXUIElement,
+        matching metadata: WindowMetadata?,
+        to frame: CGRect
+    ) async -> AXFrameWriteOutcome {
         var element = initialElement
         let currentFrame = try? focusedWindowFrame(element).get()
         if let currentFrame,
            axFrameWriteSettledInsideTarget(target: frame, actual: currentFrame) {
             return .converged(actual: currentFrame)
-        }
-        let positionFirst = axFrameWriteOrder(
-            current: currentFrame,
-            target: frame
-        ) == .positionThenSize
-
-        if positionFirst {
-            switch await retryingInvalidWindowElement(
-                element,
-                matching: metadata,
-                write: { setPosition(frame.origin, on: $0) }
-            ) {
-            case .success(let refreshed):
-                element = refreshed
-                await settle(for: Self.frameWriteSettleInterval)
-            case .failure(let error):
-                return .failed(error)
-            }
         }
 
         switch await retryingInvalidWindowElement(
@@ -848,7 +837,6 @@ struct AXClient {
         ) {
         case .success(let refreshed):
             element = refreshed
-            await settle(for: Self.frameWriteSettleInterval)
         case .failure(let error):
             return .failed(error)
         }
@@ -857,6 +845,17 @@ struct AXClient {
             element,
             matching: metadata,
             write: { setPosition(frame.origin, on: $0) }
+        ) {
+        case .success(let refreshed):
+            element = refreshed
+        case .failure(let error):
+            return .failed(error)
+        }
+
+        switch await retryingInvalidWindowElement(
+            element,
+            matching: metadata,
+            write: { setSize(frame.size, on: $0) }
         ) {
         case .success(let refreshed):
             element = refreshed
@@ -889,6 +888,31 @@ struct AXClient {
             return .failed(error)
         }
         return frameWriteDidNotConverge(target: frame, actualFrames: observedFrames)
+    }
+
+    private func disableEnhancedUserInterfaceIfNeeded(
+        processID: pid_t
+    ) -> AXUIElement? {
+        let application = Self.applicationElement(processID: processID)
+        var value: CFTypeRef?
+        let readError = AXUIElementCopyAttributeValue(
+            application,
+            "AXEnhancedUserInterface" as CFString,
+            &value
+        )
+        guard readError == .success, value as? Bool == true else {
+            return nil
+        }
+        switch setBool(
+            false,
+            attribute: "AXEnhancedUserInterface",
+            on: application
+        ) {
+        case .success:
+            return application
+        case .failure:
+            return nil
+        }
     }
 
     @MainActor

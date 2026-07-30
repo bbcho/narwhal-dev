@@ -410,8 +410,12 @@ Pre-implementation gate:
    any quantization slack remains at an outside edge.
 10. Values remain immutable dictionaries and structs. Nothing new is persisted.
 11. Terminal needs a real app-specific adapter because its own `bounds` command
-    reaches exact sizes that external AX size writes quantize. Other apps retain
-    the generic AX path.
+    reaches exact sizes that external AX size writes quantize. Generic AX writes
+    preserve and temporarily disable an application's `AXEnhancedUserInterface`
+    flag when the application exposes it as writable. The generic adapter uses
+    one synchronous size-position-size transaction so a position change cannot
+    invalidate the requested size. This prevents the known Firefox slow/partial
+    resize behavior without a delayed corrective write.
 12. No event schema changes apply.
 13. Each write logs adapter, requested frame, AX frame, WindowServer frame, and
     outcome once; polling itself is not logged.
@@ -427,10 +431,15 @@ only for `com.apple.Terminal`. The packaged app declares its Automation purpose
 and hardened-runtime Apple Events entitlement. Permission denial is reported;
 it does not fall back to a geometry-changing AX retry.
 
-Generic AX writes set the requested size and position once. Subsequent settle
-attempts are reads only. A repeated stable mismatch becomes `.constrained`
-unless it proves a minimum or maximum size, in which case it remains `.clamped`
-and enters the existing constraint-aware replan.
+Generic AX writes send one synchronous size-position-size transaction. There is
+no delay or readback between those attribute writes; subsequent settle attempts
+are reads only. If Narwhal successfully disables an application's
+`AXEnhancedUserInterface` value, it restores the original value before the
+operation returns, and a restoration failure is explicit. Applications that
+expose the value read-only stay on the same deterministic frame transaction. A
+repeated stable mismatch becomes `.constrained` unless it proves a minimum or
+maximum size, in which case it remains `.clamped` and enters the existing
+constraint-aware replan.
 
 `LayoutApplier` writes a deterministic leading window first. After each observed
 frame, it recomputes targets only for unwritten neighbors so their first and only

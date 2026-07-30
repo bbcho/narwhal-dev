@@ -104,10 +104,12 @@ struct WindowFrameWriter {
         }
 
         var lastReadback: WindowFrameReadback?
+        var readbackFrames: [CGRect] = []
         for attempt in 0..<Self.readbackAttemptCount {
             switch await readback(window) {
             case .success(let observed):
                 lastReadback = observed
+                readbackFrames.append(observed.accessibility)
                 if observed.accessibility.narwhalApproximatelyEquals(
                     target,
                     tolerance: configuredGapTolerance
@@ -116,27 +118,6 @@ struct WindowFrameWriter {
                     tolerance: configuredGapTolerance
                 ) {
                     return .converged(actual: observed.accessibility)
-                }
-                if observed.accessibility.narwhalApproximatelyEquals(
-                    observed.windowServer,
-                    tolerance: configuredGapTolerance
-                ) {
-                    switch initial {
-                    case .constrained(let actual)
-                        where observed.accessibility.narwhalApproximatelyEquals(
-                            actual,
-                            tolerance: configuredGapTolerance
-                        ):
-                        return .constrained(actual: observed.accessibility)
-                    case .clamped(let actual, let constraints)
-                        where observed.accessibility.narwhalApproximatelyEquals(
-                            actual,
-                            tolerance: configuredGapTolerance
-                        ):
-                        return .clamped(actual: observed.accessibility, observed: constraints)
-                    case .converged, .constrained, .clamped, .failed:
-                        break
-                    }
                 }
             case .failure(let error):
                 if attempt == Self.readbackAttemptCount - 1 {
@@ -165,8 +146,27 @@ struct WindowFrameWriter {
         switch initial {
         case .constrained:
             return .constrained(actual: lastReadback.accessibility)
-        case .clamped(_, let observed):
-            return .clamped(actual: lastReadback.accessibility, observed: observed)
+        case .clamped(let initialActual, let observed):
+            let remainedAtInitialFrame = readbackFrames.allSatisfy {
+                $0.narwhalApproximatelyEquals(
+                    initialActual,
+                    tolerance: configuredGapTolerance
+                )
+            }
+            if remainedAtInitialFrame {
+                return .clamped(actual: lastReadback.accessibility, observed: observed)
+            }
+            if axFrameWriteConstrainedFrameIsAnchored(
+                target: target,
+                actual: lastReadback.accessibility
+            ) {
+                return .constrained(actual: lastReadback.accessibility)
+            }
+            return .failed(.frameDidNotConverge(
+                target: target,
+                actual: lastReadback.accessibility,
+                attempts: Self.readbackAttemptCount
+            ))
         case .converged:
             return .failed(.frameDidNotConverge(
                 target: target,

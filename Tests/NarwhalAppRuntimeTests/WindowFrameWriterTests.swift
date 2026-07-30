@@ -121,7 +121,7 @@ struct WindowFrameWriterTests {
         #expect(readbackCount == 4)
     }
 
-    @Test("Confirmed generic constraint returns after one matching visible readback")
+    @Test("Confirmed generic constraint survives the read-only observation window")
     func genericConstraintReadback() async {
         let target = CGRect(x: 0, y: 30, width: 1_504, height: 781)
         let constrained = CGRect(x: 0, y: 30, width: 1_500, height: 781)
@@ -152,8 +152,75 @@ struct WindowFrameWriterTests {
         case .converged, .clamped, .failed:
             Issue.record("Expected the confirmed constrained frame")
         }
-        #expect(readbackCount == 1)
-        #expect(settleCount == 0)
+        #expect(readbackCount == 4)
+        #expect(settleCount == 3)
+    }
+
+    @Test("A moving Accessibility readback does not persist a stale constraint")
+    func movingReadbackDoesNotPersistConstraint() async {
+        let target = CGRect(x: 40, y: 74, width: 2_406, height: 740)
+        let initiallyObserved = CGRect(x: 40, y: 30, width: 2_103, height: 872)
+        let laterObserved = CGRect(x: 40, y: 74, width: 2_200, height: 740)
+        var readbackCount = 0
+        let writer = WindowFrameWriter(
+            writeAccessibility: { _, _ in
+                .clamped(
+                    actual: initiallyObserved,
+                    observed: WindowConstraints(minHeight: 872)
+                )
+            },
+            writeTerminal: { _, _ in
+                .failure(.invalidFrame(.null))
+            },
+            readback: { _ in
+                readbackCount += 1
+                let frame = readbackCount == 1 ? initiallyObserved : laterObserved
+                return .success(WindowFrameReadback(
+                    accessibility: frame,
+                    windowServer: frame
+                ))
+            }
+        )
+
+        switch await writer.setFrame(metadata(bundleID: "org.mozilla.firefox"), to: target) {
+        case .constrained(let actual):
+            #expect(actual == laterObserved)
+        case .converged, .clamped, .failed:
+            Issue.record("Expected motion to invalidate the stale minimum")
+        }
+        #expect(readbackCount == 4)
+    }
+
+    @Test("A stable Accessibility clamp remains a confirmed constraint")
+    func stableReadbackPreservesConstraint() async {
+        let target = CGRect(x: 40, y: 74, width: 2_406, height: 740)
+        let actual = CGRect(x: 40, y: 74, width: 2_406, height: 780)
+        let observed = WindowConstraints(minHeight: 780)
+        var readbackCount = 0
+        let writer = WindowFrameWriter(
+            writeAccessibility: { _, _ in
+                .clamped(actual: actual, observed: observed)
+            },
+            writeTerminal: { _, _ in
+                .failure(.invalidFrame(.null))
+            },
+            readback: { _ in
+                readbackCount += 1
+                return .success(WindowFrameReadback(
+                    accessibility: actual,
+                    windowServer: actual
+                ))
+            }
+        )
+
+        switch await writer.setFrame(metadata(bundleID: "org.mozilla.firefox"), to: target) {
+        case .clamped(let settled, let constraints):
+            #expect(settled == actual)
+            #expect(constraints == observed)
+        case .converged, .constrained, .failed:
+            Issue.record("Expected the stable clamp to remain confirmed")
+        }
+        #expect(readbackCount == 4)
     }
 
     private func metadata(bundleID: String) -> WindowMetadata {

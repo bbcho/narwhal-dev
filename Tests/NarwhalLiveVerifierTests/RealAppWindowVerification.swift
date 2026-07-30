@@ -3394,8 +3394,9 @@ enum RealAppWindowVerification {
         step: Int,
         using axClient: AXClient
     ) async throws -> CGRect {
+        let writer = WindowFrameWriter(axClient: axClient)
         let actual: CGRect
-        switch await axClient.setFrame(metadata, to: target) {
+        switch await writer.setFrame(metadata, to: target) {
         case .converged(let frame):
             actual = frame
         case .constrained(let frame):
@@ -3590,6 +3591,7 @@ enum RealAppWindowVerification {
         in visibleFrame: CGRect,
         using axClient: AXClient
     ) async throws {
+        let writer = WindowFrameWriter(axClient: axClient)
         let target = CGRect(
             x: visibleFrame.minX + 96,
             y: visibleFrame.minY + 96,
@@ -3597,7 +3599,7 @@ enum RealAppWindowVerification {
             height: max(480, visibleFrame.height * 0.58)
         ).intersection(visibleFrame)
         let actual: CGRect
-        switch await axClient.setFrame(metadata, to: target) {
+        switch await writer.setFrame(metadata, to: target) {
         case .converged(let frame), .constrained(let frame), .clamped(let frame, _):
             actual = frame
         case .failed(.frameDidNotConverge(_, let frame, _)) where frame.narwhalIsFinitePositive:
@@ -3607,6 +3609,10 @@ enum RealAppWindowVerification {
                 "\(appName) could not leave its fresh-window state before verification: \(error.description)"
             )
         }
+        report(
+            "REAL APP WINDOW: normalized \(appName) target=\(target.debugDescription) "
+                + "actual=\(actual.debugDescription)"
+        )
         guard visibleFrame.intersection(actual).narwhalArea >= actual.narwhalArea * 0.9 else {
             throw RealAppWindowVerifierFailure(
                 "\(appName) browser normalization left the window off display: actual=\(actual.debugDescription) visible=\(visibleFrame.debugDescription)"
