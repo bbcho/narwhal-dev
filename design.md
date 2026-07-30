@@ -377,60 +377,68 @@ For MVP, the fallback policy is conservative:
 
 Later policies may add "float newest window", "stack within lane", or "move to another display", but those are explicit user-facing policies, not hidden solver behavior.
 
-### Actual-frame gap reconciliation
+### Deterministic application-frame writes
 
-The configured gap is a contract between visible window frames, not only between
-ideal solver cells. Some applications quantize AX size writes to character or
-browser-chrome increments, so a successful size write may produce a contained
-frame that is smaller than its planned tile.
+The configured gap is a contract between WindowServer-visible frames. A frame
+write is exact only when both Accessibility and WindowServer report the requested
+integral frame within 0.5 points. A nearby, contained, or stable frame is not
+silently relabelled as exact.
 
-Data and invariants:
+Pre-implementation gate:
 
-- `plannedFrames` defines which window pairs are adjacent and the configured
-  seam between them.
-- `actualFrames` supplies the sizes accepted by the applications.
-- Adjacent actual frames satisfy `after.min - before.max == gaps.inner` within
-  the configured-gap tolerance whenever the accepted application sizes make
-  those seam equations consistent.
-- Reconciliation changes origins only. It never invents a size the application
-  has not already accepted.
-- Residual space caused by quantization is centered at the outside of each
-  connected tile group. It is never accumulated at interior seams.
-- A manually resized source window is a fixed anchor. Other windows move around
-  it; the source is not rewritten.
-- Character-grid window chrome can make a branched seam inconsistent: for
-  example, one accepted Terminal width need not equal two accepted Terminal
-  widths plus an arbitrary configured gap. In that case, a constrained
-  best-effort pass distributes the residual without overlap. Each residual must
-  remain within the bounded app-grid fallback tolerance (8 points, less than one
-  Terminal row increment) or the apply fails.
+1. Domain data is `WindowFrameReadback(axFrame:windowServerFrame:)` and the
+   existing write outcome, extended with an explicit constrained result.
+2. `[CORE]` functions quantize requested edges, order writes from leading to
+   trailing seams, and reflow only windows that have not yet been written.
+   `[SHELL]` functions send one frame request and poll readback without writing
+   again.
+3. `LayoutApplier -> WindowFrameWriter -> Terminal Apple Events | Accessibility`
+   is the effect boundary; both paths return through AX plus WindowServer
+   verification.
+4. Exact, constrained, minimum/maximum-clamped, and failed writes are distinct
+   outcomes. Automation denial and missing WindowServer readback are failures.
+5. Mutable state is local to one main-actor apply loop. There are no new locks,
+   queues, caches, or persistent state.
+6. External frames must be finite and positive; Apple Event bounds use validated
+   integral edges and a numeric WindowServer ID.
+7. Tests inject three closures—generic write, Terminal write, and readback—rather
+   than mocking AppKit or Accessibility objects.
+8. Writes stay on the main actor. Settling is bounded asynchronous polling; no
+   new concurrency primitive is needed.
+9. Properties: every non-preserved window is written at most once; accepted
+   frames never overlap; every representable interior seam equals `gaps.inner`;
+   any quantization slack remains at an outside edge.
+10. Values remain immutable dictionaries and structs. Nothing new is persisted.
+11. Terminal needs a real app-specific adapter because its own `bounds` command
+    reaches exact sizes that external AX size writes quantize. Other apps retain
+    the generic AX path.
+12. No event schema changes apply.
+13. Each write logs adapter, requested frame, AX frame, WindowServer frame, and
+    outcome once; polling itself is not logged.
+14. The final de-slop pass removes the old correction loop, containment retarget,
+    and unused best-effort tolerances instead of retaining parallel policies.
+15. Unit tests cover ordering, single-write behavior, constrained propagation,
+    script construction, and exact readback. The live gate covers Chrome,
+    Firefox, System Settings, Terminal, mixed manual resize, three-window stacks,
+    4–8 tile layouts, AX frames, WindowServer frames, gaps, and visible borders.
 
-`[CORE] reflowSnappedFrames(planned:actual:innerGap:anchoredWindowIDs:tolerance:)`
-builds adjacency constraints from the plan and returns reconciled frame values.
-`[CORE] reflowSnappedFramesBestEffort(...)` handles only inconsistent seam
-cycles, preserving accepted sizes and enforcing non-overlap.
-`[CORE] innerGapViolations(...)` validates the visible-frame invariant after AX
-writes. Inconsistency beyond the bounded fallback remains an explicit
-`SnappedFrameGapConflict`. A manually anchored or app-expanded group may use up
-to 12 points outside an ideal group edge, matching the accepted single-window
-grid expansion allowance. A group that already fits that bound keeps its
-existing edge instead of being re-centered; this avoids changing an
-already-stable window merely to distribute a small edge drift.
+Terminal frame writes use the application’s Apple Event `bounds` API, selected
+only for `com.apple.Terminal`. The packaged app declares its Automation purpose
+and hardened-runtime Apple Events entitlement. Permission denial is reported;
+it does not fall back to a geometry-changing AX retry.
 
-`[SHELL] LayoutApplier.apply` performs the existing bounded size pass, measures
-the returned frames, computes one pure reconciliation, and performs a bounded
-position correction before the plan is committed. AX reads and writes remain on
-the main actor; the core functions have no I/O or mutable state. Missing metadata,
-an inconsistent physical arrangement, or a correction that does not converge is
-a normal layout-apply failure with the involved window IDs in the diagnostic.
+Generic AX writes set the requested size and position once. Subsequent settle
+attempts are reads only. A repeated stable mismatch becomes `.constrained`
+unless it proves a minimum or maximum size, in which case it remains `.clamped`
+and enters the existing constraint-aware replan.
 
-Verification covers horizontal and vertical 4–8 window runs, non-zero configured
-gaps, branched seams, fixed manual-resize anchors, and bounded inconsistent
-physical constraints in pure tests. The live gate additionally checks exact
-configured gaps for representable axis layouts, bounded non-overlapping seams
-for character-grid conflicts, confirms AX frames through WindowServer, and
-verifies the visible border windows. No new configuration option or adapter
-abstraction is introduced.
+`LayoutApplier` writes a deterministic leading window first. After each observed
+frame, it recomputes targets only for unwritten neighbors so their first and only
+write starts at the observed edge plus the configured gap. Preserved manual
+resize sources are initial anchors and are never rewritten. Quantization slack
+therefore accumulates only at trailing display edges. An inconsistent seam graph
+fails explicitly; the applier never revisits a window or distributes hidden
+corrections across already visible tiles.
 
 ---
 
