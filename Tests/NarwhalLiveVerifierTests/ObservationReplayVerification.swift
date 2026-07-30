@@ -151,21 +151,21 @@ enum ObservationReplayVerification {
         )
         guard layoutFrameWriteIntents(for: replayPlan) == [
             .write(
-                windowID: spaceThreeRight,
-                metadata: rightMetadata,
-                targetFrame: rightFrame
-            ),
-            .write(
                 windowID: spaceThreeLeft,
                 metadata: leftMetadata,
                 targetFrame: leftFrame
+            ),
+            .write(
+                windowID: spaceThreeRight,
+                metadata: rightMetadata,
+                targetFrame: rightFrame
             )
         ] else {
-            return (false, "production layout write order no longer keeps an existing focused window last")
+            return (false, "production layout write order no longer follows leading-to-trailing seam dependencies")
         }
         return (
             true,
-            "observation replay verified: partial topology preserved inactive memory, visible unmapped windows cycled, production focused writes remain last"
+            "observation replay verified: partial topology preserved inactive memory, visible unmapped windows cycled, production writes follow seam dependencies"
         )
     }
 

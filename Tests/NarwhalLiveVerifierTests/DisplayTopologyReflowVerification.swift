@@ -120,7 +120,13 @@ enum DisplayTopologyReflowVerification {
                 overlay.debugTiledBorderIsVisuallyVisible(for: target.windowID),
                 let borderNumber = overlay.debugTiledBorderWindowNumber(for: target.windowID)
             else {
-                return (false, "display topology reflow border was hidden or misplaced for \(target.windowID.description)")
+                return (
+                    false,
+                    "display topology reflow border was hidden or misplaced for \(target.windowID.description): "
+                        + "expected=\(expectedAppKitFrame.debugDescription) "
+                        + "actual=\(overlay.debugTiledBorderFrame(for: target.windowID)?.debugDescription ?? "nil") "
+                        + "visible=\(overlay.debugTiledBorderIsVisuallyVisible(for: target.windowID))"
+                )
             }
             let expectedServerFrame = target.frame.insetBy(dx: -1, dy: -1)
             guard LiveWindowServerVerification.waitForFrame(
