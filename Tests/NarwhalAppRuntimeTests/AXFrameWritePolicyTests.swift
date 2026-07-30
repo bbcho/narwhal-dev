@@ -47,13 +47,13 @@ struct AXFrameWritePolicyTests {
         ) {
         case .failed:
             break
-        case .converged, .clamped:
+        case .converged, .constrained, .clamped:
             #expect(Bool(false), "Expected the uncorrected Firefox frame spill to fail")
         }
     }
 
-    @Test("A corrected browser-chrome frame inside its planned cell is successful")
-    func correctedBrowserFrameIsConverged() {
+    @Test("A stable browser-chrome offset with no anchored edge is rejected")
+    func browserFrameWithoutAnchoredEdgeIsRejected() {
         let target = CGRect(x: 16, y: 499.36, width: 1_410, height: 1_076.64)
         let actual = CGRect(x: 16, y: 515, width: 1_410, height: 1_060)
 
@@ -61,15 +61,15 @@ struct AXFrameWritePolicyTests {
             target: target,
             actualFrames: [actual, actual]
         ) {
-        case .converged(let settled):
-            #expect(settled == actual)
-        case .clamped, .failed:
-            #expect(Bool(false), "Expected the contained Firefox frame to converge")
+        case .failed:
+            break
+        case .converged, .constrained, .clamped:
+            #expect(Bool(false), "Expected the unanchored Firefox mismatch to fail")
         }
     }
 
-    @Test("Stable Terminal grid spill is deferred to topology reconciliation")
-    func stableTerminalGridSpillConvergesAfterRetries() {
+    @Test("Stable Terminal grid expansion reports a minimum constraint")
+    func stableTerminalGridExpansionIsClamped() {
         let target = CGRect(x: 1504, y: 550.666_666_666_7, width: 1504, height: 520.666_666_666_7)
         let actual = CGRect(x: 1504, y: 551, width: 1507, height: 525)
 
@@ -77,15 +77,16 @@ struct AXFrameWritePolicyTests {
             target: target,
             actualFrames: [actual, actual]
         ) {
-        case .converged(let settled):
+        case .clamped(let settled, let observed):
             #expect(settled == actual)
-        case .clamped, .failed:
-            #expect(Bool(false), "Expected stable grid snapping to reach topology reconciliation")
+            #expect(observed == WindowConstraints(minWidth: 1_507, minHeight: 525))
+        case .converged, .constrained, .failed:
+            #expect(Bool(false), "Expected the Terminal expansion to become a minimum constraint")
         }
     }
 
-    @Test("Stable Firefox grid expansion anchored to the trailing edge reaches topology reconciliation")
-    func stableFirefoxTrailingEdgeExpansionConvergesAfterRetries() {
+    @Test("Stable Firefox grid expansion reports a minimum constraint")
+    func stableFirefoxTrailingEdgeExpansionIsClamped() {
         let target = CGRect(x: 0, y: 551, width: 3_008, height: 521)
         let actual = CGRect(x: 0, y: 546, width: 3_000, height: 526)
 
@@ -93,15 +94,16 @@ struct AXFrameWritePolicyTests {
             target: target,
             actualFrames: [actual, actual]
         ) {
-        case .converged(let settled):
+        case .clamped(let settled, let observed):
             #expect(settled == actual)
-        case .clamped, .failed:
-            #expect(Bool(false), "Expected stable edge-anchored Firefox snapping to reach topology reconciliation")
+            #expect(observed == WindowConstraints(minHeight: 526))
+        case .converged, .constrained, .failed:
+            #expect(Bool(false), "Expected the Firefox expansion to become a minimum constraint")
         }
     }
 
-    @Test("A corrected Terminal frame inside its planned cell is successful")
-    func correctedTerminalFrameIsConverged() {
+    @Test("A stable contained Terminal mismatch is reported as constrained")
+    func correctedTerminalFrameIsConstrained() {
         let target = CGRect(x: 1504, y: 550.666_666_666_7, width: 1504, height: 520.666_666_666_7)
         let actual = CGRect(x: 1504, y: 551, width: 1500, height: 511)
 
@@ -109,20 +111,20 @@ struct AXFrameWritePolicyTests {
             target: target,
             actualFrames: [actual, actual]
         ) {
-        case .converged(let settled):
+        case .constrained(let settled):
             #expect(settled == actual)
-        case .clamped, .failed:
-            #expect(Bool(false), "Expected the contained Terminal frame to converge")
+        case .converged, .clamped, .failed:
+            #expect(Bool(false), "Expected the Terminal mismatch to remain explicit")
         }
     }
 
-    @Test("Contained browser and Terminal grid undershoot remains settled")
-    func containedAppGridUndershootIsSettled() {
-        #expect(axFrameWriteSettledInsideTarget(
+    @Test("Contained browser and Terminal grid undershoot is not exact")
+    func containedAppGridUndershootIsNotExact() {
+        #expect(!axFrameWriteSettledInsideTarget(
             target: CGRect(x: 0, y: 551, width: 3008, height: 521),
             actual: CGRect(x: 0, y: 551, width: 2966, height: 521)
         ))
-        #expect(axFrameWriteSettledInsideTarget(
+        #expect(!axFrameWriteSettledInsideTarget(
             target: CGRect(x: 0, y: 1280, width: 3008, height: 312),
             actual: CGRect(x: 0, y: 1280, width: 3005, height: 287)
         ))
@@ -136,30 +138,6 @@ struct AXFrameWritePolicyTests {
         #expect(!axFrameWriteRequiresElementRefresh(
             .setAttributeFailed("AXPosition", .illegalArgument)
         ))
-    }
-
-    @Test("Initial write does not correct a stale pre-write position")
-    func initialWriteUsesRequestedTarget() {
-        let target = CGRect(x: 4, y: 57, width: 2_998, height: 371)
-        let stale = CGRect(x: 4, y: 34, width: 2_998, height: 371)
-
-        #expect(axFrameWriteRetryTarget(
-            target: target,
-            actual: stale,
-            previousAttemptCount: 0
-        ) == target)
-    }
-
-    @Test("A read-back overflow enables bounded containment correction")
-    func retryCorrectsObservedOverflow() {
-        let target = CGRect(x: 4, y: 34, width: 744, height: 1_554)
-        let observed = CGRect(x: 4, y: 34, width: 744, height: 1_561)
-
-        #expect(axFrameWriteRetryTarget(
-            target: target,
-            actual: observed,
-            previousAttemptCount: 1
-        ) == CGRect(x: 4, y: 34, width: 744, height: 1_543))
     }
 
     @Test("A stale contained frame with excessive dimension drift is not converged")
@@ -176,7 +154,7 @@ struct AXFrameWritePolicyTests {
             target: target,
             actualFrames: [actual, actual]
         ) {
-        case .failed, .clamped:
+        case .failed, .constrained, .clamped:
             break
         case .converged:
             #expect(Bool(false), "Expected a stale frame not to converge")

@@ -1303,7 +1303,16 @@ enum RealAppWindowVerification {
         }
         let outcomes = await axClient.setFramesCoordinated(requests)
         for (metadata, _) in requests {
-            guard case .converged = outcomes[metadata.id] else {
+            guard let outcome = outcomes[metadata.id],
+                  {
+                      switch outcome {
+                      case .converged, .constrained:
+                          return true
+                      case .clamped, .failed:
+                          return false
+                      }
+                  }()
+            else {
                 throw RealAppWindowVerifierFailure(
                     "Terminal push-sequence staging failed for \(metadata.id.description)"
                 )
@@ -2171,6 +2180,8 @@ enum RealAppWindowVerification {
         switch await axClient.setFrame(chromeAfterReserve, to: requestedChromeFrame) {
         case .converged(let frame):
             manualChromeFrame = frame
+        case .constrained(let frame):
+            manualChromeFrame = frame
         case .clamped(let frame, let observed):
             guard frameWriteApproximatelySettled(
                 target: requestedChromeFrame,
@@ -2586,6 +2597,8 @@ enum RealAppWindowVerification {
         var firefoxMinimumHeight = max(Self.firefoxManualStagingMinimumHeight, firefox.spec.minimumWindowSize.height)
         switch await axClient.setFrame(firefoxMetadata, to: probeFrame) {
         case .converged:
+            break
+        case .constrained:
             break
         case .clamped(let actual, let observed):
             firefoxMinimumWidth = max(firefoxMinimumWidth, observed.minWidth ?? actual.width)
@@ -3376,6 +3389,8 @@ enum RealAppWindowVerification {
         switch await axClient.setFrame(metadata, to: target) {
         case .converged(let frame):
             actual = frame
+        case .constrained(let frame):
+            actual = frame
         case .clamped(let frame, let observed):
             guard frameWriteApproximatelySettled(
                 target: target,
@@ -3478,7 +3493,7 @@ enum RealAppWindowVerification {
     ) async throws {
         var failures: [String] = []
         switch await axClient.setFrame(original, to: frame) {
-        case .converged, .clamped:
+        case .converged, .constrained, .clamped:
             return
         case .failed(let error):
             failures.append("original=\(error.description)")
@@ -3493,7 +3508,7 @@ enum RealAppWindowVerification {
             }
         for candidate in candidates {
             switch await axClient.setFrame(candidate, to: frame) {
-            case .converged, .clamped:
+            case .converged, .constrained, .clamped:
                 return
             case .failed(let error):
                 failures.append("\(candidate.id.description)=\(error.description)")
@@ -3574,7 +3589,7 @@ enum RealAppWindowVerification {
         ).intersection(visibleFrame)
         let actual: CGRect
         switch await axClient.setFrame(metadata, to: target) {
-        case .converged(let frame), .clamped(let frame, _):
+        case .converged(let frame), .constrained(let frame), .clamped(let frame, _):
             actual = frame
         case .failed(.frameDidNotConverge(_, let frame, _)) where frame.narwhalIsFinitePositive:
             actual = frame

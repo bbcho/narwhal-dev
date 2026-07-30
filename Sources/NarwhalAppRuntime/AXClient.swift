@@ -109,6 +109,7 @@ enum AXClientError: Error, CustomStringConvertible, Sendable {
 
 enum AXFrameWriteOutcome: Sendable {
     case converged(actual: CGRect)
+    case constrained(actual: CGRect)
     case clamped(actual: CGRect, observed: WindowConstraints)
     case failed(AXClientError)
 }
@@ -141,16 +142,7 @@ func axFrameWriteOrder(
 }
 
 func axFrameWriteSettledInsideTarget(target: CGRect, actual: CGRect) -> Bool {
-    frameWriteContainmentCorrection(
-        target: target,
-        actual: actual,
-        tolerance: Double(frameWriteSettleTolerance)
-    ) == nil
-        && frameWriteApproximatelySettled(
-            target: target,
-            actual: actual,
-            tolerance: Double(frameWriteSettleTolerance)
-        )
+    target.narwhalApproximatelyEquals(actual, tolerance: configuredGapTolerance)
 }
 
 func axFrameWriteRequiresElementRefresh(_ error: AXClientError) -> Bool {
@@ -158,35 +150,40 @@ func axFrameWriteRequiresElementRefresh(_ error: AXClientError) -> Bool {
     return axError == .invalidUIElement
 }
 
-func axFrameWriteRetryTarget(
-    target: CGRect,
-    actual: CGRect,
-    previousAttemptCount: Int
-) -> CGRect {
-    guard previousAttemptCount > 0 else { return target }
-    return frameWriteContainmentCorrection(
-        target: target,
-        actual: actual,
-        tolerance: Double(frameWriteSettleTolerance),
-        correctionMargin: Double(frameWriteSettleTolerance) * pow(2, Double(previousAttemptCount - 1))
-    ) ?? target
-}
-
 func confirmedObservedConstraints(
     target: CGRect,
     actualFrames: [CGRect],
-    tolerance: CGFloat = frameWriteSettleTolerance
+    tolerance: CGFloat = configuredGapTolerance
 ) -> WindowConstraints? {
     guard actualFrames.count >= 2,
           let previous = actualFrames.dropLast().last,
           let actual = actualFrames.last,
           previous.narwhalApproximatelyEquals(actual, tolerance: tolerance)
     else { return nil }
-    return inferObservedConstraints(
+    guard let inferred = inferObservedConstraints(
         target: target,
         actual: actual,
         tolerance: Double(tolerance)
+    ) else {
+        return nil
+    }
+    let minimums = WindowConstraints(
+        minWidth: inferred.minWidth,
+        minHeight: inferred.minHeight
     )
+    return minimums.isEmpty ? nil : minimums
+}
+
+func axFrameWriteConstrainedFrameIsAnchored(
+    target: CGRect,
+    actual: CGRect,
+    tolerance: CGFloat = configuredGapTolerance
+) -> Bool {
+    let horizontalEdgeIsAnchored = abs(target.minX - actual.minX) <= tolerance
+        || abs(target.maxX - actual.maxX) <= tolerance
+    let verticalEdgeIsAnchored = abs(target.minY - actual.minY) <= tolerance
+        || abs(target.maxY - actual.maxY) <= tolerance
+    return horizontalEdgeIsAnchored && verticalEdgeIsAnchored
 }
 
 @MainActor
@@ -480,11 +477,7 @@ struct AXClient {
                         outcomes[write.windowID] = .converged(actual: current)
                         continue
                     }
-                    write.appliedTarget = axFrameWriteRetryTarget(
-                        target: write.target,
-                        actual: current,
-                        previousAttemptCount: write.observedFrames.count
-                    )
+                    write.appliedTarget = write.target
                     write.positionFirst = axFrameWriteOrder(
                         current: current,
                         target: write.appliedTarget
@@ -955,11 +948,7 @@ struct AXClient {
                     return .converged(actual: current)
                 }
                 currentFrame = current
-                appliedFrame = axFrameWriteRetryTarget(
-                    target: frame,
-                    actual: current,
-                    previousAttemptCount: observedFrames.count
-                )
+                appliedFrame = frame
             case .failure:
                 currentFrame = nil
                 appliedFrame = frame
@@ -1058,26 +1047,7 @@ struct AXClient {
         let repeatedStableFrame = actualFrames.dropLast().last.map {
             $0.narwhalApproximatelyEquals(actual, tolerance: frameWriteSettleTolerance)
         } == true
-        if repeatedStableFrame,
-           frameWriteGridSnapSettled(
-               target: target,
-               actual: actual,
-               tolerance: Double(frameWriteSettleTolerance)
-           ) {
-            return .converged(actual: actual)
-        }
-        if frameWriteContainmentCorrection(
-            target: target,
-            actual: actual,
-            tolerance: Double(frameWriteSettleTolerance)
-        ) != nil {
-            return .failed(.frameDidNotConverge(target: target, actual: actual, attempts: actualFrames.count))
-        }
-        if frameWriteApproximatelySettled(
-            target: target,
-            actual: actual,
-            tolerance: Double(frameWriteSettleTolerance)
-        ) {
+        if axFrameWriteSettledInsideTarget(target: target, actual: actual) {
             return .converged(actual: actual)
         }
         if let observed = confirmedObservedConstraints(
@@ -1085,6 +1055,10 @@ struct AXClient {
             actualFrames: actualFrames
         ) {
             return .clamped(actual: actual, observed: observed)
+        }
+        if repeatedStableFrame,
+           axFrameWriteConstrainedFrameIsAnchored(target: target, actual: actual) {
+            return .constrained(actual: actual)
         }
         return .failed(.frameDidNotConverge(target: target, actual: actual, attempts: actualFrames.count))
     }

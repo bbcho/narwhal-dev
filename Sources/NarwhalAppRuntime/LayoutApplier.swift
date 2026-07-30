@@ -298,6 +298,9 @@ struct LayoutApplier {
                 let outcome = await axClient.setFrame(metadata, to: frame)
                 applyResult = record(outcome, windowID: windowID, targetFrame: frame, in: applyResult)
                 guard case .converged = outcome else {
+                    if case .constrained = outcome {
+                        continue
+                    }
                     break applyLoop
                 }
             }
@@ -357,6 +360,16 @@ struct LayoutApplier {
         switch outcome {
         case .converged(let actual):
             reporter.info("Applied \(windowID.description) target=\(targetFrame.debugDescription) actual=\(actual.debugDescription)")
+            return recordLayoutFrameWrite(
+                windowID: windowID,
+                targetFrame: targetFrame,
+                observation: .converged(actual: actual),
+                in: result
+            ).result
+        case .constrained(let actual):
+            reporter.info(
+                "Constrained \(windowID.description) target=\(targetFrame.debugDescription) actual=\(actual.debugDescription)"
+            )
             return recordLayoutFrameWrite(
                 windowID: windowID,
                 targetFrame: targetFrame,
