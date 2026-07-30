@@ -121,6 +121,41 @@ struct WindowFrameWriterTests {
         #expect(readbackCount == 4)
     }
 
+    @Test("Confirmed generic constraint returns after one matching visible readback")
+    func genericConstraintReadback() async {
+        let target = CGRect(x: 0, y: 30, width: 1_504, height: 781)
+        let constrained = CGRect(x: 0, y: 30, width: 1_500, height: 781)
+        var readbackCount = 0
+        var settleCount = 0
+        let writer = WindowFrameWriter(
+            writeAccessibility: { _, _ in
+                .constrained(actual: constrained)
+            },
+            writeTerminal: { _, _ in
+                .failure(.invalidFrame(.null))
+            },
+            readback: { _ in
+                readbackCount += 1
+                return .success(WindowFrameReadback(
+                    accessibility: constrained,
+                    windowServer: constrained
+                ))
+            },
+            settle: {
+                settleCount += 1
+            }
+        )
+
+        switch await writer.setFrame(metadata(bundleID: "org.mozilla.firefox"), to: target) {
+        case .constrained(let actual):
+            #expect(actual == constrained)
+        case .converged, .clamped, .failed:
+            Issue.record("Expected the confirmed constrained frame")
+        }
+        #expect(readbackCount == 1)
+        #expect(settleCount == 0)
+    }
+
     private func metadata(bundleID: String) -> WindowMetadata {
         WindowMetadata(
             id: WindowID(raw: 42),

@@ -117,6 +117,27 @@ struct WindowFrameWriter {
                 ) {
                     return .converged(actual: observed.accessibility)
                 }
+                if observed.accessibility.narwhalApproximatelyEquals(
+                    observed.windowServer,
+                    tolerance: configuredGapTolerance
+                ) {
+                    switch initial {
+                    case .constrained(let actual)
+                        where observed.accessibility.narwhalApproximatelyEquals(
+                            actual,
+                            tolerance: configuredGapTolerance
+                        ):
+                        return .constrained(actual: observed.accessibility)
+                    case .clamped(let actual, let constraints)
+                        where observed.accessibility.narwhalApproximatelyEquals(
+                            actual,
+                            tolerance: configuredGapTolerance
+                        ):
+                        return .clamped(actual: observed.accessibility, observed: constraints)
+                    case .converged, .constrained, .clamped, .failed:
+                        break
+                    }
+                }
             case .failure(let error):
                 if attempt == Self.readbackAttemptCount - 1 {
                     return .failed(error)
