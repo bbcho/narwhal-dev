@@ -1,9 +1,36 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import Darwin
 import Foundation
 import NarwhalAppSupport
 import NarwhalCore
+
+private typealias AXUIElementGetWindowFunction =
+    @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
+
+private let axUIElementGetWindowHandle = dlopen(
+    "/System/Library/Frameworks/ApplicationServices.framework/Frameworks/HIServices.framework/HIServices",
+    RTLD_LAZY
+)
+
+private let axUIElementGetWindow: AXUIElementGetWindowFunction? = {
+    guard let axUIElementGetWindowHandle,
+          let symbol = dlsym(axUIElementGetWindowHandle, "_AXUIElementGetWindow")
+    else {
+        return nil
+    }
+    return unsafeBitCast(symbol, to: AXUIElementGetWindowFunction.self)
+}()
+
+private func exactWindowID(for element: AXUIElement) -> WindowID? {
+    guard let axUIElementGetWindow else { return nil }
+    var windowID = CGWindowID(0)
+    guard axUIElementGetWindow(element, &windowID) == .success, windowID != 0 else {
+        return nil
+    }
+    return WindowID(raw: windowID)
+}
 
 struct FocusedWindowSnapshot: Equatable, Sendable {
     let id: WindowID
@@ -198,17 +225,6 @@ func axFrameWriteConstrainedFrameIsAnchored(
     return horizontalEdgeIsAnchored && verticalEdgeIsAnchored
 }
 
-@MainActor
-private struct CoordinatedFrameWrite {
-    let windowID: WindowID
-    let metadata: WindowMetadata
-    var element: AXUIElement
-    let target: CGRect
-    var appliedTarget: CGRect
-    var observedFrames: [CGRect]
-    var positionFirst: Bool
-}
-
 struct AXClient {
     private let inventoryFilter: WindowInventoryFilter
     private let settleStrategy: AXSettleStrategy
@@ -360,7 +376,9 @@ struct AXClient {
             let title = stringAttribute(focusedWindow, kAXTitleAttribute)
             let role = stringAttribute(focusedWindow, kAXRoleAttribute)
             let subrole = stringAttribute(focusedWindow, kAXSubroleAttribute)
-            guard let id = matchedWindowID(processID: pid, title: title, frame: frame) else {
+            guard let id = exactWindowID(for: focusedWindow)
+                    ?? matchedWindowID(processID: pid, title: title, frame: frame)
+            else {
                 return .failure(.focusedWindowUnmatchedToCGWindow)
             }
 
@@ -452,163 +470,6 @@ struct AXClient {
         case .failure(let error):
             return .failed(error)
         }
-    }
-
-    @MainActor
-    func setFramesCoordinated(
-        _ requests: [(window: WindowMetadata, frame: CGRect)]
-    ) async -> [WindowID: AXFrameWriteOutcome] {
-        let metricInterval = runtimeMetrics?.begin(.coordinatedFrameWrite)
-        defer { runtimeMetrics?.end(metricInterval) }
-        var outcomes: [WindowID: AXFrameWriteOutcome] = [:]
-        var pending: [CoordinatedFrameWrite] = []
-
-        for request in requests {
-            switch await windowElement(matching: request.window) {
-            case .success(let element):
-                pending.append(CoordinatedFrameWrite(
-                    windowID: request.window.id,
-                    metadata: request.window,
-                    element: element,
-                    target: request.frame,
-                    appliedTarget: request.frame,
-                    observedFrames: [],
-                    positionFirst: false
-                ))
-            case .failure(let error):
-                outcomes[request.window.id] = .failed(error)
-            }
-        }
-
-        for _ in 1...Self.frameWriteAttemptCount where !pending.isEmpty {
-            var ready: [CoordinatedFrameWrite] = []
-            for var write in pending {
-                switch focusedWindowFrame(write.element) {
-                case .success(let current):
-                    if axFrameWriteSettledInsideTarget(target: write.target, actual: current) {
-                        outcomes[write.windowID] = .converged(actual: current)
-                        continue
-                    }
-                    write.appliedTarget = write.target
-                    write.positionFirst = axFrameWriteOrder(
-                        current: current,
-                        target: write.appliedTarget
-                    ) == .positionThenSize
-                case .failure:
-                    write.positionFirst = false
-                }
-                ready.append(write)
-            }
-            pending = ready
-            guard !pending.isEmpty else { break }
-
-            var didWritePositionFirst = false
-            var positionedFirst: [CoordinatedFrameWrite] = []
-            for var write in pending {
-                guard write.positionFirst else {
-                    positionedFirst.append(write)
-                    continue
-                }
-                switch await retryingInvalidWindowElement(
-                    write.element,
-                    matching: write.metadata,
-                    write: { setPosition(write.appliedTarget.origin, on: $0) }
-                ) {
-                case .success(let refreshed):
-                    write.element = refreshed
-                    didWritePositionFirst = true
-                    positionedFirst.append(write)
-                case .failure(let error):
-                    outcomes[write.windowID] = .failed(error)
-                }
-            }
-            pending = positionedFirst
-            if didWritePositionFirst {
-                await settle(for: Self.frameWriteSettleInterval)
-            }
-            guard !pending.isEmpty else { break }
-
-            var didWriteSize = false
-            var sized: [CoordinatedFrameWrite] = []
-            for var write in pending {
-                switch await retryingInvalidWindowElement(
-                    write.element,
-                    matching: write.metadata,
-                    write: { setSize(write.appliedTarget.size, on: $0) }
-                ) {
-                case .success(let refreshed):
-                    write.element = refreshed
-                    didWriteSize = true
-                    sized.append(write)
-                case .failure(let error):
-                    outcomes[write.windowID] = .failed(error)
-                }
-            }
-            pending = sized
-            if didWriteSize {
-                await settle(for: Self.frameWriteSettleInterval)
-            }
-            guard !pending.isEmpty else { break }
-
-            var didWritePosition = false
-            var positioned: [CoordinatedFrameWrite] = []
-            for var write in pending {
-                switch await retryingInvalidWindowElement(
-                    write.element,
-                    matching: write.metadata,
-                    write: { setPosition(write.appliedTarget.origin, on: $0) }
-                ) {
-                case .success(let refreshed):
-                    write.element = refreshed
-                    didWritePosition = true
-                    positioned.append(write)
-                case .failure(let error):
-                    outcomes[write.windowID] = .failed(error)
-                }
-            }
-            pending = positioned
-            if didWritePosition {
-                await settle(for: Self.frameWriteSettleInterval)
-            }
-
-            var unsettled: [CoordinatedFrameWrite] = []
-            for var write in pending {
-                switch focusedWindowFrame(write.element) {
-                case .success(let actual):
-                    if axFrameWriteSettledInsideTarget(target: write.target, actual: actual) {
-                        outcomes[write.windowID] = .converged(actual: actual)
-                    } else {
-                        write.observedFrames.append(actual)
-                        unsettled.append(write)
-                    }
-                case .failure(let error):
-                    outcomes[write.windowID] = .failed(error)
-                }
-            }
-            pending = unsettled
-        }
-
-        if !pending.isEmpty {
-            await settle(for: Self.constraintConfirmationInterval)
-        }
-        for var write in pending {
-            switch focusedWindowFrame(write.element) {
-            case .success(let actual):
-                if axFrameWriteSettledInsideTarget(target: write.target, actual: actual) {
-                    outcomes[write.windowID] = .converged(actual: actual)
-                } else {
-                    write.observedFrames.append(actual)
-                    outcomes[write.windowID] = frameWriteDidNotConverge(
-                        target: write.target,
-                        actualFrames: write.observedFrames
-                    )
-                }
-            case .failure(let error):
-                outcomes[write.windowID] = .failed(error)
-            }
-        }
-
-        return outcomes
     }
 
     @MainActor
@@ -1012,15 +873,20 @@ struct AXClient {
                     return .converged(actual: actual)
                 }
                 observedFrames.append(actual)
-                let isStable = observedFrames.dropLast().last.map {
-                    $0.narwhalApproximatelyEquals(actual, tolerance: configuredGapTolerance)
-                } == true
-                if isStable {
-                    return frameWriteDidNotConverge(target: frame, actualFrames: observedFrames)
-                }
             case .failure(let error):
                 return .failed(error)
             }
+        }
+
+        await settle(for: Self.constraintConfirmationInterval)
+        switch focusedWindowFrame(element) {
+        case .success(let actual):
+            if axFrameWriteSettledInsideTarget(target: frame, actual: actual) {
+                return .converged(actual: actual)
+            }
+            observedFrames.append(actual)
+        case .failure(let error):
+            return .failed(error)
         }
         return frameWriteDidNotConverge(target: frame, actualFrames: observedFrames)
     }
@@ -1237,9 +1103,18 @@ struct AXClient {
             return .failure(.windowsAttributeInvalid(processID, error))
         }
 
+        let boundedWindows = windows.map(Self.bounded)
+        if let exact = boundedWindows.first(where: {
+            exactWindowID(for: $0) == windowID
+        }) {
+            return .success(exact)
+        }
+        if boundedWindows.contains(where: { exactWindowID(for: $0) != nil }) {
+            return .failure(.windowElementNotFound(windowID))
+        }
+
         var candidates: [(element: AXUIElement, frame: CGRect)] = []
-        for rawWindow in windows {
-            let window = Self.bounded(rawWindow)
+        for window in boundedWindows {
             let title = stringAttribute(window, kAXTitleAttribute)
             let role = stringAttribute(window, kAXRoleAttribute)
             guard expectedTitle.isEmpty || title.isEmpty || title == expectedTitle else { continue }

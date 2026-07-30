@@ -1293,28 +1293,33 @@ enum RealAppWindowVerification {
         let cellHeight = display.visibleFrame.height / CGFloat(rows)
         let requests = try originals.enumerated().map { index, original in
             let metadata = try currentWorkflowMetadata(for: original, using: axClient)
-            let target = CGRect(
+            let target = canonicalFrameWriteTarget(CGRect(
                 x: display.visibleFrame.minX + CGFloat(index % columns) * cellWidth,
                 y: display.visibleFrame.minY + CGFloat(index / columns) * cellHeight,
                 width: cellWidth,
                 height: cellHeight
-            )
+            ))
             return (metadata, target)
         }
-        let outcomes = await axClient.setFramesCoordinated(requests)
-        for (metadata, _) in requests {
-            guard let outcome = outcomes[metadata.id],
-                  {
-                      switch outcome {
-                      case .converged, .constrained:
-                          return true
-                      case .clamped, .failed:
-                          return false
-                      }
-                  }()
-            else {
+        let writer = WindowFrameWriter(axClient: axClient)
+        for (metadata, target) in requests {
+            switch await writer.setFrame(metadata, to: target) {
+            case .converged:
+                break
+            case .constrained(let actual):
                 throw RealAppWindowVerifierFailure(
-                    "Terminal push-sequence staging failed for \(metadata.id.description)"
+                    "Terminal push-sequence staging constrained \(metadata.id.description): "
+                        + "target=\(target.debugDescription) actual=\(actual.debugDescription)"
+                )
+            case .clamped(let actual, let observed):
+                throw RealAppWindowVerifierFailure(
+                    "Terminal push-sequence staging clamped \(metadata.id.description): "
+                        + "target=\(target.debugDescription) actual=\(actual.debugDescription) "
+                        + "observed=\(observed)"
+                )
+            case .failed(let error):
+                throw RealAppWindowVerifierFailure(
+                    "Terminal push-sequence staging failed for \(metadata.id.description): \(error.description)"
                 )
             }
         }
@@ -1324,7 +1329,8 @@ enum RealAppWindowVerification {
             plannedFrames: targets,
             using: axClient,
             context: "Terminal push-sequence staging",
-            verifyConfiguredGaps: false
+            verifyConfiguredGaps: false,
+            requireExactPlan: true
         )
         try requireRealFramesDisjoint(
             originals,
