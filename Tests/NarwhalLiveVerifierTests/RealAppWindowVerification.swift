@@ -1075,6 +1075,7 @@ enum RealAppWindowVerification {
                 plannedFrames: plannedFrames,
                 using: axClient,
                 context: "Terminal push sequence \(keys) step \(index + 1)",
+                requireExactPlan: true,
                 gapTolerance: configuredGapTolerance
             )
             try requireRealFramesDisjoint(
@@ -2483,6 +2484,7 @@ enum RealAppWindowVerification {
         context: String,
         verifyConfiguredGaps: Bool = true,
         requireNearPlan: Bool = true,
+        requireExactPlan: Bool = false,
         innerGap: Double = Config.default.gaps.inner,
         gapTolerance: CGFloat = configuredGapTolerance
     ) throws {
@@ -2495,24 +2497,35 @@ enum RealAppWindowVerification {
                     "\(context) omitted \(original.spec.name) from the planned layout"
                 )
             }
-            guard !requireNearPlan || frameSettledOnPlan(metadata.frame, plannedFrame) else {
+            let expectedFrame = requireExactPlan
+                ? canonicalFrameWriteTarget(plannedFrame)
+                : plannedFrame
+            let axMatchesPlan = requireExactPlan
+                ? metadata.frame.matches(expectedFrame, tolerance: configuredGapTolerance)
+                : frameSettledOnPlan(metadata.frame, expectedFrame)
+            guard !requireNearPlan || axMatchesPlan else {
                 throw RealAppWindowVerifierFailure(
                     "\(context) AX frame mismatch for \(original.spec.name): "
-                    + "expected=\(plannedFrame.debugDescription) actual=\(metadata.frame.debugDescription)"
+                    + "expected=\(expectedFrame.debugDescription) actual=\(metadata.frame.debugDescription)"
                 )
             }
             actualFrames[metadata.id] = metadata.frame
             let serverFrame = LiveWindowServerVerification.waitForFrame(
                 windowNumber: Int(metadata.id.raw),
-                matching: metadata.frame,
-                tolerance: frameWriteSettleTolerance
+                matching: requireExactPlan ? expectedFrame : metadata.frame,
+                tolerance: requireExactPlan ? configuredGapTolerance : frameWriteSettleTolerance
             )
-            guard let visibleFrame = serverFrame,
-                  visibleFrame.matches(metadata.frame, tolerance: frameWriteSettleTolerance)
+            let serverMatches = serverFrame.map {
+                $0.matches(
+                    requireExactPlan ? expectedFrame : metadata.frame,
+                    tolerance: requireExactPlan ? configuredGapTolerance : frameWriteSettleTolerance
+                )
+            } ?? false
+            guard let visibleFrame = serverFrame, serverMatches
             else {
                 throw RealAppWindowVerifierFailure(
                     "\(context) WindowServer frame mismatch for \(original.spec.name): "
-                        + "expected AX=\(metadata.frame.debugDescription) "
+                        + "expected=\((requireExactPlan ? expectedFrame : metadata.frame).debugDescription) "
                         + "actual=\(serverFrame?.debugDescription ?? "nil")"
                 )
             }
