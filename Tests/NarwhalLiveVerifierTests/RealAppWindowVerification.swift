@@ -1612,7 +1612,9 @@ enum RealAppWindowVerification {
 
     private static func launchChromeVerificationWindow(token: String) throws -> URL {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.executableURL = URL(
+            fileURLWithPath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        )
         let page = try browserVerificationPage(browser: "Chrome", token: token)
         var callerOwnsPage = false
         defer {
@@ -1621,9 +1623,6 @@ enum RealAppWindowVerification {
             }
         }
         process.arguments = [
-            "-n",
-            "-a", "Google Chrome",
-            "--args",
             "--new-window",
             page.absoluteString
         ]
