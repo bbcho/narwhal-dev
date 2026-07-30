@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${NARWHAL_LIVE_VERIFY_CAFFEINATED:-0}" != "1" ]]; then
+  exec /usr/bin/env \
+    NARWHAL_LIVE_VERIFY_CAFFEINATED=1 \
+    /usr/bin/caffeinate -diu "$0" "$@"
+fi
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 
