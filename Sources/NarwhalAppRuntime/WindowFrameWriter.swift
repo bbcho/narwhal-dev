@@ -20,6 +20,34 @@ func canonicalFrameWriteTarget(_ frame: CGRect) -> CGRect {
     )
 }
 
+func terminalAppleScriptFrame(
+    target: CGRect,
+    sourceFrame: CGRect,
+    displayFrames: [CGRect]
+) -> CGRect {
+    let candidates: [(frame: CGRect, intersectionArea: CGFloat)] = displayFrames.map { displayFrame in
+        let intersection = sourceFrame.intersection(displayFrame)
+        let area = intersection.isNull ? 0 : intersection.width * intersection.height
+        return (frame: displayFrame, intersectionArea: area)
+    }
+    let sourceDisplay = candidates
+        .filter { $0.intersectionArea > 0 }
+        .sorted {
+            if $0.intersectionArea != $1.intersectionArea {
+                return $0.intersectionArea > $1.intersectionArea
+            }
+            if $0.frame.minX != $1.frame.minX { return $0.frame.minX < $1.frame.minX }
+            if $0.frame.minY != $1.frame.minY { return $0.frame.minY < $1.frame.minY }
+            if $0.frame.width != $1.frame.width { return $0.frame.width < $1.frame.width }
+            return $0.frame.height < $1.frame.height
+        }
+        .first?
+        .frame
+
+    guard let sourceDisplay else { return target }
+    return target.offsetBy(dx: 0, dy: -sourceDisplay.minY)
+}
+
 func terminalBoundsAppleScript(windowID: WindowID, frame: CGRect) -> String? {
     let frame = canonicalFrameWriteTarget(frame)
     guard frame.narwhalIsFinitePositive else { return nil }
@@ -182,7 +210,12 @@ struct WindowFrameWriter {
         _ window: WindowMetadata,
         _ frame: CGRect
     ) -> Result<Void, AXClientError> {
-        guard let source = terminalBoundsAppleScript(windowID: window.id, frame: frame),
+        let appleScriptFrame = terminalAppleScriptFrame(
+            target: frame,
+            sourceFrame: window.frame,
+            displayFrames: activeDisplayFrames()
+        )
+        guard let source = terminalBoundsAppleScript(windowID: window.id, frame: appleScriptFrame),
               let script = NSAppleScript(source: source)
         else {
             return .failure(.invalidFrame(frame))
@@ -197,5 +230,18 @@ struct WindowFrameWriter {
             ))
         }
         return .success(())
+    }
+
+    private static func activeDisplayFrames() -> [CGRect] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success,
+              count > 0
+        else { return [] }
+
+        var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &displayIDs, &count) == .success else {
+            return []
+        }
+        return displayIDs.prefix(Int(count)).map(CGDisplayBounds)
     }
 }

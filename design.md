@@ -415,7 +415,10 @@ Pre-implementation gate:
     flag when the application exposes it as writable. The generic adapter uses
     one synchronous size-position-size transaction so a position change cannot
     invalidate the requested size. This prevents the known Firefox slow/partial
-    resize behavior without a delayed corrective write.
+    resize behavior without a delayed corrective write. Terminal interprets the
+    vertical `bounds` coordinates relative to the window's source display, so a
+    pure boundary transform subtracts that display's Core Graphics y-origin
+    before the single Apple Event write.
 12. No event schema changes apply.
 13. Each write logs adapter, requested frame, AX frame, WindowServer frame, and
     outcome once; polling itself is not logged.
@@ -429,7 +432,11 @@ Pre-implementation gate:
 Terminal frame writes use the application’s Apple Event `bounds` API, selected
 only for `com.apple.Terminal`. The packaged app declares its Automation purpose
 and hardened-runtime Apple Events entitlement. Permission denial is reported;
-it does not fall back to a geometry-changing AX retry.
+it does not fall back to a geometry-changing AX retry. The shell reads active
+Core Graphics display frames once for the write; the core selects the display
+with the largest intersection with the source window and converts only the
+AppleScript y-coordinate. The requested AX frame remains unchanged for exact AX
+and WindowServer readback verification.
 
 Generic AX writes send one synchronous size-position-size transaction. There is
 no delay or readback between those attribute writes; subsequent settle attempts

@@ -17,6 +17,51 @@ struct WindowFrameWriterTests {
         #expect(script.contains("set bounds of targetWindow to {0, 30, 1504, 811}"))
     }
 
+    @Test(
+        "Terminal bounds compensate for the source display y-origin",
+        arguments: [-120.0, 0.0, 98.0] as [CGFloat]
+    )
+    func terminalSourceDisplayOffset(sourceMinY: CGFloat) {
+        let sourceDisplay = CGRect(x: 3_008, y: sourceMinY, width: 1_512, height: 982)
+        let sourceWindow = CGRect(x: 3_100, y: sourceMinY + 52, width: 900, height: 700)
+        let target = CGRect(x: 24, y: 54, width: 1_263, height: 656)
+
+        let adjusted = terminalAppleScriptFrame(
+            target: target,
+            sourceFrame: sourceWindow,
+            displayFrames: [sourceDisplay]
+        )
+
+        #expect(adjusted == target.offsetBy(dx: 0, dy: -sourceMinY))
+        #expect(adjusted.size == target.size)
+    }
+
+    @Test("Terminal bounds use the source display with the largest intersection")
+    func terminalSourceDisplaySelection() {
+        let target = CGRect(x: 24, y: 54, width: 1_263, height: 656)
+        let adjusted = terminalAppleScriptFrame(
+            target: target,
+            sourceFrame: CGRect(x: 900, y: 240, width: 800, height: 600),
+            displayFrames: [
+                CGRect(x: 0, y: 0, width: 1_000, height: 900),
+                CGRect(x: 1_000, y: 200, width: 1_000, height: 900)
+            ]
+        )
+
+        #expect(adjusted == target.offsetBy(dx: 0, dy: -200))
+    }
+
+    @Test("Terminal bounds stay global when the source display is unavailable")
+    func terminalMissingSourceDisplay() {
+        let target = CGRect(x: 24, y: 54, width: 1_263, height: 656)
+
+        #expect(terminalAppleScriptFrame(
+            target: target,
+            sourceFrame: CGRect(x: 4_500, y: 2_000, width: 800, height: 600),
+            displayFrames: [CGRect(x: 0, y: 0, width: 3_008, height: 1_692)]
+        ) == target)
+    }
+
     @Test("Terminal uses its exact bounds adapter and verifies both readbacks")
     func terminalAdapter() async {
         let target = CGRect(x: 0, y: 30, width: 1_504, height: 781)
