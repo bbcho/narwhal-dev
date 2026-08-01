@@ -129,11 +129,15 @@ enum DisplayTopologyReflowVerification {
                 )
             }
             let expectedServerFrame = target.frame.insetBy(dx: -1, dy: -1)
-            guard LiveWindowServerVerification.waitForFrame(
+            guard let serverFrame = LiveWindowServerVerification.waitForBorderSurface(
                 windowNumber: borderNumber,
-                matching: expectedServerFrame,
+                contentFrame: expectedServerFrame,
                 tolerance: 0.5
-            )?.matches(expectedServerFrame, tolerance: 0.5) == true else {
+            ), LiveWindowServerVerification.borderSurfaceMatches(
+                serverFrame,
+                contentFrame: expectedServerFrame,
+                tolerance: 0.5
+            ) else {
                 return (false, "display topology reflow border was absent from WindowServer for \(target.windowID.description)")
             }
         }

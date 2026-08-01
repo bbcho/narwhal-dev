@@ -5,12 +5,41 @@ import NarwhalCore
 
 enum LiveWindowServerVerification {
     static func waitForFrame(windowNumber: Int, matching expected: CGRect, tolerance: CGFloat = 2) -> CGRect? {
+        waitForFrame(windowNumber: windowNumber, reviewDescription: expected.debugDescription) {
+            $0.matches(expected, tolerance: tolerance)
+        }
+    }
+
+    static func waitForBorderSurface(
+        windowNumber: Int,
+        contentFrame: CGRect,
+        tolerance: CGFloat = 0.5
+    ) -> CGRect? {
+        waitForFrame(windowNumber: windowNumber, reviewDescription: contentFrame.debugDescription) {
+            borderSurfaceMatches($0, contentFrame: contentFrame, tolerance: tolerance)
+        }
+    }
+
+    static func borderSurfaceMatches(
+        _ surfaceFrame: CGRect,
+        contentFrame: CGRect,
+        tolerance: CGFloat = 0.5
+    ) -> Bool {
+        surfaceFrame.matches(contentFrame, tolerance: tolerance)
+            || surfaceFrame.matches(contentFrame.insetBy(dx: -1, dy: -1), tolerance: tolerance)
+    }
+
+    private static func waitForFrame(
+        windowNumber: Int,
+        reviewDescription: String,
+        matches: (CGRect) -> Bool
+    ) -> CGRect? {
         let deadline = Date().addingTimeInterval(0.6)
         var lastFrame: CGRect?
         while Date() < deadline {
             lastFrame = frame(for: windowNumber)
-            if lastFrame?.matches(expected, tolerance: tolerance) == true {
-                reviewPause("window \(windowNumber) matched WindowServer frame \(expected.debugDescription)")
+            if let lastFrame, matches(lastFrame) {
+                reviewPause("window \(windowNumber) matched WindowServer frame \(reviewDescription)")
                 return lastFrame
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.03))

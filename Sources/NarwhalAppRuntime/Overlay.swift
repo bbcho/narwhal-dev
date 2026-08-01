@@ -232,6 +232,10 @@ final class Overlay {
         tiledBorderWindows[windowID]?.windowNumber
     }
 
+    func debugTiledBorderGeometrySnapshot(for windowID: WindowID) -> FocusBorderDebugGeometrySnapshot? {
+        tiledBorderViews[windowID]?.debugGeometrySnapshot()
+    }
+
     func debugTiledBorderIsVisuallyVisible(for windowID: WindowID) -> Bool {
         guard let window = tiledBorderWindows[windowID] else { return false }
         return window.isVisible && window.alphaValue > 0

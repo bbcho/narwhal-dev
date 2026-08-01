@@ -779,7 +779,7 @@ enum RealAppWindowVerification {
         var actual: [CGRect] = []
         while Date() < deadline {
             actual = productionOverlayFrames(ownerPID: ownerPID)
-            if uniquelyMatches(expected: expected, actual: actual, tolerance: 0.5) {
+            if uniquelyMatchesBorderSurfaces(expected: expected, actual: actual, tolerance: 0.5) {
                 return
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.03))
@@ -790,14 +790,20 @@ enum RealAppWindowVerification {
         )
     }
 
-    private static func uniquelyMatches(
+    private static func uniquelyMatchesBorderSurfaces(
         expected: [CGRect],
         actual: [CGRect],
         tolerance: CGFloat
     ) -> Bool {
         var remaining = actual
         for frame in expected {
-            guard let index = remaining.firstIndex(where: { $0.matches(frame, tolerance: tolerance) }) else {
+            guard let index = remaining.firstIndex(where: {
+                LiveWindowServerVerification.borderSurfaceMatches(
+                    $0,
+                    contentFrame: frame,
+                    tolerance: tolerance
+                )
+            }) else {
                 return false
             }
             remaining.remove(at: index)
@@ -855,7 +861,11 @@ enum RealAppWindowVerification {
                !current.narwhalApproximatelyEquals(oldWindowFrame, tolerance: 0.5) {
                 observedMovement = true
                 if productionOverlayFrames(ownerPID: ownerPID).contains(where: {
-                    $0.matches(oldBorderFrame, tolerance: 0.5)
+                    LiveWindowServerVerification.borderSurfaceMatches(
+                        $0,
+                        contentFrame: oldBorderFrame,
+                        tolerance: 0.5
+                    )
                 }) {
                     staleBorderAfterMovement = true
                 }
@@ -1150,6 +1160,12 @@ enum RealAppWindowVerification {
             )
             guard let actualAppKitFrame = overlay.debugTiledBorderFrame(for: target.windowID),
                   actualAppKitFrame.matches(expectedAppKitFrame, tolerance: 0.5),
+                  let geometry = overlay.debugTiledBorderGeometrySnapshot(for: target.windowID),
+                  geometry.strokeRect.matches(
+                      CGRect(origin: .zero, size: expectedAppKitFrame.size).insetBy(dx: 1, dy: 1),
+                      tolerance: 0.5
+                  ),
+                  geometry.pathBoundingBox.matches(geometry.strokeRect, tolerance: 0.5),
                   overlay.debugTiledBorderIsVisuallyVisible(for: target.windowID),
                   let windowNumber = overlay.debugTiledBorderWindowNumber(for: target.windowID)
             else {
@@ -1164,12 +1180,18 @@ enum RealAppWindowVerification {
                 forAppKitFrame: expectedAppKitFrame,
                 on: display
             )
-            let serverFrame = LiveWindowServerVerification.waitForFrame(
+            let serverFrame = LiveWindowServerVerification.waitForBorderSurface(
                 windowNumber: windowNumber,
-                matching: expectedWindowServerFrame,
+                contentFrame: expectedWindowServerFrame,
                 tolerance: 0.5
             )
-            guard serverFrame?.matches(expectedWindowServerFrame, tolerance: 0.5) == true else {
+            guard let serverFrame,
+                  LiveWindowServerVerification.borderSurfaceMatches(
+                      serverFrame,
+                      contentFrame: expectedWindowServerFrame,
+                      tolerance: 0.5
+                  )
+            else {
                 throw RealAppWindowVerifierFailure(
                     "\(context) tiled border for \(target.windowID.description) was not visible at its expected WindowServer frame: "
                         + "expected=\(expectedWindowServerFrame.debugDescription) "
