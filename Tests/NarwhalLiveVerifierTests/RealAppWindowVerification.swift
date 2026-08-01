@@ -3474,14 +3474,19 @@ enum RealAppWindowVerification {
     private static func closeCreatedWindow(_ original: RealAppOriginal, using axClient: AXClient) async throws {
         if original.spec.name == "Terminal",
            closeTerminalWindow(windowID: original.metadata.id) {
-            await settleLiveVerifier(for: 0.2)
-            report("REAL APP WINDOW: closed Terminal \(original.metadata.id.description)")
-            return
+            if await waitForWindowServerRemoval(original.metadata.id) {
+                report("REAL APP WINDOW: closed Terminal \(original.metadata.id.description)")
+                return
+            }
         }
 
         switch await axClient.closeWindow(original.metadata) {
         case .success:
-            await settleLiveVerifier(for: 0.2)
+            guard await waitForWindowServerRemoval(original.metadata.id) else {
+                throw RealAppWindowVerifierFailure(
+                    "\(original.spec.name) close request left verifier-created window \(original.metadata.id.description) visible"
+                )
+            }
             report("REAL APP WINDOW: closed \(original.spec.name) \(original.metadata.id.description)")
             return
         case .failure(let error):
@@ -3489,6 +3494,17 @@ enum RealAppWindowVerification {
                 "\(original.spec.name) could not close verifier-created window \(original.metadata.id.description): \(error.description)"
             )
         }
+    }
+
+    private static func waitForWindowServerRemoval(_ windowID: WindowID) async -> Bool {
+        let deadline = Date().addingTimeInterval(1.2)
+        while Date() < deadline {
+            if LiveWindowServerVerification.frame(for: Int(windowID.raw)) == nil {
+                return true
+            }
+            await settleLiveVerifier(for: 0.05)
+        }
+        return false
     }
 
     private static func report(_ message: String) {
@@ -3503,7 +3519,15 @@ enum RealAppWindowVerification {
             "-e",
             """
             tell application "Terminal"
-                if exists window id \(windowID.raw) then close (window id \(windowID.raw)) saving no
+                if exists window id \(windowID.raw) then
+                    try
+                        do script "exit" in selected tab of window id \(windowID.raw)
+                    end try
+                    delay 0.1
+                    try
+                        close (window id \(windowID.raw)) saving no
+                    end try
+                end if
             end tell
             """
         ]
