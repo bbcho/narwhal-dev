@@ -10,16 +10,22 @@ import NarwhalCore
 @MainActor
 final class VerifierAppDelegate: NSObject, NSApplicationDelegate {
     private static var installed: VerifierAppDelegate?
+    private static var processActivity: NSObjectProtocol?
 
     static func installIfNeeded() {
         if installed == nil {
-            // Keep the host alive between serialized verifier cases.
-            ProcessInfo.processInfo.disableAutomaticTermination("NarwhalLiveVerifier")
-            ProcessInfo.processInfo.disableSuddenTermination()
             let delegate = VerifierAppDelegate()
             NSApp.delegate = delegate
             installed = delegate
         }
+    }
+
+    static func retainProcessActivityIfNeeded() {
+        guard processActivity == nil else { return }
+        processActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.automaticTerminationDisabled, .suddenTerminationDisabled, .userInitiated],
+            reason: "Narwhal live verification"
+        )
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -44,7 +50,7 @@ enum LiveFocusWorkflowVerification {
             }).first else {
                 throw LiveFocusWorkflowFailure("sheet verification requires a display")
             }
-            await activateVerifierApplication()
+            await activateLiveVerifierApplication()
             let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
             let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
             let parent = makeWindow(
@@ -106,7 +112,7 @@ enum LiveFocusWorkflowVerification {
                 )
             }
 
-            await activateVerifierApplication()
+            await activateLiveVerifierApplication()
 
             let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
             let overlay = Overlay(border: Config.default.border, hud: Config.default.hud)
@@ -505,20 +511,6 @@ enum LiveFocusWorkflowVerification {
         }
     }
 
-    private static func activateVerifierApplication() async {
-        NSApp.setActivationPolicy(.accessory)
-        // Install (once) a delegate that explicitly forbids auto-terminating on
-        // last-window-closed. Without this, the test process exits cleanly
-        // (exit 0, no crash) after our defer orderOuts the last window, which
-        // swallows the test result line AND aborts the remaining tests in the
-        // suite. .accessory alone is not sufficient on macOS 15+.
-        VerifierAppDelegate.installIfNeeded()
-        NSApp.finishLaunching()
-        NSApp.unhide(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        await settleLiveVerifier(for: 0.12)
-    }
-
     private static func raiseClickTarget(
         _ target: LiveFocusWindow,
         overFocused focused: LiveFocusWindow,
@@ -527,7 +519,7 @@ enum LiveFocusWorkflowVerification {
         using axClient: AXClient,
         context: String
     ) async throws {
-        await activateVerifierApplication()
+        await activateLiveVerifierApplication()
         try await focusVerifierWindow(focused, using: axClient, context: "\(context) focused source")
 
         target.window.order(.above, relativeTo: focused.windowNumber)
@@ -558,7 +550,7 @@ enum LiveFocusWorkflowVerification {
         using axClient: AXClient,
         context: String
     ) async throws {
-        await activateVerifierApplication()
+        await activateLiveVerifierApplication()
         window.window.makeKeyAndOrderFront(nil)
         window.window.orderFrontRegardless()
         await settleLiveVerifier(for: 0.18)

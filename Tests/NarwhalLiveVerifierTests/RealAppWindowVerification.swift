@@ -221,6 +221,7 @@ enum RealAppWindowVerification {
         var originals: [RealAppOriginal] = []
         do {
             try waitForUnlockedSession()
+            await activateLiveVerifierApplication()
             let displays = DisplayClient().currentDisplays()
             let targetDisplay = try manualResizeVerificationDisplay(displays)
             let minimum = terminalSpec().minimumWindowSize
