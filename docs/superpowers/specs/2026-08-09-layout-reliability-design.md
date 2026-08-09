@@ -117,17 +117,21 @@ The WindowServer focus-border verifier must throw if it cannot resolve the actua
 
 ## Manual resize semantics
 
-Manual resizing uses the visible seam nearest the changed edge of the source window, not merely the first ancestor with the matching axis.
+Manual resizing is derived from the visible partition, not from whichever BSP topology happened to produce it. This distinction is required because the same 2-by-2 geometry can be stored as either two column subtrees or two row subtrees. A bottom-row seam must remain local even when the historical tree stores one root seam shared by both rows.
 
-For each candidate split on the source path:
+The Core operation performs these steps:
 
-1. Compute the split's rendered cell frame.
-2. Determine whether the source's changed edge coincides with that split boundary within tolerance.
-3. Choose the deepest coincident split, so a local bottom-row seam wins over the root column split.
-4. Preserve branches outside the selected split byte-for-byte.
-5. Solve weights using the settled live source frame and configured gaps.
+1. Render every occupied and empty tree slot to a stable slot identity and frame before the resize.
+2. Compare the settled source frame with its prior frame to identify the one moved edge. Ambiguous multi-edge changes are treated as a move/detach rather than guessed as a resize.
+3. Find the visible neighbors whose opposite edges coincide with the old source edge and whose orthogonal spans overlap the moved edge.
+4. Move only that contiguous visible seam segment. Adjust the source and directly adjacent slot rectangles; preserve every nonparticipant rectangle exactly.
+5. Validate positive extents, the configured gap, no overlap, and complete coverage of the original partition.
+6. Reconstruct a guillotine BSP from the adjusted occupied and empty slot rectangles. Cut selection is deterministic: prefer a full-span cut matching the changed seam, then preserve original ancestor grouping where compatible, then use vertical-before-horizontal coordinate order as the final tie-breaker.
+7. Assign split weights from reconstructed cell extents and verify that solving the rebuilt tree reproduces the intended rectangles within configured-gap tolerance.
 
-If no split boundary coincides with the changed edge, record the live geometry and temporarily detach the source instead of resizing an unrelated ancestor.
+This reconstruction intentionally rotates a column-shaped 2-by-2 tree into a row-shaped tree when that is necessary to localize the bottom seam. Empty slots participate in reconstruction so zone capacity is not lost.
+
+If the changed seam is not adjacent to another slot, the adjusted rectangles are not guillotine-partitionable, reconstruction does not reproduce the intended frames, or more than one source edge changed, Narwhal records the live geometry and temporarily detaches the source instead of resizing an unrelated ancestor.
 
 ## Performance contract
 
