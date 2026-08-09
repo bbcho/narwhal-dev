@@ -89,6 +89,53 @@ struct LayoutSolverTests {
         }
     }
 
+    @Test("HLLLLLLK reflows around observed Terminal minimums")
+    func hllllllkReflowsAroundObservedTerminalMinimums() throws {
+        let display = DisplayID(raw: 1)
+        let windows = (1...8).map { WindowID(raw: CGWindowID($0)) }
+        let directions: [Direction] = [
+            .left, .right, .right, .right, .right, .right, .right, .up
+        ]
+        let tree = pushSequence(Array(zip(windows, directions)))
+        let space = spaceState(display: display, tree: tree)
+        let frame = CGRect(x: 0, y: 30, width: 3_200, height: 1_670)
+        let gaps = noGaps
+
+        let unconstrained = layout(
+            spaceState: space,
+            displayID: display,
+            frame: frame,
+            gaps: gaps
+        )
+        #expect(unconstrained.tiled[windows[5]]?.height == 104)
+
+        let terminalMinimum = WindowConstraints(minWidth: 300, minHeight: 119)
+        let constraints = Dictionary(uniqueKeysWithValues: windows.map { ($0, terminalMinimum) })
+        let result = solveLayout(
+            spaceState: space,
+            displayID: display,
+            frame: frame,
+            gaps: gaps,
+            constraints: constraints
+        )
+
+        guard case .solved(let solved, .adjusted) = result else {
+            Issue.record("Expected the constrained HLLLLLLK layout to reflow, got \(String(describing: result))")
+            return
+        }
+        #expect(Set(solved.tiled.keys) == Set(windows))
+        #expect(solved.tiled.values.allSatisfy {
+            $0.width >= 300 && $0.height >= 119 && frame.contains($0)
+        })
+        for first in windows.indices {
+            for second in windows.indices where second > first {
+                let firstFrame = try #require(solved.tiled[windows[first]])
+                let secondFrame = try #require(solved.tiled[windows[second]])
+                #expect(firstFrame.intersection(secondFrame).narwhalArea == 0)
+            }
+        }
+    }
+
     @Test("Unsatisfiable horizontal minimums return a domain failure")
     func unsatisfiableMinimumsReturnReason() {
         let display = DisplayID(raw: 1)
