@@ -216,7 +216,14 @@ enum RealAppWindowVerification {
             managedRules: Config.default.managedRules
         )
         let sequenceFilter = ProcessInfo.processInfo.environment["NARWHAL_TERMINAL_SEQUENCE_FILTER"]
-        var matchedSequenceFilter = sequenceFilter == nil
+        let matrixCounts: [Int]
+        if let sequenceFilter {
+            matrixCounts = terminalPushSequencesByCount.keys.filter {
+                terminalPushSequencesByCount[$0]?.contains(sequenceFilter) == true
+            }.sorted()
+        } else {
+            matrixCounts = Array(4...8)
+        }
         defer { overlay.stop() }
         var originals: [RealAppOriginal] = []
         do {
@@ -225,16 +232,23 @@ enum RealAppWindowVerification {
             let displays = DisplayClient().currentDisplays()
             let targetDisplay = try manualResizeVerificationDisplay(displays)
             let minimum = terminalSpec().minimumWindowSize
-            guard targetDisplay.visibleFrame.width / 8 >= minimum.width,
-                  targetDisplay.visibleFrame.height / 8 >= minimum.height
+            guard let maximumCount = matrixCounts.max() else {
+                throw RealAppWindowVerifierFailure(
+                    "Terminal sequence filter did not match a verifier case: \(sequenceFilter ?? "")"
+                )
+            }
+            guard targetDisplay.visibleFrame.width / CGFloat(maximumCount) >= minimum.width,
+                  targetDisplay.visibleFrame.height / CGFloat(maximumCount) >= minimum.height
             else {
                 throw RealAppWindowVerifierFailure(
-                    "4-8 Terminal tile matrix requires at least \(minimum.width * 8)x\(minimum.height * 8) visible points"
+                    "Terminal \(maximumCount)-tile matrix requires at least "
+                        + "\(minimum.width * CGFloat(maximumCount))x"
+                        + "\(minimum.height * CGFloat(maximumCount)) visible points"
                 )
             }
 
             var selectedIDs = Set<WindowID>()
-            for count in 4...8 {
+            for count in matrixCounts {
                 while originals.count < count {
                     let index = originals.count + 1
                     let original = try await launchTrackedWindow(
@@ -248,43 +262,41 @@ enum RealAppWindowVerification {
                     originals.append(original)
                 }
 
-                for axis in Axis.allCases {
-                    overlay.render(.empty)
-                    _ = try await applyRealAxisLayout(
-                        originals,
-                        axis: axis,
-                        label: "Terminal \(count)-tile \(axis.rawValue)",
-                        targetDisplay: targetDisplay,
-                        axClient: axClient,
-                        displays: displays,
-                        config: axisConfig
-                    )
-                    _ = try renderTerminalBorders(
-                        originals,
-                        using: axClient,
-                        overlay: overlay
-                    )
-                    try await raiseForWindowServerVerification(
-                        originals,
-                        using: axClient,
-                        context: "Terminal \(count)-tile \(axis.rawValue) borders"
-                    )
-                    try renderAndVerifyTerminalBorders(
-                        originals,
-                        on: targetDisplay,
-                        using: axClient,
-                        overlay: overlay,
-                        context: "Terminal \(count)-tile \(axis.rawValue)"
-                    )
-                    report("REAL TILE MATRIX: \(count) Terminal windows tiled \(axis.rawValue)")
-                    await settleLiveVerifier(for: 0.35)
+                if sequenceFilter == nil {
+                    for axis in Axis.allCases {
+                        _ = try await applyRealAxisLayout(
+                            originals,
+                            axis: axis,
+                            label: "Terminal \(count)-tile \(axis.rawValue)",
+                            targetDisplay: targetDisplay,
+                            axClient: axClient,
+                            displays: displays,
+                            config: axisConfig
+                        )
+                        _ = try renderTerminalBorders(
+                            originals,
+                            using: axClient,
+                            overlay: overlay
+                        )
+                        try await raiseForWindowServerVerification(
+                            originals,
+                            using: axClient,
+                            context: "Terminal \(count)-tile \(axis.rawValue) borders"
+                        )
+                        try renderAndVerifyTerminalBorders(
+                            originals,
+                            on: targetDisplay,
+                            using: axClient,
+                            overlay: overlay,
+                            context: "Terminal \(count)-tile \(axis.rawValue)"
+                        )
+                        report("REAL TILE MATRIX: \(count) Terminal windows tiled \(axis.rawValue)")
+                        await settleLiveVerifier(for: 0.35)
+                    }
                 }
 
                 let sequences = (terminalPushSequencesByCount[count] ?? []).filter {
                     sequenceFilter == nil || $0 == sequenceFilter
-                }
-                if !sequences.isEmpty {
-                    matchedSequenceFilter = true
                 }
                 for sequence in sequences {
                     try await verifyTerminalPushSequence(
@@ -298,15 +310,12 @@ enum RealAppWindowVerification {
                 }
             }
 
-            guard matchedSequenceFilter else {
-                throw RealAppWindowVerifierFailure(
-                    "Terminal sequence filter did not match a verifier case: \(sequenceFilter ?? "")"
-                )
-            }
-
             try await cleanupApps(originals, using: axClient)
             originals.removeAll()
-            return (true, "real Terminal 4-8 tile and mixed push-sequence matrix passed")
+            let summary = sequenceFilter.map {
+                "real Terminal push sequence \($0) passed"
+            } ?? "real Terminal 4-8 tile and mixed push-sequence matrix passed"
+            return (true, summary)
         } catch let error as RealAppWindowVerifierFailure {
             await cleanupAppsBestEffort(originals, using: axClient, context: "REAL TERMINAL TILE MATRIX VERIFY")
             return (false, error.message)
@@ -1037,7 +1046,6 @@ enum RealAppWindowVerification {
             )
         }
 
-        overlay.render(.empty)
         try await stageTerminalPushSequenceWindows(
             originals,
             on: targetDisplay,
@@ -1064,7 +1072,6 @@ enum RealAppWindowVerification {
                 using: axClient,
                 context: "Terminal push sequence \(keys) step \(index + 1)"
             )
-            overlay.render(.empty)
             let plannedFrames = try await applyWorkflowCommand(
                 "Terminal push sequence \(keys) step \(index + 1) \(key)",
                 plan: { await worldActor.planPush(metadata.id, direction: direction) },
