@@ -97,6 +97,37 @@ struct WindowFrameWriterTests {
         #expect(requestedFrame == target)
     }
 
+    @Test("Stable Terminal minimum expansion is reported as a clamp")
+    func terminalStableMinimumExpansionIsClamped() async {
+        let target = CGRect(x: 1_600, y: 1_492, width: 400, height: 104)
+        let actual = CGRect(x: 1_600, y: 1_477, width: 400, height: 119)
+        var readbackCount = 0
+        let writer = WindowFrameWriter(
+            writeAccessibility: { _, _ in
+                .failed(.invalidFrame(.null))
+            },
+            writeTerminal: { _, _ in
+                .success(())
+            },
+            readback: { _ in
+                readbackCount += 1
+                return .success(WindowFrameReadback(
+                    accessibility: actual,
+                    windowServer: actual
+                ))
+            }
+        )
+
+        switch await writer.setFrame(metadata(bundleID: "com.apple.Terminal"), to: target) {
+        case .clamped(let settled, let observed):
+            #expect(settled == actual)
+            #expect(observed == WindowConstraints(minHeight: 119))
+        case .converged, .constrained, .failed:
+            Issue.record("Expected the stable Terminal minimum to become clamp feedback")
+        }
+        #expect(readbackCount == 4)
+    }
+
     @Test("Automation failure does not fall back to Accessibility")
     func automationFailure() async {
         var accessibilityWriteCount = 0

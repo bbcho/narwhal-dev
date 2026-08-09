@@ -171,6 +171,16 @@ struct WindowFrameWriter {
             ))
         }
 
+        if let observed = confirmedObservedConstraints(
+            target: target,
+            actualFrames: readbackFrames
+        ) {
+            return .clamped(
+                actual: lastReadback.accessibility,
+                observed: observed
+            )
+        }
+
         switch initial {
         case .constrained:
             return .constrained(actual: lastReadback.accessibility)
