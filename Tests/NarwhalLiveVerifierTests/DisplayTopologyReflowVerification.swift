@@ -111,8 +111,12 @@ enum DisplayTopologyReflowVerification {
             return (false, "display topology reflow did not render both tiled borders")
         }
         for target in targets {
-            let expectedAppKitFrame = appKitFrame(forAXFrame: target.frame, display: display)
+            let proposedAppKitFrame = appKitFrame(forAXFrame: target.frame, display: display)
                 .insetBy(dx: -1, dy: -1)
+            let expectedAppKitFrame = LiveWindowServerVerification.constrainedBorderContentFrame(
+                proposedAppKitFrame,
+                on: display.id
+            )
             guard overlay.debugTiledBorderFrame(for: target.windowID)?.matches(
                 expectedAppKitFrame,
                 tolerance: 0.5
@@ -128,17 +132,25 @@ enum DisplayTopologyReflowVerification {
                         + "visible=\(overlay.debugTiledBorderIsVisuallyVisible(for: target.windowID))"
                 )
             }
-            let expectedServerFrame = target.frame.insetBy(dx: -1, dy: -1)
-            guard let serverFrame = LiveWindowServerVerification.waitForBorderSurface(
+            let expectedServerFrame = axFrame(forAppKitFrame: expectedAppKitFrame, display: display)
+            let serverFrame = LiveWindowServerVerification.waitForBorderSurface(
                 windowNumber: borderNumber,
                 contentFrame: expectedServerFrame,
                 tolerance: 0.5
-            ), LiveWindowServerVerification.borderSurfaceMatches(
-                serverFrame,
-                contentFrame: expectedServerFrame,
-                tolerance: 0.5
-            ) else {
-                return (false, "display topology reflow border was absent from WindowServer for \(target.windowID.description)")
+            )
+            guard let serverFrame,
+                  LiveWindowServerVerification.borderSurfaceMatches(
+                      serverFrame,
+                      contentFrame: expectedServerFrame,
+                      tolerance: 0.5
+                  )
+            else {
+                return (
+                    false,
+                    "display topology reflow border was absent from WindowServer for \(target.windowID.description): "
+                        + "expected=\(expectedServerFrame.debugDescription) "
+                        + "actual=\(serverFrame?.debugDescription ?? "nil")"
+                )
             }
         }
 
@@ -206,6 +218,21 @@ enum DisplayTopologyReflowVerification {
         return CGRect(
             x: screenFrame.minX + (frame.minX - display.frame.minX),
             y: screenFrame.minY + (display.frame.maxY - frame.maxY),
+            width: frame.width,
+            height: frame.height
+        )
+    }
+
+    private static func axFrame(forAppKitFrame frame: CGRect, display: DisplayInfo) -> CGRect {
+        let screenFrame = NSScreen.screens.first { screen in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                return false
+            }
+            return CGDirectDisplayID(number.uint32Value) == display.id.raw
+        }?.frame ?? display.frame
+        return CGRect(
+            x: display.frame.minX + (frame.minX - screenFrame.minX),
+            y: display.frame.maxY - (frame.maxY - screenFrame.minY),
             width: frame.width,
             height: frame.height
         )

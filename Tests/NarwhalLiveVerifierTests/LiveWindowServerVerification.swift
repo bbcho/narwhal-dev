@@ -1,4 +1,5 @@
 #if NARWHAL_ENABLE_VERIFIERS
+import AppKit
 import CoreGraphics
 import Foundation
 import NarwhalCore
@@ -27,6 +28,18 @@ enum LiveWindowServerVerification {
     ) -> Bool {
         surfaceFrame.matches(contentFrame, tolerance: tolerance)
             || surfaceFrame.matches(contentFrame.insetBy(dx: -1, dy: -1), tolerance: tolerance)
+    }
+
+    static func constrainedBorderContentFrame(_ proposed: CGRect, on displayID: DisplayID) -> CGRect {
+        guard let visibleFrame = NSScreen.screens.first(where: { screen in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                return false
+            }
+            return CGDirectDisplayID(number.uint32Value) == displayID.raw
+        })?.visibleFrame, proposed.maxY > visibleFrame.maxY else {
+            return proposed
+        }
+        return proposed.offsetBy(dx: 0, dy: visibleFrame.maxY - proposed.maxY)
     }
 
     private static func waitForFrame(

@@ -763,7 +763,10 @@ enum RealAppWindowVerification {
     ) -> CGRect {
         let proposed = appKitFrame(forAXFrame: frame, on: display).insetBy(dx: -1, dy: -1)
         return axFrame(
-            forAppKitFrame: constrainBorderFrameToVisibleScreen(proposed, on: display),
+            forAppKitFrame: LiveWindowServerVerification.constrainedBorderContentFrame(
+                proposed,
+                on: display.id
+            ),
             on: display
         )
     }
@@ -1154,9 +1157,9 @@ enum RealAppWindowVerification {
                 forAXFrame: target.frame,
                 on: display
             ).insetBy(dx: -1, dy: -1)
-            let expectedAppKitFrame = constrainBorderFrameToVisibleScreen(
+            let expectedAppKitFrame = LiveWindowServerVerification.constrainedBorderContentFrame(
                 proposedAppKitFrame,
-                on: display
+                on: display.id
             )
             guard let actualAppKitFrame = overlay.debugTiledBorderFrame(for: target.windowID),
                   actualAppKitFrame.matches(expectedAppKitFrame, tolerance: 0.5),
@@ -1199,16 +1202,6 @@ enum RealAppWindowVerification {
                 )
             }
         }
-    }
-
-    private static func constrainBorderFrameToVisibleScreen(
-        _ proposed: CGRect,
-        on display: DisplayInfo
-    ) -> CGRect {
-        guard let screen = screen(for: display.id), proposed.maxY > screen.visibleFrame.maxY else {
-            return proposed
-        }
-        return proposed.offsetBy(dx: 0, dy: screen.visibleFrame.maxY - proposed.maxY)
     }
 
     private static func appKitFrame(forAXFrame frame: CGRect, on display: DisplayInfo) -> CGRect {
