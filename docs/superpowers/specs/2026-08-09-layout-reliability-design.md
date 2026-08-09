@@ -12,7 +12,7 @@ This design addresses the production resize regression and the cross-cutting rev
 2. A failed layout operation does not enter history. Every already-moved window is restored to its verified pre-operation frame.
 3. If restoration is incomplete, Narwhal refreshes from live AX and WindowServer state, marks only the affected workspace as requiring reconciliation, hides that workspace's stale tiled borders, and refuses automatic layout retries in that workspace until a complete refresh clears the condition.
 4. One failed workspace does not pause Narwhal globally. Commands in unaffected workspaces remain available.
-5. Manual resizing preserves the window under the pointer. In a 2-by-2 layout, moving the bottom horizontal seam changes only the two bottom windows; the top row remains unchanged.
+5. Manual resizing preserves the window under the pointer. In a 2-by-2 layout, moving the vertical seam segment within the bottom row changes only the two bottom windows; the top row remains unchanged.
 6. Manual resize bursts are latest-wins. Narwhal does not queue obsolete sibling corrections or rewrite the source window during the gesture.
 7. Focus and tiled borders are rendered only from current live frames. A dialog or sheet occludes its parent borders and receives the focus border when AX identifies it as the focused container.
 8. Configured gaps remain constant after every successful command, manual resize, display reflow, rollback, and restore convergence.
@@ -40,7 +40,7 @@ Create `Sources/NarwhalAppRuntime/LayoutFrameTransaction.swift` as the only comp
 It consumes a `CommandPlanResult`, a set of preserved source frames, and `WindowFrameWriter`. It produces one of:
 
 - `committedCandidate(appliedFrames:)`: all requested writes and final geometry validation succeeded; model commit has not happened yet.
-- `constraintObserved(originalFrames:appliedFrames:observations:)`: an app exposed a new stable constraint; all written windows have already been restored.
+- `constraintObserved(originalFrames:observations:)`: an app exposed a new stable constraint; all written windows have already been restored.
 - `rolledBack(originalFrames:failure:)`: application or validation failed and every external effect was restored.
 - `reconciliationRequired(originalFrames:liveFrames:failure:rollbackFailures:)`: rollback could not restore or verify every affected window.
 
@@ -75,7 +75,7 @@ Replace `MainActorCommandExecutionGate` with `WorkspaceMutationGate`. All operat
 - startup convergence and pending open rules;
 - config-driven managed-rule activation where it changes world state.
 
-Code already executing inside the gate calls explicitly named `...Locked` helpers. Timer, observer, and IPC entry points acquire the gate exactly once. This prevents reentrant deadlock while making mutation ownership visible in function names.
+Code already executing inside the gate calls helpers with a `Locked` suffix. Timer, observer, and IPC entry points acquire the gate exactly once. This prevents reentrant deadlock while making mutation ownership visible in function names.
 
 Coalescers may gather reasons and replace pending events while the gate is occupied. They may not apply their snapshots until they acquire the gate. After acquiring it they capture a fresh snapshot rather than applying a snapshot collected before the wait.
 
@@ -129,7 +129,7 @@ The Core operation performs these steps:
 6. Reconstruct a guillotine BSP from the adjusted occupied and empty slot rectangles. Cut selection is deterministic: prefer a full-span cut matching the changed seam, then preserve original ancestor grouping where compatible, then use vertical-before-horizontal coordinate order as the final tie-breaker.
 7. Assign split weights from reconstructed cell extents and verify that solving the rebuilt tree reproduces the intended rectangles within configured-gap tolerance.
 
-This reconstruction intentionally rotates a column-shaped 2-by-2 tree into a row-shaped tree when that is necessary to localize the bottom seam. Empty slots participate in reconstruction so zone capacity is not lost.
+This reconstruction intentionally rotates a column-shaped 2-by-2 tree into a row-shaped tree when that is necessary to localize the bottom-row vertical seam segment. Empty slots participate in reconstruction so zone capacity is not lost.
 
 If the changed seam is not adjacent to another slot, the adjusted rectangles are not guillotine-partitionable, reconstruction does not reproduce the intended frames, or more than one source edge changed, Narwhal records the live geometry and temporarily detaches the source instead of resizing an unrelated ancestor.
 
@@ -152,7 +152,7 @@ If the changed seam is not adjacent to another slot, the adjusted rectangles are
 - Constraint discovery restores before retry and never records partial frames.
 - Rollback refusal produces `reconciliationRequired` from live frames and no history entry.
 - A refresh scheduled during a suspended write executes afterward and cannot stale the commit.
-- Exact 2-by-2 top and bottom seam cases preserve the unrelated row.
+- Exact 2-by-2 top-row and bottom-row vertical seam cases preserve the unrelated row.
 - Exact directional semantics replace “any direction succeeds” assertions for swap and resize.
 - The visual helper fails when the WindowServer border surface cannot be resolved.
 - External geometry bursts collapse to one settled event and one inventory snapshot.
@@ -180,7 +180,7 @@ The full live gate remains sequential and must fail on skips, missing suites, mi
 
 ## Documentation and operational truth
 
-- Correct `AGENTS.md` to state that `install_local.sh` does not reset Accessibility.
+- Correct the active agent-rule text to state that `install_local.sh` does not reset Accessibility, but never stage the existing user-owned `AGENTS.md` type change or replace the repository's tracked symlink.
 - Correct development and architecture documentation so “covered” means an automated test or named manual release gate actually exercises the operating-system boundary.
 - Document stable signing requirements for repeated installed-app Accessibility verification.
 - Document which display and `SMAppService` checks necessarily mutate local system state and how they restore it.
