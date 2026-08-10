@@ -42,4 +42,31 @@ struct WorkspaceOverviewPopoverControllerTests {
             "Display 0, Space 2, Partial inventory, 1 tiled, 0 floating, focus com.example.editor"
         ])
     }
+
+    @Test("Overview renders reconciliation-required workspace health")
+    func reconciliationRequiredRow() {
+        let key = WorkspaceKey(displayID: DisplayID(raw: 1), spaceID: SpaceID(raw: 2))
+        let issue = WorkspaceReconciliationIssue(
+            operation: "Push Left",
+            windowIDs: [WindowID(raw: 3)],
+            reason: "WindowServer did not restore"
+        )
+        let workspace = WorkspacePresentation(
+            key: key,
+            displaySlot: 0,
+            displayFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 760),
+            tree: .void,
+            windows: [],
+            health: .reconciliationRequired(issue),
+            isActive: true
+        )
+        let controller = WorkspaceOverviewPopoverController(openWorkbench: {}, showMaintenance: { _ in })
+
+        controller.update(WorkbenchPresentation(activeSpaceID: key.spaceID, workspaces: [workspace]))
+
+        #expect(controller.debugRowTexts() == [
+            "Display 0, Space 2, Reconciliation required, 0 tiled, 0 floating, focus none"
+        ])
+    }
 }

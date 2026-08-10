@@ -23,6 +23,7 @@ public enum WorkspaceHealth: Equatable, Sendable {
     case permissionRequired
     case unavailable(String)
     case constraintConflict(UnsatisfiableLayout)
+    case reconciliationRequired(WorkspaceReconciliationIssue)
 
     public var label: String {
         switch self {
@@ -31,6 +32,7 @@ public enum WorkspaceHealth: Equatable, Sendable {
         case .permissionRequired: return "Permission required"
         case .unavailable: return "Unavailable"
         case .constraintConflict: return "Constraint conflict"
+        case .reconciliationRequired: return "Reconciliation required"
         }
     }
 }
@@ -164,7 +166,12 @@ public func workbenchPresentation(
                 visibleFrame: display.visibleFrame,
                 tree: displayState.tree,
                 windows: windows,
-                health: workspaceHealth(key, in: world, snapshotQuality: snapshotQuality),
+                health: workspaceHealth(
+                    key,
+                    in: world,
+                    runtime: runtime,
+                    snapshotQuality: snapshotQuality
+                ),
                 isActive: activeSpaceID(for: displayID, in: world) == spaceID
             )
         }
@@ -390,8 +397,12 @@ public func commandExplanation(for error: CommandError) -> CommandExplanation {
 private func workspaceHealth(
     _ key: WorkspaceKey,
     in world: World,
+    runtime: WorldRuntimeState,
     snapshotQuality: AXSnapshotQuality?
 ) -> WorkspaceHealth {
+    if let issue = runtime.workspaceReconciliationIssues[key] {
+        return .reconciliationRequired(issue)
+    }
     switch snapshotQuality {
     case .permissionDenied:
         return .permissionRequired

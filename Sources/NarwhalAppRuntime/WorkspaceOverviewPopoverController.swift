@@ -139,6 +139,7 @@ private final class WorkspaceOverviewViewController: NSViewController {
         let status = NSTextField(labelWithString: "\(healthSymbol(workspace.health)) \(workspace.health.label)   \(workspace.tiledCount) tiled · \(workspace.floatingCount) floating")
         status.font = .systemFont(ofSize: 11)
         status.textColor = healthColor(workspace.health)
+        status.toolTip = reconciliationReason(workspace.health)
         let focusedLabel = NSTextField(labelWithString: "Focus: \(focus)")
         focusedLabel.font = .systemFont(ofSize: 10)
         focusedLabel.textColor = .secondaryLabelColor
@@ -199,6 +200,7 @@ private func healthSymbol(_ health: WorkspaceHealth) -> String {
     case .permissionRequired: return "▣"
     case .unavailable: return "—"
     case .constraintConflict: return "!"
+    case .reconciliationRequired: return "!"
     }
 }
 
@@ -206,6 +208,12 @@ private func healthColor(_ health: WorkspaceHealth) -> NSColor {
     switch health {
     case .ready: return .secondaryLabelColor
     case .partialInventory, .constraintConflict: return .systemOrange
+    case .reconciliationRequired: return .systemRed
     case .permissionRequired, .unavailable: return .systemRed
     }
+}
+
+private func reconciliationReason(_ health: WorkspaceHealth) -> String? {
+    guard case .reconciliationRequired(let issue) = health else { return nil }
+    return "\(issue.operation): \(issue.reason)"
 }

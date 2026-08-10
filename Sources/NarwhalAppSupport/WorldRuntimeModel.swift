@@ -1,28 +1,44 @@
 import NarwhalCore
 
+public struct WorkspaceReconciliationIssue: Equatable, Sendable {
+    public let operation: String
+    public let windowIDs: [WindowID]
+    public let reason: String
+
+    public init(operation: String, windowIDs: [WindowID], reason: String) {
+        self.operation = operation
+        self.windowIDs = Array(Set(windowIDs)).sorted { $0.raw < $1.raw }
+        self.reason = reason
+    }
+}
+
 public struct WorldRuntimeState: Equatable, Sendable {
     public static let empty = WorldRuntimeState(
         undoWorld: nil,
         focusHistory: [],
         workspaceFocus: [:],
-        windowInteractions: [:]
+        windowInteractions: [:],
+        workspaceReconciliationIssues: [:]
     )
 
     public let undoWorld: World?
     public let focusHistory: [WindowID]
     public let workspaceFocus: [WorkspaceKey: WindowID]
     public let windowInteractions: [WindowID: WindowInteractionState]
+    public let workspaceReconciliationIssues: [WorkspaceKey: WorkspaceReconciliationIssue]
 
     public init(
         undoWorld: World?,
         focusHistory: [WindowID],
         workspaceFocus: [WorkspaceKey: WindowID] = [:],
-        windowInteractions: [WindowID: WindowInteractionState] = [:]
+        windowInteractions: [WindowID: WindowInteractionState] = [:],
+        workspaceReconciliationIssues: [WorkspaceKey: WorkspaceReconciliationIssue] = [:]
     ) {
         self.undoWorld = undoWorld
         self.focusHistory = focusHistory
         self.workspaceFocus = workspaceFocus
         self.windowInteractions = windowInteractions
+        self.workspaceReconciliationIssues = workspaceReconciliationIssues
     }
 }
 
@@ -45,7 +61,8 @@ public func worldRuntimeBySettingUndo(
         undoWorld: undoWorld,
         focusHistory: state.focusHistory,
         workspaceFocus: state.workspaceFocus,
-        windowInteractions: state.windowInteractions
+        windowInteractions: state.windowInteractions,
+        workspaceReconciliationIssues: state.workspaceReconciliationIssues
     )
 }
 
@@ -66,7 +83,8 @@ public func worldRuntimeByRecordingFocus(
         undoWorld: state.undoWorld,
         focusHistory: nextHistory,
         workspaceFocus: nextWorkspaceFocus,
-        windowInteractions: state.windowInteractions
+        windowInteractions: state.windowInteractions,
+        workspaceReconciliationIssues: state.workspaceReconciliationIssues
     )
 }
 
@@ -81,12 +99,45 @@ public func worldRuntimeBySettingInteraction(
         undoWorld: state.undoWorld,
         focusHistory: state.focusHistory,
         workspaceFocus: state.workspaceFocus,
-        windowInteractions: interactions
+        windowInteractions: interactions,
+        workspaceReconciliationIssues: state.workspaceReconciliationIssues
+    )
+}
+
+public func worldRuntimeByRecordingReconciliationIssue(
+    _ issue: WorkspaceReconciliationIssue,
+    for key: WorkspaceKey,
+    in state: WorldRuntimeState
+) -> WorldRuntimeState {
+    WorldRuntimeState(
+        undoWorld: state.undoWorld,
+        focusHistory: state.focusHistory,
+        workspaceFocus: state.workspaceFocus,
+        windowInteractions: state.windowInteractions,
+        workspaceReconciliationIssues: state.workspaceReconciliationIssues.merging([key: issue]) {
+            _, replacement in replacement
+        }
+    )
+}
+
+public func worldRuntimeByClearingReconciliationIssue(
+    for key: WorkspaceKey,
+    in state: WorldRuntimeState
+) -> WorldRuntimeState {
+    var issues = state.workspaceReconciliationIssues
+    issues[key] = nil
+    return WorldRuntimeState(
+        undoWorld: state.undoWorld,
+        focusHistory: state.focusHistory,
+        workspaceFocus: state.workspaceFocus,
+        windowInteractions: state.windowInteractions,
+        workspaceReconciliationIssues: issues
     )
 }
 
 public func prunedWorldRuntimeState(
     liveWindowIDs: Set<WindowID>,
+    liveWorkspaceKeys: Set<WorkspaceKey>? = nil,
     in state: WorldRuntimeState
 ) -> WorldRuntimeState {
     let focusHistory = state.focusHistory.filter { liveWindowIDs.contains($0) }
@@ -99,11 +150,15 @@ public func prunedWorldRuntimeState(
     } else {
         undoWorld = nil
     }
+    let workspaceReconciliationIssues = liveWorkspaceKeys.map { liveKeys in
+        state.workspaceReconciliationIssues.filter { liveKeys.contains($0.key) }
+    } ?? state.workspaceReconciliationIssues
     return WorldRuntimeState(
         undoWorld: undoWorld,
         focusHistory: focusHistory,
         workspaceFocus: workspaceFocus,
-        windowInteractions: windowInteractions
+        windowInteractions: windowInteractions,
+        workspaceReconciliationIssues: workspaceReconciliationIssues
     )
 }
 

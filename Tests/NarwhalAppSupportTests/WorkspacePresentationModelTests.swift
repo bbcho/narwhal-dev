@@ -93,6 +93,60 @@ struct WorkspacePresentationModelTests {
         }
     }
 
+    @Test("Reconciliation health is scoped to one workspace and names the recovery state")
+    func reconciliationHealthIsWorkspaceScoped() {
+        let secondDisplay = DisplayID(raw: 2)
+        let secondSpace = SpaceID(raw: 20)
+        let key = WorkspaceKey(displayID: displayID, spaceID: spaceID)
+        let issue = WorkspaceReconciliationIssue(
+            operation: "Resize Right",
+            windowIDs: [WindowID(raw: 1)],
+            reason: "WindowServer frame remained stale"
+        )
+        let base = world(windows: [], tree: .void)
+        let secondInfo = DisplayInfo(
+            id: secondDisplay,
+            slot: 1,
+            fingerprint: nil,
+            frame: CGRect(x: 1_000, y: 0, width: 1_000, height: 800),
+            visibleFrame: CGRect(x: 1_000, y: 0, width: 1_000, height: 800)
+        )
+        let combined = World(
+            displays: base.displays.merging([secondDisplay: secondInfo]) { _, replacement in replacement },
+            activeSpace: spaceID,
+            activeSpaceByDisplay: [displayID: spaceID, secondDisplay: secondSpace],
+            spaces: base.spaces.merging([
+                secondSpace: SpaceState(
+                    id: secondSpace,
+                    displays: [
+                        secondDisplay: DisplaySpaceState(displayID: secondDisplay, tree: .void, floating: [])
+                    ],
+                    focused: nil
+                )
+            ]) { _, replacement in replacement },
+            windows: [:],
+            windowDisplay: [:],
+            windowSpace: [:],
+            observedVisibleWindows: [:],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+        let runtime = worldRuntimeByRecordingReconciliationIssue(issue, for: key, in: .empty)
+
+        let presentation = workbenchPresentation(
+            in: combined,
+            runtime: runtime,
+            snapshotQuality: .complete
+        )
+
+        #expect(presentation.workspaces.first { $0.key == key }?.health == .reconciliationRequired(issue))
+        #expect(presentation.workspaces.first { $0.key == key }?.health.label == "Reconciliation required")
+        #expect(presentation.workspaces.first {
+            $0.key == WorkspaceKey(displayID: secondDisplay, spaceID: secondSpace)
+        }?.health == .ready)
+    }
+
     @Test("Preview lists every frame and management-state change")
     func previewListsAffectedWindows() throws {
         let first = metadata(1, title: "One", width: 1_000)

@@ -6,6 +6,62 @@ import Testing
 
 @Suite("World actor layout history")
 struct WorldActorHistoryTests {
+    @Test("Workspace reconciliation state survives refresh, preserves history, and clears explicitly")
+    func workspaceReconciliationStateIsIndependentOfHistory() async throws {
+        let actor = WorldActor()
+        let window = metadata(1)
+        let environment = snapshot(windows: [window])
+        _ = await actor.refreshEnvironment(environment)
+        let push = try await actor.planPush(window.id, direction: .left).get()
+        await actor.commit(push, appliedFrames: push.desiredLayout.delta.moves)
+        let key = WorkspaceKey(displayID: DisplayID(raw: 1), spaceID: SpaceID(raw: 1))
+        let issue = WorkspaceReconciliationIssue(
+            operation: "Push Left",
+            windowIDs: [window.id],
+            reason: "rollback failed"
+        )
+        let historyBefore = await actor.layoutHistoryAvailability(spaceID: key.spaceID)
+
+        await actor.recordWorkspaceReconciliationIssue(issue, for: key)
+        _ = await actor.refreshEnvironment(environment)
+
+        #expect(await actor.workspaceReconciliationIssue(for: key) == issue)
+        #expect(await actor.layoutHistoryAvailability(spaceID: key.spaceID) == historyBefore)
+
+        await actor.clearWorkspaceReconciliationIssue(for: key)
+        #expect(await actor.workspaceReconciliationIssue(for: key) == nil)
+        #expect(await actor.layoutHistoryAvailability(spaceID: key.spaceID) == historyBefore)
+    }
+
+    @Test("Workspace reconciliation state prunes when its workspace disappears")
+    func workspaceReconciliationStatePrunesWithWorkspace() async {
+        let actor = WorldActor()
+        let window = metadata(1)
+        _ = await actor.refreshEnvironment(snapshot(windows: [window]))
+        let key = WorkspaceKey(displayID: DisplayID(raw: 1), spaceID: SpaceID(raw: 1))
+        await actor.recordWorkspaceReconciliationIssue(
+            WorkspaceReconciliationIssue(
+                operation: "Balance",
+                windowIDs: [window.id],
+                reason: "rollback failed"
+            ),
+            for: key
+        )
+
+        _ = await actor.refreshEnvironment(EnvironmentSnapshot(
+            activeSpace: nil,
+            displays: [:],
+            axSnapshot: AXWindowSnapshot(windows: [], quality: .complete),
+            spaceTopology: SpaceTopology(
+                activeSpaceByDisplay: [:],
+                windowSpace: [:],
+                quality: .managedDisplaySpaces
+            )
+        ))
+
+        #expect(await actor.workspaceReconciliationIssue(for: key) == nil)
+    }
+
     @Test("Successful commits create multi-step undo and redo transitions")
     func multiStepUndoRedo() async throws {
         let actor = WorldActor()

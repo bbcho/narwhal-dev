@@ -129,6 +129,14 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
         railScrollView.hasVerticalScroller
     }
 
+    func debugCanvasTitle() -> String {
+        canvasTitle.stringValue
+    }
+
+    func debugRailToolTips() -> [String] {
+        railStack.arrangedSubviews.compactMap { ($0 as? NSButton)?.toolTip }
+    }
+
 #if NARWHAL_ENABLE_VERIFIERS
     func debugPresent(
         _ presentation: WorkbenchPresentation,
@@ -493,12 +501,18 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
                 ]
             )
             button.state = .off
-            button.toolTip = "Display \(workspace.displaySlot), Space \(workspace.key.spaceID.raw), \(workspace.health.label)"
+            button.toolTip = workspaceToolTip(workspace)
             button.setAccessibilityLabel("Display \(workspace.displaySlot), Space \(workspace.key.spaceID.raw)")
             button.setAccessibilityValue("\(active), \(workspace.health.label), \(workspace.tiledCount) tiled, \(workspace.floatingCount) floating")
             railStack.addArrangedSubview(button)
             button.widthAnchor.constraint(equalTo: railStack.widthAnchor).isActive = true
         }
+    }
+
+    private func workspaceToolTip(_ workspace: WorkspacePresentation) -> String {
+        let summary = "Display \(workspace.displaySlot), Space \(workspace.key.spaceID.raw), \(workspace.health.label)"
+        guard case .reconciliationRequired(let issue) = workspace.health else { return summary }
+        return "\(summary): \(issue.operation): \(issue.reason)"
     }
 
     private func renderWorkspace() {

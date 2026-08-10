@@ -5,6 +5,63 @@ import NarwhalCore
 
 @Suite("World runtime model")
 struct WorldRuntimeModelTests {
+    @Test("Reconciliation issues are workspace-scoped, explicitly clearable, and history-neutral")
+    func reconciliationIssueLifecycle() {
+        let firstKey = WorkspaceKey(displayID: DisplayID(raw: 1), spaceID: SpaceID(raw: 1))
+        let secondKey = WorkspaceKey(displayID: DisplayID(raw: 2), spaceID: SpaceID(raw: 2))
+        let undo = worldFixture(windowIDs: [1])
+        let initial = WorldRuntimeState(
+            undoWorld: undo,
+            focusHistory: [WindowID(raw: 1)]
+        )
+        let issue = WorkspaceReconciliationIssue(
+            operation: "Push Left",
+            windowIDs: [WindowID(raw: 2), WindowID(raw: 1), WindowID(raw: 2)],
+            reason: "WindowServer did not restore"
+        )
+
+        let recorded = worldRuntimeByRecordingReconciliationIssue(issue, for: firstKey, in: initial)
+
+        #expect(recorded.workspaceReconciliationIssues == [
+            firstKey: WorkspaceReconciliationIssue(
+                operation: "Push Left",
+                windowIDs: [WindowID(raw: 1), WindowID(raw: 2)],
+                reason: "WindowServer did not restore"
+            )
+        ])
+        #expect(recorded.undoWorld == undo)
+        #expect(recorded.focusHistory == initial.focusHistory)
+        #expect(recorded.workspaceReconciliationIssues[secondKey] == nil)
+
+        let cleared = worldRuntimeByClearingReconciliationIssue(for: firstKey, in: recorded)
+        #expect(cleared.workspaceReconciliationIssues.isEmpty)
+        #expect(cleared.undoWorld == undo)
+    }
+
+    @Test("Pruning removes only reconciliation issues for workspaces that disappeared")
+    func pruningReconciliationIssuesUsesLiveWorkspaceKeys() {
+        let keptKey = WorkspaceKey(displayID: DisplayID(raw: 1), spaceID: SpaceID(raw: 1))
+        let removedKey = WorkspaceKey(displayID: DisplayID(raw: 2), spaceID: SpaceID(raw: 2))
+        let issue = WorkspaceReconciliationIssue(
+            operation: "Balance",
+            windowIDs: [WindowID(raw: 1)],
+            reason: "rollback failed"
+        )
+        let state = worldRuntimeByRecordingReconciliationIssue(
+            issue,
+            for: removedKey,
+            in: worldRuntimeByRecordingReconciliationIssue(issue, for: keptKey, in: .empty)
+        )
+
+        let pruned = prunedWorldRuntimeState(
+            liveWindowIDs: [WindowID(raw: 1)],
+            liveWorkspaceKeys: [keptKey],
+            in: state
+        )
+
+        #expect(pruned.workspaceReconciliationIssues == [keptKey: issue])
+    }
+
     @Test("Transient interaction state is explicit, replaceable, and pruned with its window")
     func interactionStateLifecycle() {
         let first = WindowID(raw: 1)

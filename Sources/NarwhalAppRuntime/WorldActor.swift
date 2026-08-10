@@ -50,6 +50,7 @@ actor WorldActor {
             config: world.config
         )
         layoutHistory = .empty
+        pruneRuntimeState()
         return world.spaces.values.reduce(0) { total, space in
             total + space.displays.values.reduce(0) { displayTotal, state in
                 displayTotal + occupiedWindows(in: state.tree).count
@@ -75,6 +76,21 @@ actor WorldActor {
 
     func setWindowInteraction(_ interaction: WindowInteractionState?, for windowID: WindowID) {
         runtimeState = worldRuntimeBySettingInteraction(interaction, for: windowID, in: runtimeState)
+    }
+
+    func recordWorkspaceReconciliationIssue(
+        _ issue: WorkspaceReconciliationIssue,
+        for key: WorkspaceKey
+    ) {
+        runtimeState = worldRuntimeByRecordingReconciliationIssue(issue, for: key, in: runtimeState)
+    }
+
+    func clearWorkspaceReconciliationIssue(for key: WorkspaceKey) {
+        runtimeState = worldRuntimeByClearingReconciliationIssue(for: key, in: runtimeState)
+    }
+
+    func workspaceReconciliationIssue(for key: WorkspaceKey) -> WorkspaceReconciliationIssue? {
+        runtimeState.workspaceReconciliationIssues[key]
     }
 
     func planExternalGeometry(_ event: AXEvent) -> Result<CommandPlanResult?, CommandError> {
@@ -600,7 +616,18 @@ actor WorldActor {
 
     private func pruneRuntimeState() {
         let liveWindowIDs = Set(world.windows.keys)
-        runtimeState = prunedWorldRuntimeState(liveWindowIDs: liveWindowIDs, in: runtimeState)
+        let liveWorkspaceKeys = Set(world.spaces.flatMap { spaceID, space in
+            space.displays.keys.compactMap { displayID in
+                world.displays[displayID] == nil
+                    ? nil
+                    : WorkspaceKey(displayID: displayID, spaceID: spaceID)
+            }
+        })
+        runtimeState = prunedWorldRuntimeState(
+            liveWindowIDs: liveWindowIDs,
+            liveWorkspaceKeys: liveWorkspaceKeys,
+            in: runtimeState
+        )
         layoutHistory = prunedLayoutHistoryState(liveWindowIDs: liveWindowIDs, in: layoutHistory)
     }
 
