@@ -1134,6 +1134,125 @@ struct MVPLayoutTests {
         #expect(next.spaces[space]?.focused == firefox)
     }
 
+    @Test("External bottom-row resize preserves the top row through command application")
+    func externalBottomRowResizeUsesVisiblePartition() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let topLeft = WindowID(raw: 1)
+        let topRight = WindowID(raw: 2)
+        let bottomLeft = WindowID(raw: 3)
+        let bottomRight = WindowID(raw: 4)
+        let tree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1, node: .leaf(topLeft)),
+                try cell(weight: 1, node: .leaf(bottomLeft))
+            ]))),
+            try cell(weight: 1, node: .split(try split(axis: .vertical, cells: [
+                try cell(weight: 1, node: .leaf(topRight)),
+                try cell(weight: 1, node: .leaf(bottomRight))
+            ])))
+        ]))
+        let topLeftFrame = CGRect(x: 4, y: 4, width: 592, height: 392)
+        let topRightFrame = CGRect(x: 604, y: 4, width: 592, height: 392)
+        let bottomLeftFrame = CGRect(x: 4, y: 404, width: 592, height: 392)
+        let bottomRightFrame = CGRect(x: 604, y: 404, width: 592, height: 392)
+        let frames = [
+            topLeft: topLeftFrame,
+            topRight: topRightFrame,
+            bottomLeft: bottomLeftFrame,
+            bottomRight: bottomRightFrame
+        ]
+        let config = Config(
+            keymap: Config.default.keymap,
+            rules: Config.default.rules,
+            zones: Config.default.zones,
+            gaps: Gaps(inner: 8, outer: Insets(top: 0, left: 0, bottom: 0, right: 0)),
+            border: Config.default.border,
+            hud: Config.default.hud,
+            dragModifier: Config.default.dragModifier
+        )
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1_200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: tree, floating: [])],
+                    focused: bottomLeft
+                )
+            ],
+            windows: [
+                topLeft: metadata(for: topLeft, frame: topLeftFrame),
+                topRight: metadata(for: topRight, frame: topRightFrame),
+                bottomLeft: metadata(for: bottomLeft, frame: bottomLeftFrame),
+                bottomRight: metadata(for: bottomRight, frame: bottomRightFrame)
+            ],
+            windowDisplay: Dictionary(uniqueKeysWithValues: frames.keys.map { ($0, display) }),
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: config
+        )
+        let requested = CGRect(x: 4, y: 404, width: 712, height: 392)
+
+        let next = try requireWorld(
+            apply(.windowMovedExternally(bottomLeft, requested), to: world),
+            "Expected external resize to update the visible partition"
+        )
+        let flattened = try requireLayout(flattenedLayout(of: next), "Expected resized layout")
+
+        #expect(flattened.tiled[topLeft] == frames[topLeft])
+        #expect(flattened.tiled[topRight] == frames[topRight])
+        #expect(flattened.tiled[bottomLeft] == requested)
+        #expect(flattened.tiled[bottomRight] == CGRect(x: 724, y: 404, width: 472, height: 392))
+    }
+
+    @Test("Ambiguous external geometry detaches only the source window")
+    func ambiguousExternalGeometryDetachesSource() throws {
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let source = WindowID(raw: 1)
+        let sibling = WindowID(raw: 2)
+        let tree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .leaf(source)),
+            try cell(weight: 1, node: .leaf(sibling))
+        ]))
+        let sourceFrame = CGRect(x: 0, y: 0, width: 600, height: 800)
+        let siblingFrame = CGRect(x: 600, y: 0, width: 600, height: 800)
+        let world = World(
+            displays: [display: self.display(display, x: 0, width: 1_200)],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [display: DisplaySpaceState(displayID: display, tree: tree, floating: [])],
+                    focused: source
+                )
+            ],
+            windows: [
+                source: metadata(for: source, frame: sourceFrame),
+                sibling: metadata(for: sibling, frame: siblingFrame)
+            ],
+            windowDisplay: [source: display, sibling: display],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+        let movedAndResized = CGRect(x: 20, y: 0, width: 700, height: 800)
+
+        let next = try requireWorld(
+            apply(.windowMovedExternally(source, movedAndResized), to: world),
+            "Expected ambiguous manual geometry to detach safely"
+        )
+        let displayState = try #require(next.spaces[space]?.displays[display])
+
+        #expect(displayState.tree == Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .void),
+            try cell(weight: 1, node: .leaf(sibling))
+        ])))
+        #expect(displayState.floating == [source])
+        #expect(next.windows[source]?.frame == movedAndResized)
+    }
+
     @Test("External resize of tiled window preserves nil focus")
     func externalResizeOfTiledWindowPreservesNilFocus() throws {
         let display = DisplayID(raw: 1)
@@ -1185,8 +1304,14 @@ struct MVPLayoutTests {
         let display = DisplayID(raw: 1)
         let space = SpaceID(raw: 1)
         let window = WindowID(raw: 1)
-        let originalFrame = CGRect(x: 100, y: 120, width: 300, height: 250)
-        let resizedFrame = CGRect(x: 100, y: 120, width: 640, height: 360)
+        let sibling = WindowID(raw: 2)
+        let originalFrame = CGRect(x: 0, y: 0, width: 600, height: 800)
+        let siblingFrame = CGRect(x: 600, y: 0, width: 600, height: 800)
+        let resizedFrame = CGRect(x: 0, y: 0, width: 700, height: 800)
+        let tree = Node.split(try split(axis: .horizontal, cells: [
+            try cell(weight: 1, node: .leaf(window)),
+            try cell(weight: 1, node: .leaf(sibling))
+        ]))
         let world = World(
             displays: [display: self.display(display, x: 0, width: 1200)],
             activeSpace: space,
@@ -1196,15 +1321,18 @@ struct MVPLayoutTests {
                     displays: [
                         display: DisplaySpaceState(
                             displayID: display,
-                            tree: pushIntoTree(window, .left, .void),
+                            tree: tree,
                             floating: []
                         )
                     ],
                     focused: window
                 )
             ],
-            windows: [window: metadata(for: window, frame: originalFrame)],
-            windowDisplay: [window: display],
+            windows: [
+                window: metadata(for: window, frame: originalFrame),
+                sibling: metadata(for: sibling, frame: siblingFrame)
+            ],
+            windowDisplay: [window: display, sibling: display],
             windowConstraints: [:],
             pendingRules: [:],
             config: .default
@@ -1219,8 +1347,8 @@ struct MVPLayoutTests {
             "Expected tiled border target calculation to succeed"
         )
 
-        #expect(targets.map(\.windowID) == [window])
-        #expect(targets.first?.frame == resizedFrame)
+        #expect(targets.map(\.windowID) == [window, sibling])
+        #expect(targets.first(where: { $0.windowID == window })?.frame == resizedFrame)
     }
 
     @Test("Balance tree normalizes every split weight without changing slots")

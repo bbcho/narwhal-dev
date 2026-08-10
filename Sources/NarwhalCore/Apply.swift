@@ -796,9 +796,7 @@ private func spacesByApplyingExternalResize(
     to newFrame: CGRect,
     in world: World
 ) -> [SpaceID: SpaceState]? {
-    let directions = externalResizeDirections(from: oldFrame, to: newFrame)
-    guard !directions.isEmpty,
-          let key = workspaceKey(forWindow: windowID, in: world),
+    guard let key = workspaceKey(forWindow: windowID, in: world),
           let space = world.spaces[key.spaceID],
           let displayID = tiledDisplay(containing: windowID, in: space),
           let displayState = space.displays[displayID],
@@ -813,25 +811,27 @@ private func spacesByApplyingExternalResize(
     }
 
     let rootFrame = applyOuterGaps(world.config.gaps.outer, to: display.visibleFrame)
-    var tree = displayState.tree
-    var changedTree = false
-    for direction in directions {
-        switch resizeSplitInTreeToMatchWindowFrame(
+    let tree: Node
+    switch resizeVisibleSeamInTree(
+        windowID,
+        from: oldFrame,
+        to: newFrame,
+        rootFrame: rootFrame,
+        innerGap: world.config.gaps.inner,
+        displayState.tree
+    ) {
+    case .success(let resized):
+        guard resized != displayState.tree else { return nil }
+        tree = resized
+    case .failure:
+        return spacesByDetachingExternallyAdjustedWindow(
             windowID,
-            direction,
-            desiredFrame: newFrame,
-            rootFrame: rootFrame,
-            innerGap: world.config.gaps.inner,
-            tree
-        ) {
-        case .success(let resized):
-            changedTree = changedTree || resized != tree
-            tree = resized
-        case .failure:
-            continue
-        }
+            displayID: displayID,
+            key: key,
+            space: space,
+            in: world
+        )
     }
-    guard changedTree else { return nil }
 
     let displayStates = space.displays.setting(displayID, to: DisplaySpaceState(
         displayID: displayID,
@@ -844,20 +844,31 @@ private func spacesByApplyingExternalResize(
     )
 }
 
-private func externalResizeDirections(from oldFrame: CGRect, to newFrame: CGRect) -> [Direction] {
-    let tolerance = GeometryTolerances.externalResizeDirection
-    var directions: [Direction] = []
-    if abs(newFrame.width - oldFrame.width) > tolerance {
-        let minChange = abs(newFrame.minX - oldFrame.minX)
-        let maxChange = abs(newFrame.maxX - oldFrame.maxX)
-        directions.append(minChange > maxChange ? .left : .right)
+private func spacesByDetachingExternallyAdjustedWindow(
+    _ windowID: WindowID,
+    displayID: DisplayID,
+    key: WorkspaceKey,
+    space: SpaceState,
+    in world: World
+) -> [SpaceID: SpaceState] {
+    let cleared = space.displays.mapValues { displayState in
+        DisplaySpaceState(
+            displayID: displayState.displayID,
+            tree: ejectFromTree(windowID, displayState.tree),
+            floating: displayState.floating.filter { $0 != windowID }
+        )
     }
-    if abs(newFrame.height - oldFrame.height) > tolerance {
-        let minChange = abs(newFrame.minY - oldFrame.minY)
-        let maxChange = abs(newFrame.maxY - oldFrame.maxY)
-        directions.append(minChange > maxChange ? .up : .down)
-    }
-    return directions
+    let target = cleared[displayID]
+        ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
+    let displayStates = cleared.setting(displayID, to: DisplaySpaceState(
+        displayID: displayID,
+        tree: target.tree,
+        floating: target.floating + [windowID]
+    ))
+    return world.spaces.setting(
+        key.spaceID,
+        to: SpaceState(id: space.id, displays: displayStates, focused: space.focused)
+    )
 }
 
 private func worldBySettingConfig(_ config: Config, in world: World) -> World {

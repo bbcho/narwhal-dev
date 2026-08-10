@@ -1,5 +1,3 @@
-import CoreGraphics
-
 public func occupiedWindows(in node: Node) -> [WindowID] {
     slots(in: node).compactMap { slot in
         guard case .occupied(let windowID) = slot.occupancy else { return nil }
@@ -113,58 +111,6 @@ public func resizeSplitInTree(
     guard let target = resizeTarget(in: path, direction: direction) else {
         return .failure(.noNeighbor(direction))
     }
-    return resizeSplit(
-        at: target.parentPath,
-        childIndex: target.childIndex,
-        neighborIndex: target.neighborIndex,
-        delta: delta,
-        in: node
-    )
-}
-
-public func resizeSplitInTreeToMatchWindowFrame(
-    _ window: WindowID,
-    _ direction: Direction,
-    desiredFrame: CGRect,
-    rootFrame: CGRect,
-    innerGap: Double,
-    _ node: Node
-) -> Result<Node, TreeResizeError> {
-    guard desiredFrame.narwhalIsFinitePositive,
-          rootFrame.narwhalIsFinitePositive,
-          innerGap.isFinite
-    else {
-        return .failure(.nonFiniteDelta)
-    }
-    guard let path = pathToWindow(window, in: node, parentPath: []) else {
-        return .failure(.windowNotFound(window))
-    }
-    guard let target = resizeTarget(in: path, direction: direction) else {
-        return .failure(.noNeighbor(direction))
-    }
-    guard let parentFrame = frame(at: target.parentPath, in: node, rootFrame: rootFrame),
-          parentFrame.narwhalIsFinitePositive
-    else {
-        return .failure(.nonPositiveWeight)
-    }
-
-    let axis = direction.layoutAxisForPush
-    let parentExtent = axis == .horizontal ? parentFrame.width : parentFrame.height
-    let desiredExtent = axis == .horizontal ? desiredFrame.width : desiredFrame.height
-    let desiredCellExtent = desiredExtent + max(0, CGFloat(innerGap))
-    guard parentExtent > 0, desiredCellExtent > 0 else {
-        return .failure(.nonPositiveWeight)
-    }
-
-    guard let split = split(at: target.parentPath, in: node) else {
-        return .failure(.nonPositiveWeight)
-    }
-    let totalWeight = split.cells.map(\.weight).reduce(0, +)
-    let desiredWeight = Double(desiredCellExtent / parentExtent) * totalWeight
-    let delta = desiredWeight - split.cells[target.childIndex].weight
-    guard delta.isFinite else { return .failure(.nonFiniteDelta) }
-    guard abs(delta) > 0.000_001 else { return .success(node) }
-
     return resizeSplit(
         at: target.parentPath,
         childIndex: target.childIndex,
@@ -346,34 +292,6 @@ private func resizedSplitNode(
         .replacingCell(at: childIndex, with: makeCell(weight: childWeight, node: child.node))
         .replacingCell(at: neighborIndex, with: makeCell(weight: neighborWeight, node: neighbor.node))
     return .success(.split(makeSplit(axis: split.axis, cells: cells)))
-}
-
-private func frame(at path: NodePath, in node: Node, rootFrame: CGRect) -> CGRect? {
-    guard let nextIndex = path.first else { return rootFrame }
-    guard case .split(let split) = node,
-          split.cells.indices.contains(nextIndex)
-    else {
-        return nil
-    }
-    let childFrames = splitFrames(rootFrame, axis: split.axis, weights: split.cells.map(\.weight))
-    return frame(
-        at: Array(path.dropFirst()),
-        in: split.cells[nextIndex].node,
-        rootFrame: childFrames[nextIndex]
-    )
-}
-
-private func split(at path: NodePath, in node: Node) -> Split? {
-    guard let nextIndex = path.first else {
-        guard case .split(let split) = node else { return nil }
-        return split
-    }
-    guard case .split(let currentSplit) = node,
-          currentSplit.cells.indices.contains(nextIndex)
-    else {
-        return nil
-    }
-    return split(at: Array(path.dropFirst()), in: currentSplit.cells[nextIndex].node)
 }
 
 private func insertAtCenter(_ window: WindowID, _ node: Node) -> Node {
