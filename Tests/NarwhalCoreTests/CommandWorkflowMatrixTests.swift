@@ -4,6 +4,44 @@ import Testing
 
 @Suite("Command workflow matrix")
 struct CommandWorkflowMatrixTests {
+    @Test("Canonical one-through-eight layouts have exact swap and resize contracts")
+    func canonicalDirectionalCommandContracts() throws {
+        for testCase in directionalCases {
+            let world = try canonicalTiledWorld(windowCount: testCase.windowCount)
+            let focused = WindowID(raw: CGWindowID(testCase.windowCount))
+            let before = try tiledFrames(in: world)
+
+            for direction in pushDirections {
+                if let expectedTarget = testCase.swapTargets.first(where: { $0.direction == direction })?.windowID {
+                    let swapped = try apply(.swapInTree(focused, direction), to: world).get()
+                    let after = try tiledFrames(in: swapped)
+                    let target = WindowID(raw: expectedTarget)
+                    #expect(changedWindowIDs(from: before, to: after) == Set([focused, target]))
+                    #expect(after[focused] == before[target])
+                    #expect(after[target] == before[focused])
+                    assertCommandPreservesWorldMetadata(swapped, from: world, focused: focused)
+                } else {
+                    #expect(apply(.swapInTree(focused, direction), to: world) == .failure(.noNeighbor(direction)))
+                }
+
+                if let expected = testCase.resizeChanges.first(where: { $0.direction == direction }) {
+                    let resized = try apply(.resizeSplit(focused, direction, delta: 0.10), to: world).get()
+                    let after = try tiledFrames(in: resized)
+                    let expectedChanged = Set(expected.windowIDs.map { WindowID(raw: $0) })
+                    #expect(changedWindowIDs(from: before, to: after) == expectedChanged)
+                    assertResizeGrowth(
+                        direction: direction,
+                        before: try #require(before[focused]),
+                        after: try #require(after[focused])
+                    )
+                    assertCommandPreservesWorldMetadata(resized, from: world, focused: focused)
+                } else {
+                    #expect(apply(.resizeSplit(focused, direction, delta: 0.10), to: world) == .failure(.noNeighbor(direction)))
+                }
+            }
+        }
+    }
+
     @Test("Zero windows reject focus-dependent commands without mutating")
     func zeroWindowsRejectFocusDependentCommandsWithoutMutating() {
         let world = workflowWorld(windowCount: 0, displayCount: 1)
@@ -33,9 +71,9 @@ struct CommandWorkflowMatrixTests {
         #expect(apply(.focusDirection(.right), to: world) == .failure(.activeSpaceUnavailable))
     }
 
-    @Test("Push, focus, swap, resize, balance, float, and reset workflows hold from one through six windows")
-    func coreLayoutWorkflowsHoldFromOneThroughSixWindows() throws {
-        for count in 1...6 {
+    @Test("Push, focus, balance, float, and reset workflows hold from one through eight windows")
+    func coreLayoutWorkflowsHoldFromOneThroughEightWindows() throws {
+        for count in 1...8 {
             let ids = (1...count).map { WindowID(raw: CGWindowID($0)) }
             var world = workflowWorld(windowCount: count, displayCount: 1)
             try assertWorldInvariants(world, note: "initial count \(count)")
@@ -45,12 +83,6 @@ struct CommandWorkflowMatrixTests {
                 world = try applyRequired(.push(windowID, pushDirections[index % pushDirections.count]), to: world, note: "push \(windowID)")
                 try assertWorldInvariants(world, note: "after push \(windowID)")
                 #expect(tiledIDs(in: world).contains(windowID))
-            }
-
-            if count > 1 {
-                let focused = ids.last!
-                #expect(pushDirections.contains { commandSucceeds(.swapInTree(focused, $0), in: world) })
-                #expect(pushDirections.contains { commandSucceeds(.resizeSplit(focused, $0, delta: 0.10), in: world) })
             }
 
             world = try applyRequired(.balance(SpaceID(raw: 1)), to: world, note: "balance count \(count)")
@@ -118,6 +150,124 @@ struct CommandWorkflowMatrixTests {
     }
 
     private let pushDirections: [Direction] = [.left, .right, .up, .down]
+
+    private let directionalCases: [DirectionalCommandCase] = [
+        DirectionalCommandCase(windowCount: 1, swapTargets: [], resizeChanges: [(.right, [1])]),
+        DirectionalCommandCase(windowCount: 2, swapTargets: [(.left, 1)], resizeChanges: [(.left, [1, 2])]),
+        DirectionalCommandCase(
+            windowCount: 3,
+            swapTargets: [(.left, 1), (.right, 2), (.down, 1)],
+            resizeChanges: [(.down, [1, 2, 3])]
+        ),
+        DirectionalCommandCase(
+            windowCount: 4,
+            swapTargets: [(.left, 1), (.right, 2), (.up, 3)],
+            resizeChanges: [(.left, [1, 4]), (.right, [2, 4]), (.up, [1, 2, 3, 4])]
+        ),
+        DirectionalCommandCase(
+            windowCount: 5,
+            swapTargets: [(.right, 1), (.up, 3), (.down, 1)],
+            resizeChanges: [(.right, [1, 2, 3, 4, 5])]
+        ),
+        DirectionalCommandCase(
+            windowCount: 6,
+            swapTargets: [(.left, 5), (.right, 4), (.up, 1)],
+            resizeChanges: [
+                (.left, [1, 2, 3, 4, 5, 6]),
+                (.right, [1, 4, 6]),
+                (.up, [1, 6])
+            ]
+        ),
+        DirectionalCommandCase(
+            windowCount: 7,
+            swapTargets: [(.left, 5), (.right, 3), (.down, 3)],
+            resizeChanges: [(.down, [1, 2, 3, 4, 5, 6, 7])]
+        ),
+        DirectionalCommandCase(
+            windowCount: 8,
+            swapTargets: [(.left, 5), (.right, 1), (.up, 7), (.down, 1)],
+            resizeChanges: [
+                (.left, [5, 8]),
+                (.right, [1, 2, 3, 4, 6, 8]),
+                (.up, [1, 2, 3, 4, 5, 6, 7, 8])
+            ]
+        )
+    ]
+
+    private func canonicalTiledWorld(windowCount: Int) throws -> World {
+        let ids = (1...windowCount).map { WindowID(raw: CGWindowID($0)) }
+        var world = workflowWorld(windowCount: windowCount, displayCount: 1)
+        for (index, windowID) in ids.enumerated() {
+            world = try applyRequired(
+                .windowFocusedExternally(windowID),
+                to: world,
+                note: "canonical focus count \(windowCount)"
+            )
+            world = try applyRequired(
+                .push(windowID, pushDirections[index % pushDirections.count]),
+                to: world,
+                note: "canonical push count \(windowCount)"
+            )
+        }
+        return world
+    }
+
+    private func tiledFrames(in world: World) throws -> [WindowID: CGRect] {
+        try workspaceLayout(
+            for: WorkspaceKey(displayID: DisplayID(raw: 1), spaceID: SpaceID(raw: 1)),
+            in: world
+        ).get().tiled
+    }
+
+    private func changedWindowIDs(
+        from before: [WindowID: CGRect],
+        to after: [WindowID: CGRect]
+    ) -> Set<WindowID> {
+        Set(before.keys.filter { before[$0] != after[$0] })
+    }
+
+    private func assertResizeGrowth(direction: Direction, before: CGRect, after: CGRect) {
+        switch direction {
+        case .left:
+            #expect(after.minX < before.minX)
+            #expect(after.width > before.width)
+            #expect(after.minY == before.minY)
+            #expect(after.height == before.height)
+        case .right:
+            #expect(after.maxX > before.maxX)
+            #expect(after.width > before.width)
+            #expect(after.minY == before.minY)
+            #expect(after.height == before.height)
+        case .up:
+            #expect(after.minY < before.minY)
+            #expect(after.height > before.height)
+            #expect(after.minX == before.minX)
+            #expect(after.width == before.width)
+        case .down:
+            #expect(after.maxY > before.maxY)
+            #expect(after.height > before.height)
+            #expect(after.minX == before.minX)
+            #expect(after.width == before.width)
+        }
+    }
+
+    private func assertCommandPreservesWorldMetadata(
+        _ next: World,
+        from world: World,
+        focused: WindowID
+    ) {
+        #expect(next.spaces[SpaceID(raw: 1)]?.focused == focused)
+        #expect(next.displays == world.displays)
+        #expect(next.activeSpace == world.activeSpace)
+        #expect(next.activeSpaceByDisplay == world.activeSpaceByDisplay)
+        #expect(next.windows == world.windows)
+        #expect(next.windowDisplay == world.windowDisplay)
+        #expect(next.windowSpace == world.windowSpace)
+        #expect(next.observedVisibleWindows == world.observedVisibleWindows)
+        #expect(next.windowConstraints == world.windowConstraints)
+        #expect(next.pendingRules == world.pendingRules)
+        #expect(next.config == world.config)
+    }
 
     private func applyRequired(_ command: Command, to world: World, note: String) throws -> World {
         switch apply(command, to: world) {
@@ -258,12 +408,11 @@ struct CommandWorkflowMatrixTests {
         )
     }
 
-    private func commandSucceeds(_ command: Command, in world: World) -> Bool {
-        if case .success = apply(command, to: world) {
-            return true
-        }
-        return false
-    }
-
     private struct WorkflowFailure: Error {}
+
+    private struct DirectionalCommandCase {
+        let windowCount: Int
+        let swapTargets: [(direction: Direction, windowID: CGWindowID)]
+        let resizeChanges: [(direction: Direction, windowIDs: [CGWindowID])]
+    }
 }

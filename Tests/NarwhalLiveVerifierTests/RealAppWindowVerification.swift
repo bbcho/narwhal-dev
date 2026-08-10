@@ -1925,14 +1925,9 @@ enum RealAppWindowVerification {
         let resizeTarget = browser ?? sequence.last!
         try await refreshWorkflowWorld(worldActor, axClient: axClient, displays: displays)
         let currentResizeTarget = try currentWorkflowMetadata(for: resizeTarget, using: axClient)
-        try await applyFirstSuccessfulWorkflowCommand(
-            "mixed \(resizeTarget.spec.name) resize split",
-            plans: Direction.allCases.map { direction in
-                (
-                    name: "mixed \(resizeTarget.spec.name) resize \(direction.rawValue)",
-                    plan: { await worldActor.planResize(currentResizeTarget.id, direction: direction, delta: 0.10) }
-                )
-            },
+        try await applyWorkflowCommand(
+            "mixed \(resizeTarget.spec.name) resize up",
+            plan: { await worldActor.planResize(currentResizeTarget.id, direction: .up, delta: 0.10) },
             worldActor: worldActor,
             applier: applier
         )
@@ -2942,30 +2937,6 @@ enum RealAppWindowVerification {
                 throw RealAppWindowVerifierFailure("\(name) still clamped after retry: initial=\(summary); retry=\(retrySummary)")
             }
         }
-    }
-
-    private static func applyFirstSuccessfulWorkflowCommand(
-        _ context: String,
-        plans: [(name: String, plan: () async -> Result<CommandPlanResult, CommandError>)],
-        worldActor: WorldActor,
-        applier: LayoutApplier
-    ) async throws {
-        var rejected: [String] = []
-        for entry in plans {
-            switch await entry.plan() {
-            case .success:
-                try await applyWorkflowCommand(
-                    entry.name,
-                    plan: entry.plan,
-                    worldActor: worldActor,
-                    applier: applier
-                )
-                return
-            case .failure(let error):
-                rejected.append("\(entry.name): \(error.message)")
-            }
-        }
-        throw RealAppWindowVerifierFailure("\(context) had no valid real-app command plan: \(rejected.joined(separator: "; "))")
     }
 
     private static func currentWorkflowMetadata(

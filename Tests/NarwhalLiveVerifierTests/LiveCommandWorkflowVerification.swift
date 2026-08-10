@@ -193,9 +193,10 @@ enum LiveCommandWorkflowVerification {
             )
             coverage = coverage.recordingCommand("focusDirection")
 
-            state = try verifyFirstSuccessfulTreeCommand(
+            let swapDirection = swapDirections[count - 2]
+            state = try verifyLayoutCommand(
                 name: "swap",
-                commands: pushDirections.map { .swapInTree(liveWindows[count - 1].id, $0) },
+                command: .swapInTree(liveWindows[count - 1].id, swapDirection),
                 focusedWindowID: liveWindows[count - 1].id,
                 state: state,
                 liveWindows: liveWindows,
@@ -203,9 +204,10 @@ enum LiveCommandWorkflowVerification {
             )
             coverage = coverage.recordingCommand("swap")
 
-            state = try verifyFirstSuccessfulTreeCommand(
+            let resizeDirection = keyboardResizeDirections[count - 2]
+            state = try verifyLayoutCommand(
                 name: "resizeSplit",
-                commands: pushDirections.map { .resizeSplit(liveWindows[count - 1].id, $0, delta: 0.10) },
+                command: .resizeSplit(liveWindows[count - 1].id, resizeDirection, delta: 0.10),
                 focusedWindowID: liveWindows[count - 1].id,
                 state: state,
                 liveWindows: liveWindows,
@@ -414,50 +416,63 @@ enum LiveCommandWorkflowVerification {
         liveWindows: [LiveCommandWorkflowWindow],
         displays: [DisplayID: DisplayInfo]
     ) throws -> LiveCommandWorkflowState {
-        let tiledIDs = tiledWindowIDs(in: state.world)
-        let candidate = liveWindows
-            .filter { tiledIDs.contains($0.id) }
-            .compactMap { live -> ManualResizeCandidate? in
-                guard let originalFrame = state.world.windows[live.id]?.frame,
-                      let display = displayContaining(originalFrame, displays: displays)
-                else {
-                    return nil
-                }
-                let resizedFrame = manuallyResizedFrame(originalFrame, in: display.visibleFrame)
-                guard !resizedFrame.matches(originalFrame, tolerance: 2) else {
-                    return nil
-                }
-                let nextWorld: World
-                switch apply(.windowResizedExternally(live.id, resizedFrame.size), to: state.world) {
-                case .success(let value):
-                    nextWorld = value
-                case .failure:
-                    return nil
-                }
-                guard nextWorld.spaces != state.world.spaces else { return nil }
-                let plan = try? manualResizePlan(
-                    targetID: live.id,
-                    oldWorld: state.world,
-                    nextWorld: nextWorld,
-                    generation: state.generation
-                )
-                guard let plan,
-                      plan.desiredLayout.delta.moves.keys.contains(where: { $0 != live.id })
-                else {
-                    return nil
-                }
-                return ManualResizeCandidate(
-                    target: live,
-                    display: display,
-                    resizedFrame: resizedFrame,
-                    nextWorld: nextWorld,
-                    plan: plan
-                )
-            }
-            .first
-        guard let candidate else {
-            throw LiveCommandWorkflowFailure("manual tile resize count \(count) found no tiled target with a resizable neighbor")
+        guard manualResizeDirections.indices.contains(count - 2),
+              let target = liveWindows.first,
+              let originalFrame = state.world.windows[target.id]?.frame,
+              let display = displayContaining(originalFrame, displays: displays)
+        else {
+            throw LiveCommandWorkflowFailure("manual tile resize count \(count) has no tiled target frame")
         }
+        let direction = manualResizeDirections[count - 2]
+        let resizedFrame = manuallyResizedFrame(
+            originalFrame,
+            toward: direction,
+            maximumDelta: 4,
+            in: display.visibleFrame
+        )
+        let resizeDiagnostic = visibleResizeDiagnostic(
+            windowID: target.id,
+            oldFrame: originalFrame,
+            newFrame: resizedFrame,
+            display: display,
+            world: state.world
+        )
+        let nextWorld: World
+        switch apply(.windowMovedExternally(target.id, resizedFrame), to: state.world) {
+        case .success(let value):
+            nextWorld = value
+        case .failure(let error):
+            throw LiveCommandWorkflowFailure(
+                "manual tile resize count \(count) \(direction.rawValue) rejected: \(error.message)"
+            )
+        }
+        guard nextWorld.spaces != state.world.spaces else {
+            throw LiveCommandWorkflowFailure(
+                "manual tile resize count \(count) \(direction.rawValue) did not move a visible seam"
+            )
+        }
+        let plan = try manualResizePlan(
+            targetID: target.id,
+            oldWorld: state.world,
+            nextWorld: nextWorld,
+            generation: state.generation
+        )
+        guard plan.desiredLayout.delta.moves.keys.contains(where: { $0 != target.id }) else {
+            throw LiveCommandWorkflowFailure(
+                "manual tile resize count \(count) \(direction.rawValue) did not resize its visible neighbor; "
+                    + "source=\(originalFrame.debugDescription) requested=\(resizedFrame.debugDescription) "
+                    + "tiledAfter=\(ids(tiledWindowIDs(in: nextWorld))) "
+                    + "moves=\(ids(Set(plan.desiredLayout.delta.moves.keys))) "
+                    + "resize=\(resizeDiagnostic)"
+            )
+        }
+        let candidate = ManualResizeCandidate(
+            target: target,
+            display: display,
+            resizedFrame: resizedFrame,
+            nextWorld: nextWorld,
+            plan: plan
+        )
 
         let targetID = candidate.target.id
         candidate.target.window.setFrame(
@@ -526,6 +541,35 @@ enum LiveCommandWorkflowVerification {
         }
     }
 
+    private static func visibleResizeDiagnostic(
+        windowID: WindowID,
+        oldFrame: CGRect,
+        newFrame: CGRect,
+        display: DisplayInfo,
+        world: World
+    ) -> String {
+        guard let key = workspaceKey(forWindow: windowID, in: world),
+              let tree = world.spaces[key.spaceID]?.displays[display.id]?.tree
+        else { return "workspace unavailable" }
+        let outer = world.config.gaps.outer
+        let rootFrame = CGRect(
+            x: display.visibleFrame.minX + outer.left,
+            y: display.visibleFrame.minY + outer.top,
+            width: max(0, display.visibleFrame.width - outer.left - outer.right),
+            height: max(0, display.visibleFrame.height - outer.top - outer.bottom)
+        )
+        let result = resizeVisibleSeamInTree(
+            windowID,
+            from: oldFrame,
+            to: newFrame,
+            rootFrame: rootFrame,
+            innerGap: world.config.gaps.inner,
+            tree
+        )
+        return "result=\(String(describing: result)) root=\(rootFrame.debugDescription) "
+            + "inner=\(world.config.gaps.inner) tree=\(String(describing: tree))"
+    }
+
     private static func verifyLayoutCommand(
         name: String,
         command: Command,
@@ -561,33 +605,6 @@ enum LiveCommandWorkflowVerification {
             throw LiveCommandWorkflowFailure("\(name) plan rejected: \(error.message)")
         }
         return try applyAndCommit(plan, name: name, state: state, liveWindows: liveWindows, displays: displays)
-    }
-
-    private static func verifyFirstSuccessfulTreeCommand(
-        name: String,
-        commands: [Command],
-        focusedWindowID: WindowID,
-        state: LiveCommandWorkflowState,
-        liveWindows: [LiveCommandWorkflowWindow],
-        displays: [DisplayID: DisplayInfo]
-    ) throws -> LiveCommandWorkflowState {
-        let first = commands.lazy.compactMap { command -> Command? in
-            if case .success = apply(command, to: state.world) {
-                return command
-            }
-            return nil
-        }.first
-        guard let command = first else {
-            throw LiveCommandWorkflowFailure("\(name) found no valid direction in current tree")
-        }
-        return try verifyLayoutCommand(
-            name: name,
-            command: command,
-            focusedWindowID: focusedWindowID,
-            state: state,
-            liveWindows: liveWindows,
-            displays: displays
-        )
     }
 
     private static func verifyBalance(
@@ -1254,15 +1271,51 @@ enum LiveCommandWorkflowVerification {
         )
     }
 
-    private static func manuallyResizedFrame(_ frame: CGRect, in visibleFrame: CGRect) -> CGRect {
-        let widthDelta = min(max(18, frame.width * 0.12), max(0, frame.width - 120))
-        let heightDelta = min(max(14, frame.height * 0.10), max(0, frame.height - 96))
-        let candidate = CGRect(
-            x: frame.minX,
-            y: frame.minY,
-            width: max(96, frame.width - widthDelta),
-            height: max(80, frame.height - heightDelta)
+    private static func manuallyResizedFrame(
+        _ frame: CGRect,
+        toward direction: Direction,
+        maximumDelta: CGFloat,
+        in visibleFrame: CGRect
+    ) -> CGRect {
+        let horizontalDelta = min(
+            max(4, min(frame.width * 0.10, maximumDelta)),
+            max(0, frame.width - 120)
         )
+        let verticalDelta = min(
+            max(4, min(frame.height * 0.10, maximumDelta)),
+            max(0, frame.height - 96)
+        )
+        let candidate: CGRect
+        switch direction {
+        case .left:
+            candidate = CGRect(
+                x: frame.minX + horizontalDelta,
+                y: frame.minY,
+                width: frame.width - horizontalDelta,
+                height: frame.height
+            )
+        case .right:
+            candidate = CGRect(
+                x: frame.minX,
+                y: frame.minY,
+                width: frame.width + horizontalDelta,
+                height: frame.height
+            )
+        case .up:
+            candidate = CGRect(
+                x: frame.minX,
+                y: frame.minY + verticalDelta,
+                width: frame.width,
+                height: frame.height - verticalDelta
+            )
+        case .down:
+            candidate = CGRect(
+                x: frame.minX,
+                y: frame.minY,
+                width: frame.width,
+                height: frame.height + verticalDelta
+            )
+        }
         return candidate.intersection(visibleFrame).standardized
     }
 
@@ -1453,6 +1506,9 @@ enum LiveCommandWorkflowVerification {
     }
 
     private static let pushDirections: [Direction] = [.left, .right, .up, .down]
+    private static let swapDirections: [Direction] = [.left, .down, .left, .right, .left]
+    private static let keyboardResizeDirections: [Direction] = [.right, .right, .right, .left, .right]
+    private static let manualResizeDirections: [Direction] = [.left, .down, .left, .right, .down]
     private static let verificationColors: [NSColor] = [
         .systemBlue,
         .systemGreen,
