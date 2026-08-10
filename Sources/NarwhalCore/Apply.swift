@@ -797,6 +797,7 @@ private func spacesByApplyingExternalResize(
     in world: World
 ) -> [SpaceID: SpaceState]? {
     guard let key = workspaceKey(forWindow: windowID, in: world),
+          activeSpaceID(for: key.displayID, in: world) == key.spaceID,
           let space = world.spaces[key.spaceID],
           let displayID = tiledDisplay(containing: windowID, in: space),
           let displayState = space.displays[displayID],
