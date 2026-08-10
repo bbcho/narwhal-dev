@@ -89,11 +89,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         snapshotQuality: { [weak self] in self?.operatingStatus.snapshotQuality },
         applyPlan: { [weak self] result, intent in
             guard let self else { return false }
-            return await self.applyWorkbenchPlan(result, intent: intent)
+            return await self.workspaceMutationGate.perform {
+                await self.applyWorkbenchPlan(result, intent: intent)
+            }
         },
         activateManagedRules: { [weak self] rules in
             guard let self else { return }
-            await self.activateManagedRules(rules)
+            await self.workspaceMutationGate.perform {
+                await self.activateManagedRules(rules)
+            }
         },
         managedRulesSnapshot: { [weak self] in
             self?.managedRules ?? []
@@ -123,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeSpaceFocusRecoveryDeadline: Date?
     private var pendingHotkeys: [HotkeyAction] = []
     private var isDrainingHotkeys = false
-    private let commandExecutionGate = MainActorCommandExecutionGate()
+    private let workspaceMutationGate = WorkspaceMutationGate()
     private var isHandlingExternalGeometry = false
     private var pendingExternalGeometryEvents =
         ExternalGeometryEventQueue<PendingExternalGeometryEvent>()
@@ -177,18 +181,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 exitAfterFlushing(1)
             }
             Task { @MainActor in
-                let focused = reportFocusedWindowSnapshot()
-                let environment = await refreshEnvironment(reason: "check")
-                guard environment.activeSpace != nil else {
-                    reporter.error("Environment check failed: active Space unavailable")
+                await workspaceMutationGate.perform {
+                    let focused = reportFocusedWindowSnapshot()
+                    let environment = await refreshEnvironmentLocked(reason: "check")
+                    guard environment.activeSpace != nil else {
+                        reporter.error("Environment check failed: active Space unavailable")
+                        reporter.info("NarwhalApp stopped")
+                        exitAfterFlushing(1)
+                    }
+                    if let focused {
+                        await worldActor.recordExternalFocus(focused.id)
+                    }
                     reporter.info("NarwhalApp stopped")
-                    exitAfterFlushing(1)
+                    exitAfterFlushing(0)
                 }
-                if let focused {
-                    await worldActor.recordExternalFocus(focused.id)
-                }
-                reporter.info("NarwhalApp stopped")
-                exitAfterFlushing(0)
             }
             return
         case .pushLeft:
@@ -368,11 +374,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func startAfterAccessibilityTrusted() async {
+        await workspaceMutationGate.perform {
+            await self.startAfterAccessibilityTrustedLocked()
+        }
+    }
+
+    @MainActor
+    private func startAfterAccessibilityTrustedLocked() async {
         guard !servicesStarted else { return }
         updateRuntimeReadiness(.starting)
         reporter.info("Rung 1 complete: AppKit run loop is active and Accessibility is trusted")
         let focused = reportFocusedWindowSnapshot()
-        let environment = await refreshEnvironment(reason: "startup")
+        let environment = await refreshEnvironmentLocked(reason: "startup")
         guard environment.activeSpace != nil else {
             reporter.error("Window manager services not started: active Space unavailable")
             updateRuntimeReadiness(.degraded(.activeSpaceUnavailable))
@@ -384,8 +397,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await worldActor.recordExternalFocus(focused.id)
             updateFocusBorder(for: focused)
         }
-        await applyStartupConverge()
-        await applyPendingTileRules(reason: "startup")
+        await applyStartupConvergeLocked()
+        await applyPendingTileRulesLocked(reason: "startup")
         startServices()
     }
 
@@ -473,7 +486,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @discardableResult
     @MainActor
-    private func refreshEnvironment(
+    private func refreshEnvironmentLocked(
         reason: String,
         displays providedDisplays: [DisplayID: DisplayInfo]? = nil,
         preserveSpaceLayouts: Bool = false,
@@ -671,18 +684,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         Task { @MainActor in
-            let environment = await refreshEnvironment(reason: "one-shot push")
-            guard environment.activeSpace != nil else {
-                reporter.error("Push \(direction.rawValue) skipped because active Space is unavailable")
-                NSApplication.shared.terminate(nil)
-                return
+            await workspaceMutationGate.perform {
+                let environment = await refreshEnvironmentLocked(reason: "one-shot push")
+                guard environment.activeSpace != nil else {
+                    reporter.error("Push \(direction.rawValue) skipped because active Space is unavailable")
+                    NSApplication.shared.terminate(nil)
+                    return
+                }
+                guard await loadRestoreState(using: environment.snapshot) else {
+                    NSApplication.shared.terminate(nil)
+                    return
+                }
+                await performPush(direction)
+                await requestTermination()
             }
-            guard await loadRestoreState(using: environment.snapshot) else {
-                NSApplication.shared.terminate(nil)
-                return
-            }
-            await performPush(direction)
-            await requestTermination()
         }
     }
 
@@ -777,7 +792,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             resetLayout: { [weak self] in
                 Task { @MainActor in
-                    await self?.performHotkey(.command(.resetLayout))
+                    self?.enqueueHotkey(.command(.resetLayout))
                 }
             },
             quit: { [weak self] in
@@ -1137,7 +1152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             drop: { [weak self] location in
                 Task { @MainActor in
                     guard let self else { return }
-                    await self.commandExecutionGate.perform {
+                    await self.workspaceMutationGate.perform {
                         await self.performDragDrop(at: location)
                     }
                 }
@@ -1173,7 +1188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         while !pendingHotkeys.isEmpty {
             guard let batch = nextHotkeyExecutionBatch(in: pendingHotkeys) else { break }
             pendingHotkeys.removeFirst(batch.consumedCount)
-            await commandExecutionGate.perform {
+            await workspaceMutationGate.perform {
                 await self.performHotkey(batch.action, resizeDeltas: batch.resizeDeltas)
             }
         }
@@ -1241,7 +1256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reporter.error("Hotkey action not implemented in this build: \(AppDelegateText.describe(template))")
             showOperatorFeedback("Command unavailable: \(AppDelegateText.describe(template))", tone: .error)
         case .reloadConfig:
-            await reloadConfig(reason: "hotkey")
+            await reloadConfigLocked(reason: "hotkey")
         case .showCommands:
             overlay.toggleCommandOverlay(
                 bindings: config.keymap,
@@ -1388,7 +1403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(
+        let environment = await refreshEnvironmentLocked(
             reason: "pre-focus \(direction.rawValue)",
             displays: displays,
             reconciliationMode: .observeOnly
@@ -1443,7 +1458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             focusedWindowID = nil
         }
 
-        let environment = await refreshEnvironment(
+        let environment = await refreshEnvironmentLocked(
             reason: "pre-focus-cycle \(direction.rawValue)",
             reconciliationMode: .observeOnly
         )
@@ -1507,7 +1522,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             focusedWindowID = nil
         }
 
-        let environment = await refreshEnvironment(
+        let environment = await refreshEnvironmentLocked(
             reason: "pre-focus-previous",
             reconciliationMode: .observeOnly
         )
@@ -1634,7 +1649,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let environment = await refreshEnvironment(
+        let environment = await refreshEnvironmentLocked(
             reason: "pre-undo",
             reconciliationMode: .observeOnly
         )
@@ -1672,7 +1687,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let environment = await refreshEnvironment(reason: "pre-redo", reconciliationMode: .observeOnly)
+        let environment = await refreshEnvironmentLocked(reason: "pre-redo", reconciliationMode: .observeOnly)
         guard environment.activeSpace != nil else {
             reporter.error("Redo rejected before planning: active Space unavailable")
             showOperatorFeedback("Redo failed: active Space unavailable", tone: .error)
@@ -1880,7 +1895,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let environment = await refreshEnvironment(
+        let environment = await refreshEnvironmentLocked(
             reason: "pre-shuffle",
             reconciliationMode: .observeOnly
         )
@@ -1919,7 +1934,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let environment = await refreshEnvironment(
+        let environment = await refreshEnvironmentLocked(
             reason: "pre-cascade",
             reconciliationMode: .observeOnly
         )
@@ -2063,7 +2078,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             let error = focusedWindowReadError()
             let displays = displayClient.currentDisplays()
-            _ = await refreshEnvironment(
+            _ = await refreshEnvironmentLocked(
                 reason: "\(operation.lowercased()) focus fallback",
                 displays: displays,
                 reconciliationMode: .observeOnly
@@ -2131,7 +2146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return FocusedLayoutContext(metadata: fallback, displays: displays)
             }
             if Date() >= nextRefresh {
-                _ = await refreshEnvironment(
+                _ = await refreshEnvironmentLocked(
                     reason: "\(operation.lowercased()) focus recovery",
                     displays: displays,
                     reconciliationMode: .observeOnly
@@ -2182,7 +2197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         operation: String,
         refreshReason: String
     ) async -> Bool {
-        let environment = await refreshEnvironment(
+        let environment = await refreshEnvironmentLocked(
             reason: refreshReason,
             displays: context.displays,
             reconciliationMode: .observeOnly
@@ -2508,7 +2523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 reporter.error(
                     "\(operation) moved windows but its source workspace changed before commit; reconciling live frames without history"
                 )
-                _ = await refreshEnvironment(reason: "stale \(operation.lowercased()) commit")
+                _ = await refreshEnvironmentLocked(reason: "stale \(operation.lowercased()) commit")
                 showOperatorFeedback("\(operation) was not committed because the workspace changed", tone: .warning)
                 return false
             }
@@ -2634,7 +2649,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func applyStartupConverge() async {
+    private func applyStartupConvergeLocked() async {
         switch await worldActor.planCurrentLayout() {
         case .success(nil):
             reporter.info("Startup restore convergence skipped: no restored tiled windows")
@@ -2643,7 +2658,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if applyResult.succeeded {
                 guard await worldActor.commit(result, appliedFrames: applyResult.applied) else {
                     reporter.error("Startup restore convergence became stale before commit; reconciling live frames")
-                    _ = await refreshEnvironment(reason: "stale startup convergence")
+                    _ = await refreshEnvironmentLocked(reason: "stale startup convergence")
                     return
                 }
                 reporter.info("Startup restore convergence completed")
@@ -2673,6 +2688,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func reloadConfig(reason: String) async {
+        await workspaceMutationGate.perform {
+            await self.reloadConfigLocked(reason: reason)
+        }
+    }
+
+    @MainActor
+    private func reloadConfigLocked(reason: String) async {
         let loaded: StartupConfigLoad
         switch await backgroundStartupConfigLoad() {
         case .success(let value):
@@ -2770,6 +2792,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func handleAXEvent(_ event: AXEvent, snapshot: FocusedWindowSnapshot?) async {
+        await workspaceMutationGate.perform {
+            await self.handleAXEventLocked(event, snapshot: snapshot)
+        }
+    }
+
+    @MainActor
+    private func handleAXEventLocked(_ event: AXEvent, snapshot: FocusedWindowSnapshot?) async {
         switch event {
         case .windowFocused(let windowID):
             activeSpaceFocusRecoveryDeadline = nil
@@ -2815,9 +2844,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await worldActor.setWindowInteraction(.manualAdjustment, for: windowID)
                 await refreshWorkspacePresentationSurfaces()
             }
-            let resolvedInteraction = await commandExecutionGate.perform {
-                await self.processExternalGeometryEvent(currentEvent.event, snapshot: currentEvent.snapshot)
-            }
+            let resolvedInteraction = await processExternalGeometryEvent(
+                currentEvent.event,
+                snapshot: currentEvent.snapshot
+            )
             if let windowID {
                 await worldActor.setWindowInteraction(resolvedInteraction, for: windowID)
                 await refreshWorkspacePresentationSurfaces()
@@ -2986,6 +3016,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func runCoalescedEnvironmentRefresh(generation: UInt64) async {
+        await workspaceMutationGate.perform {
+            await self.runCoalescedEnvironmentRefreshLocked(generation: generation)
+        }
+    }
+
+    @MainActor
+    private func runCoalescedEnvironmentRefreshLocked(generation: UInt64) async {
         if environmentRefreshCoalescingTimerGeneration == generation {
             environmentRefreshCoalescingTimer?.invalidate()
             environmentRefreshCoalescingTimer = nil
@@ -3000,7 +3037,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for: request.reasons,
             duringSpaceTransition: spaceTransitionPreservation.isPreservingSpaceLayouts
         )
-        let environment = await refreshEnvironment(
+        let environment = await refreshEnvironmentLocked(
             reason: "coalesced \(request.description)",
             preserveSpaceLayouts: policy.preserveSpaceLayouts,
             reconciliationMode: policy.reconciliationMode
@@ -3025,7 +3062,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             var appliedPendingTileRules = false
             if completed && policy.applyPendingTileRules && !environment.preservedSpaceLayouts {
-                appliedPendingTileRules = await applyPendingTileRules(
+                appliedPendingTileRules = await applyPendingTileRulesLocked(
                     reason: "coalesced \(completedRequest.description)"
                 )
             }
@@ -3034,7 +3071,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 && !environment.preservedSpaceLayouts
                 && !appliedPendingTileRules
             {
-                await applySettledDisplayLayout(reason: completedRequest.description)
+                await applySettledDisplayLayoutLocked(reason: completedRequest.description)
             }
             if policy.persistRestore && !environment.preservedSpaceLayouts {
                 await persistRestore(reason: "coalesced \(completedRequest.description)")
@@ -3047,7 +3084,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func applySettledDisplayLayout(reason: String) async {
+    private func applySettledDisplayLayoutLocked(reason: String) async {
         guard !isPaused else {
             reporter.info("Display reflow deferred while paused (\(reason))")
             return
@@ -3089,7 +3126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     @discardableResult
-    private func applyPendingTileRules(reason: String) async -> Bool {
+    private func applyPendingTileRulesLocked(reason: String) async -> Bool {
         guard !isPaused else { return false }
         guard AccessibilityTrust.current(prompt: false).isTrusted else { return false }
 
@@ -3114,13 +3151,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if isPaused {
             overlay.hideDragPreview()
         } else {
-            await applyPendingTileRules(reason: "resume")
+            await applyPendingTileRulesLocked(reason: "resume")
         }
     }
 
     @MainActor
     private func handleIPCCommand(_ command: IPCCommandDTO) async -> IPCReplyDTO {
-        await commandExecutionGate.perform {
+        await workspaceMutationGate.perform {
             await self.handleSerializedIPCCommand(command)
         }
     }
@@ -3281,7 +3318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let displays = displayClient.currentDisplays()
-        let environment = await refreshEnvironment(
+        let environment = await refreshEnvironmentLocked(
             reason: refreshReason,
             displays: displays,
             reconciliationMode: .observeOnly

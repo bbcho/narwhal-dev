@@ -1,7 +1,11 @@
 @MainActor
-final class MainActorCommandExecutionGate {
+final class WorkspaceMutationGate {
     private var isExecuting = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var isExecutingForVerification: Bool {
+        isExecuting
+    }
 
     func perform<Value>(_ operation: @MainActor () async -> Value) async -> Value {
         await acquire()
@@ -15,7 +19,6 @@ final class MainActorCommandExecutionGate {
             isExecuting = true
             return
         }
-
         await withCheckedContinuation { continuation in
             waiters.append(continuation)
         }
@@ -26,7 +29,6 @@ final class MainActorCommandExecutionGate {
             isExecuting = false
             return
         }
-
         waiters.removeFirst().resume()
     }
 }
