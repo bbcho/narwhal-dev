@@ -2666,33 +2666,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .success(nil):
             reporter.info("Startup restore convergence skipped: no restored tiled windows")
         case .success(let result?):
-            let applyResult = await LayoutApplier(axClient: axClient, reporter: reporter, echoSuppressor: echoSuppressor).apply(result)
-            if applyResult.succeeded {
-                guard await worldActor.commit(result, appliedFrames: applyResult.applied) else {
-                    reporter.error("Startup restore convergence became stale before commit; reconciling live frames")
-                    _ = await refreshEnvironmentLocked(reason: "stale startup convergence")
-                    return
-                }
-                reporter.info("Startup restore convergence completed")
-                await updateTiledBordersFromWorld()
-                await persistRestore(reason: "startup")
-                return
+            _ = await applyPlannedLayout(
+                result,
+                operation: "Startup restore convergence",
+                persistReason: "startup",
+                retryOnClamp: true,
+                showFocusBorder: false
+            ) {
+                await self.currentLayoutRetryPlan()
             }
-
-            if !applyResult.clamps.isEmpty {
-                await worldActor.recordObservedConstraints(applyResult.observedConstraints)
-            }
-            let clampSummary = applyResult.clamps
-                .map {
-                    "\($0.windowID.description) target=\($0.targetFrame.debugDescription) actual=\($0.actualFrame.debugDescription) observed=\($0.observed.appDebugDescription)"
-                }
-                .joined(separator: "; ")
-            let failureSummary = applyResult.failures
-                .map { "\($0.windowID.description) target=\($0.targetFrame.debugDescription) error=\($0.message)" }
-                .joined(separator: "; ")
-            reporter.error(
-                "Startup restore convergence failed; restored layout was not committed: clamps=\(clampSummary) failures=\(failureSummary)"
-            )
         case .failure(let error):
             reporter.error("Startup restore convergence rejected by core: \(error.message)")
         }
