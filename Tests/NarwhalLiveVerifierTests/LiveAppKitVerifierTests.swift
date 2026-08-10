@@ -103,6 +103,18 @@ struct LiveAppKitVerifierTests {
         try expectPassed(await LiveFocusWorkflowVerification.verifySheetFocusAndBorderWorkflow())
     }
 
+    @Test("Missing WindowServer focus border fails verification")
+    func missingWindowServerBorderFailsVerification() {
+        #expect(throws: LiveFocusWorkflowFailure.self) {
+            try LiveFocusWorkflowVerification.requireFocusBorderWindowServerSurface(
+                proposedBorderNumber: Int.max,
+                targetWindowNumber: Int.max - 1,
+                expectedFrame: CGRect(x: -100_000, y: -100_000, width: 7, height: 7),
+                context: "negative control"
+            )
+        }
+    }
+
     // Keep these workflows in one case because the main-actor test host can
     // terminate between separate serialized cases at the end of the suite.
     @Test("Live focus + command workflows")

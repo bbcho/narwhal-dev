@@ -773,17 +773,38 @@ enum LiveFocusWorkflowVerification {
                 "\(context) focus border frame mismatch: expected=\(expectedFrame.debugDescription) actual=\(actualFrame.debugDescription)"
             )
         }
-        guard let resolvedBorderNumber = windowServerNumber(
-            appKitWindowNumber: borderNumber,
-            frame: actualWindowServerFrame,
-            excluding: [liveWindow.windowNumber]
-        ) else {
-            return
-        }
+        let resolvedBorderNumber = try requireFocusBorderWindowServerSurface(
+            proposedBorderNumber: borderNumber,
+            targetWindowNumber: liveWindow.windowNumber,
+            expectedFrame: actualWindowServerFrame,
+            context: context
+        )
         try requireWindowServerOrder(
             above: resolvedBorderNumber,
             below: liveWindow.windowNumber,
             context: "\(context) focus border above target"
+        )
+    }
+
+    static func requireFocusBorderWindowServerSurface(
+        proposedBorderNumber: Int,
+        targetWindowNumber: Int,
+        expectedFrame: CGRect,
+        context: String
+    ) throws -> Int {
+        if let resolved = windowServerNumber(
+            appKitWindowNumber: proposedBorderNumber,
+            frame: expectedFrame,
+            excluding: [targetWindowNumber]
+        ) {
+            return resolved
+        }
+        throw LiveFocusWorkflowFailure(
+            "\(context) focus border missing from WindowServer: "
+                + "targetWindowNumber=\(targetWindowNumber) "
+                + "proposedBorderNumber=\(proposedBorderNumber) "
+                + "expectedFrame=\(expectedFrame.debugDescription) "
+                + "frontToBack=\(frontToBackWindowNumbers())"
         )
     }
 
@@ -1274,7 +1295,7 @@ private struct LiveFocusWindows {
     }
 }
 
-private struct LiveFocusWorkflowFailure: Error {
+struct LiveFocusWorkflowFailure: Error {
     let message: String
 
     init(_ message: String) {
