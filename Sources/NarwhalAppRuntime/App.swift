@@ -2532,8 +2532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await persistRestore(reason: persistReason)
             return true
 
-        case .fail(let appliedFrames, let failureCount, let summary):
-            await worldActor.recordAppliedFrames(appliedFrames)
+        case .fail(let failureCount, let summary):
             await updateTiledBordersFromWorld()
             reporter.error(
                 "\(operation) failed applying \(failureCount) window(s); planned layout was not committed: \(summary)"
@@ -2541,8 +2540,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showOperatorFeedback("\(operation) failed applying windows", tone: .error)
             return false
 
-        case .clamp(let appliedFrames, let observedConstraints, let shouldRetry, let summary):
-            await worldActor.recordAppliedFrames(appliedFrames)
+        case .clamp(let observedConstraints, let shouldRetry, let summary):
             if !observedConstraints.isEmpty {
                 await worldActor.recordObservedConstraints(observedConstraints)
             }
@@ -2654,7 +2652,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
 
-            await worldActor.recordAppliedFrames(applyResult.applied)
             if !applyResult.clamps.isEmpty {
                 await worldActor.recordObservedConstraints(applyResult.observedConstraints)
             }

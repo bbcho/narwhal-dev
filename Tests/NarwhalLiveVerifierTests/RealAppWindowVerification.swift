@@ -2843,19 +2843,18 @@ enum RealAppWindowVerification {
                 )
                 return current.desiredLayout.layout.tiled
 
-            case .fail(_, let failureCount, let summary):
+            case .fail(let failureCount, let summary):
                 throw RealAppWindowVerifierFailure(
                     "\(name) failed applying \(failureCount) real app window(s): "
                         + (clampSummaries + [summary]).joined(separator: "; ")
                 )
 
-            case .clamp(let appliedFrames, let observedConstraints, let shouldRetry, let summary):
+            case .clamp(let observedConstraints, let shouldRetry, let summary):
                 guard allowConstraintRetry else {
                     throw RealAppWindowVerifierFailure(
                         "\(name) changed the intended geometry instead of applying the original plan: \(summary)"
                     )
                 }
-                await worldActor.recordAppliedFrames(appliedFrames)
                 await worldActor.recordObservedConstraints(observedConstraints)
                 guard shouldRetry,
                       let nextRetryState = retryState.recording(observedConstraints)
@@ -2907,11 +2906,10 @@ enum RealAppWindowVerification {
             try requireAppliedFramesVisible(appliedFrames, plan: first, context: name)
             return first.desiredLayout.layout.tiled
 
-        case .fail(_, let failureCount, let summary):
+        case .fail(let failureCount, let summary):
             throw RealAppWindowVerifierFailure("\(name) failed applying \(failureCount) real app window(s): \(summary)")
 
-        case .clamp(let appliedFrames, let observedConstraints, let shouldRetry, let summary):
-            await worldActor.recordAppliedFrames(appliedFrames)
+        case .clamp(let observedConstraints, let shouldRetry, let summary):
             await worldActor.recordObservedConstraints(observedConstraints)
             guard shouldRetry else {
                 throw RealAppWindowVerifierFailure("\(name) clamped without retry: \(summary)")
@@ -2936,11 +2934,11 @@ enum RealAppWindowVerification {
                     context: "\(name) retry after clamp"
                 )
                 return retry.desiredLayout.layout.tiled
-            case .fail(_, let failureCount, let retrySummary):
+            case .fail(let failureCount, let retrySummary):
                 throw RealAppWindowVerifierFailure(
                     "\(name) failed after clamp retry applying \(failureCount) real app window(s): initial=\(summary); retry=\(retrySummary)"
                 )
-            case .clamp(_, _, _, let retrySummary):
+            case .clamp(_, _, let retrySummary):
                 throw RealAppWindowVerifierFailure("\(name) still clamped after retry: initial=\(summary); retry=\(retrySummary)")
             }
         }

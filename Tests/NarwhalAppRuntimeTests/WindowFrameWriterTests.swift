@@ -6,6 +6,30 @@ import Testing
 @MainActor
 @Suite("Window frame writer")
 struct WindowFrameWriterTests {
+    @Test("Explicit frame read exposes both Accessibility and WindowServer geometry")
+    func explicitReadFrame() async {
+        let accessibility = CGRect(x: 10, y: 20, width: 300, height: 200)
+        let windowServer = CGRect(x: 10, y: 20, width: 299, height: 200)
+        let writer = WindowFrameWriter(
+            writeAccessibility: { _, _ in .failed(.invalidFrame(.null)) },
+            writeTerminal: { _, _ in .failure(.invalidFrame(.null)) },
+            readback: { _ in
+                .success(WindowFrameReadback(
+                    accessibility: accessibility,
+                    windowServer: windowServer
+                ))
+            }
+        )
+
+        switch await writer.readFrame(metadata(bundleID: "org.mozilla.firefox")) {
+        case .success(let readback):
+            #expect(readback.accessibility == accessibility)
+            #expect(readback.windowServer == windowServer)
+        case .failure(let error):
+            Issue.record("Expected frame readback, got \(error.description)")
+        }
+    }
+
     @Test("Terminal bounds script uses integral WindowServer coordinates")
     func terminalScript() throws {
         let script = try #require(terminalBoundsAppleScript(

@@ -18,7 +18,12 @@ struct LayoutApplierTests {
             middle: CGRect(x: 508, y: 0, width: 500, height: 800),
             right: CGRect(x: 1_016, y: 0, width: 500, height: 800),
         ]
-        var observed: [WindowID: CGRect] = [:]
+        let originals = [
+            left: CGRect(x: 0, y: 0, width: 450, height: 800),
+            middle: CGRect(x: 458, y: 0, width: 450, height: 800),
+            right: CGRect(x: 916, y: 0, width: 450, height: 800),
+        ]
+        var observed = originals
         var writes: [(WindowID, CGRect)] = []
         let writer = WindowFrameWriter(
             writeAccessibility: { window, target in
@@ -49,7 +54,7 @@ struct LayoutApplierTests {
         )
         let applier = LayoutApplier(frameWriter: writer, reporter: reporter)
 
-        let result = await applier.apply(plan(planned: planned, innerGap: 8))
+        let result = await applier.apply(plan(planned: planned, originals: originals, innerGap: 8))
 
         #expect(result.succeeded)
         #expect(writes.map(\.0) == [left, middle, right])
@@ -75,6 +80,7 @@ struct LayoutApplierTests {
 
     private func plan(
         planned: [WindowID: CGRect],
+        originals: [WindowID: CGRect],
         innerGap: Double
     ) -> CommandPlanResult {
         let windows = Dictionary(uniqueKeysWithValues: planned.map { windowID, frame in
@@ -86,7 +92,7 @@ struct LayoutApplierTests {
                 title: "Test",
                 role: "AXWindow",
                 pid: 101,
-                frame: frame,
+                    frame: originals[windowID] ?? frame,
                 isResizable: true,
                 isMinimized: false
                 )

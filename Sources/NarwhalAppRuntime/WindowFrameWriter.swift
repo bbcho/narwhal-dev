@@ -106,6 +106,10 @@ struct WindowFrameWriter {
         self.settle = settle
     }
 
+    func readFrame(_ window: WindowMetadata) async -> Result<WindowFrameReadback, AXClientError> {
+        await readback(window)
+    }
+
     func setFrame(_ window: WindowMetadata, to requestedFrame: CGRect) async -> AXFrameWriteOutcome {
         let target = canonicalFrameWriteTarget(requestedFrame)
         guard target.narwhalIsFinitePositive else {

@@ -28,81 +28,125 @@ struct LayoutApplier {
         _ plan: CommandPlanResult,
         preserving preservedFrames: [WindowID: CGRect] = [:]
     ) async -> LayoutApplyResult {
-        let planned = plan.desiredLayout.layout.tiled.mapValues(canonicalFrameWriteTarget)
-        let movingWindowIDs = Set(plan.desiredLayout.delta.moves.keys)
-            .subtracting(preservedFrames.keys)
-        var result = LayoutApplyResult(
-            applied: initiallyAcceptedFrames(
-                planned: planned,
-                movingWindowIDs: movingWindowIDs,
-                windows: plan.windows,
-                preservedFrames: preservedFrames
-            ),
-            clamps: [],
-            failures: []
-        )
-        reporter.info(
-            "Applying layout generation=\(plan.desiredLayout.generation.raw) "
-                + "tiledCount=\(planned.count) writeCount=\(movingWindowIDs.count)"
-        )
-
-        let orderedWindowIDs = leadingFrameWriteOrder(
-            planned: planned,
-            candidates: movingWindowIDs,
-            innerGap: plan.plannedWorld.config.gaps.inner
-        )
-        for windowID in orderedWindowIDs {
-            guard let metadata = plan.windows[windowID],
-                  let plannedFrame = planned[windowID]
-            else {
-                let target = planned[windowID] ?? .null
-                reporter.error("No metadata for \(windowID.description); stopping frame writes")
-                return recordLayoutFrameWrite(
-                    windowID: windowID,
-                    targetFrame: target,
-                    observation: .failed(message: "missing window metadata"),
-                    in: result
-                ).result
-            }
-
-            let actualAndPending = planned.merging(result.applied) { _, actual in actual }
-            let target: CGRect
-            switch reflowSnappedFrames(
-                planned: planned,
-                actual: actualAndPending,
-                innerGap: plan.plannedWorld.config.gaps.inner,
-                anchoredWindowIDs: Set(result.applied.keys),
-                tolerance: Double(configuredGapTolerance)
-            ) {
-            case .success(let reflowed):
-                target = canonicalFrameWriteTarget(reflowed[windowID] ?? plannedFrame)
-            case .failure(let conflict):
-                return gapConflictFailure(
-                    conflict,
-                    planned: planned,
-                    startingWith: result
-                )
-            }
-
-            echoSuppressor?.expectFrame(windowID: windowID, targetFrame: target)
-            let adapter = metadata.bundleID.raw == "com.apple.Terminal" ? "Terminal bounds" : "Accessibility"
-            reporter.info(
-                "Writing \(windowID.description) adapter=\(adapter) target=\(target.debugDescription)"
-            )
-            let outcome = await frameWriter.setFrame(metadata, to: target)
-            result = record(outcome, windowID: windowID, targetFrame: target, in: result)
-            switch outcome {
-            case .converged, .constrained:
-                continue
-            case .clamped, .failed:
-                return result
-            }
-        }
-
-        return validateAppliedLayout(plan: plan, planned: planned, result: result)
+        let outcome = await LayoutFrameTransaction(
+            frameWriter: frameWriter,
+            reporter: reporter,
+            echoSuppressor: echoSuppressor
+        ).execute(plan, preserving: preservedFrames) { true }
+        return applyResult(from: outcome, plan: plan)
     }
 
-    private func initiallyAcceptedFrames(
+    private func applyResult(
+        from outcome: LayoutFrameTransactionOutcome,
+        plan: CommandPlanResult
+    ) -> LayoutApplyResult {
+        switch outcome {
+        case .applied(_, let appliedFrames):
+            return LayoutApplyResult(applied: appliedFrames, clamps: [], failures: [])
+        case .constraintObserved(let originalFrames, let observations, let failure):
+            let clamps = observations.keys.sorted(by: { $0.raw < $1.raw }).map { windowID in
+                LayoutApplyClamp(
+                    windowID: windowID,
+                    targetFrame: plan.desiredLayout.layout.tiled[windowID] ?? .null,
+                    actualFrame: originalFrames[windowID] ?? plan.windows[windowID]?.frame ?? .null,
+                    observed: observations[windowID] ?? WindowConstraints()
+                )
+            }
+            reporter.info("Layout transaction restored after constraint: \(failure.message)")
+            return LayoutApplyResult(applied: originalFrames, clamps: clamps, failures: [])
+        case .rolledBack(let originalFrames, let failure):
+            reporter.error("Layout transaction restored after failure: \(failure.message)")
+            return LayoutApplyResult(
+                applied: originalFrames,
+                clamps: [],
+                failures: [layoutApplyFailure(failure, plan: plan)]
+            )
+        case .reconciliationRequired(let originalFrames, let liveFrames, let failure, let rollbackFailures):
+            let rollbackSummary = rollbackFailures.map(\.message).joined(separator: "; ")
+            reporter.error(
+                "Layout rollback incomplete: \(failure.message); rollback failures: \(rollbackSummary)"
+            )
+            return LayoutApplyResult(
+                applied: liveFrames.isEmpty ? originalFrames : liveFrames,
+                clamps: [],
+                failures: [LayoutApplyFailure(
+                    windowID: failure.windowID ?? WindowID(raw: 0),
+                    targetFrame: failure.windowID.flatMap { plan.desiredLayout.layout.tiled[$0] } ?? .null,
+                    message: "\(failure.message); rollback failed: \(rollbackSummary)"
+                )]
+            )
+        }
+    }
+
+    private func layoutApplyFailure(
+        _ failure: LayoutFrameTransactionFailure,
+        plan: CommandPlanResult
+    ) -> LayoutApplyFailure {
+        LayoutApplyFailure(
+            windowID: failure.windowID ?? WindowID(raw: 0),
+            targetFrame: failure.windowID.flatMap { plan.desiredLayout.layout.tiled[$0] } ?? .null,
+            message: failure.message
+        )
+    }
+
+    func plannedFrames(for plan: CommandPlanResult) -> [WindowID: CGRect] {
+        plan.desiredLayout.layout.tiled.mapValues(canonicalFrameWriteTarget)
+    }
+
+    func movingWindowIDs(
+        for plan: CommandPlanResult,
+        preserving preservedFrames: [WindowID: CGRect]
+    ) -> Set<WindowID> {
+        Set(plan.desiredLayout.delta.moves.keys).subtracting(preservedFrames.keys)
+    }
+
+    func orderedWindowIDs(
+        planned: [WindowID: CGRect],
+        movingWindowIDs: Set<WindowID>,
+        innerGap: Double
+    ) -> [WindowID] {
+        leadingFrameWriteOrder(
+            planned: planned,
+            candidates: movingWindowIDs,
+            innerGap: innerGap
+        )
+    }
+
+    func resolvedTargetFrame(
+        for windowID: WindowID,
+        planned: [WindowID: CGRect],
+        applied: [WindowID: CGRect],
+        innerGap: Double
+    ) -> Result<CGRect, LayoutApplyFailure> {
+        guard let plannedFrame = planned[windowID] else {
+            return .failure(LayoutApplyFailure(
+                windowID: windowID,
+                targetFrame: .null,
+                message: "missing planned frame"
+            ))
+        }
+        let actualAndPending = planned.merging(applied) { _, actual in actual }
+        switch reflowSnappedFrames(
+            planned: planned,
+            actual: actualAndPending,
+            innerGap: innerGap,
+            anchoredWindowIDs: Set(applied.keys),
+            tolerance: Double(configuredGapTolerance)
+        ) {
+        case .success(let reflowed):
+            return .success(canonicalFrameWriteTarget(reflowed[windowID] ?? plannedFrame))
+        case .failure(let conflict):
+            let windows = conflict.windows.map(\.description).joined(separator: ",")
+            let failedWindowID = conflict.windows.first ?? windowID
+            return .failure(LayoutApplyFailure(
+                windowID: failedWindowID,
+                targetFrame: planned[failedWindowID] ?? plannedFrame,
+                message: "configured \(conflict.axis.rawValue) gap is physically inconsistent for \(windows)"
+            ))
+        }
+    }
+
+    func initiallyAcceptedFrames(
         planned: [WindowID: CGRect],
         movingWindowIDs: Set<WindowID>,
         windows: [WindowID: WindowMetadata],
@@ -120,53 +164,46 @@ struct LayoutApplier {
         }
     }
 
-    private func validateAppliedLayout(
+    func validationFailure(
         plan: CommandPlanResult,
         planned: [WindowID: CGRect],
-        result: LayoutApplyResult
-    ) -> LayoutApplyResult {
+        applied: [WindowID: CGRect]
+    ) -> LayoutApplyFailure? {
         let missing = planned.keys
-            .filter { result.applied[$0] == nil }
+            .filter { applied[$0] == nil }
             .sorted { $0.raw < $1.raw }
         if let windowID = missing.first, let target = planned[windowID] {
-            return recordLayoutFrameWrite(
+            return LayoutApplyFailure(
                 windowID: windowID,
                 targetFrame: target,
-                observation: .failed(message: "missing final frame readback"),
-                in: result
-            ).result
+                message: "missing final frame readback"
+            )
         }
 
         let violations = innerGapViolations(
             planned: planned,
-            actual: result.applied,
+            actual: applied,
             innerGap: plan.plannedWorld.config.gaps.inner,
             tolerance: Double(configuredGapTolerance)
         )
         if let violation = violations.first,
            let target = planned[violation.after] {
-            return recordLayoutFrameWrite(
+            return LayoutApplyFailure(
                 windowID: violation.after,
                 targetFrame: target,
-                observation: .failed(
-                    message: "configured gap expected=\(violation.expected) actual=\(violation.actual)"
-                ),
-                in: result
-            ).result
+                message: "configured gap expected=\(violation.expected) actual=\(violation.actual)"
+            )
         }
 
-        if let overlap = firstOverlap(in: result.applied),
+        if let overlap = firstOverlap(in: applied),
            let target = planned[overlap.second] {
-            return recordLayoutFrameWrite(
+            return LayoutApplyFailure(
                 windowID: overlap.second,
                 targetFrame: target,
-                observation: .failed(
-                    message: "visible frames overlap \(overlap.first.description) and \(overlap.second.description)"
-                ),
-                in: result
-            ).result
+                message: "visible frames overlap \(overlap.first.description) and \(overlap.second.description)"
+            )
         }
-        return result
+        return nil
     }
 
     private func firstOverlap(
@@ -189,84 +226,4 @@ struct LayoutApplier {
         return nil
     }
 
-    private func gapConflictFailure(
-        _ conflict: SnappedFrameGapConflict,
-        planned: [WindowID: CGRect],
-        startingWith result: LayoutApplyResult
-    ) -> LayoutApplyResult {
-        let windows = conflict.windows.map(\.description).joined(separator: ",")
-        let windowID = conflict.windows.first ?? WindowID(raw: 0)
-        return recordLayoutFrameWrite(
-            windowID: windowID,
-            targetFrame: planned[windowID] ?? .null,
-            observation: .failed(
-                message: "configured \(conflict.axis.rawValue) gap is physically inconsistent for \(windows)"
-            ),
-            in: result
-        ).result
-    }
-
-    private func record(
-        _ outcome: AXFrameWriteOutcome,
-        windowID: WindowID,
-        targetFrame: CGRect,
-        in result: LayoutApplyResult
-    ) -> LayoutApplyResult {
-        switch outcome {
-        case .converged(let actual):
-            reporter.info(
-                "Applied \(windowID.description) target=\(targetFrame.debugDescription) "
-                    + "AX=\(actual.debugDescription) WindowServer=\(actual.debugDescription) outcome=exact"
-            )
-            return recordLayoutFrameWrite(
-                windowID: windowID,
-                targetFrame: targetFrame,
-                observation: .converged(actual: actual),
-                in: result
-            ).result
-        case .constrained(let actual):
-            reporter.info(
-                "Applied \(windowID.description) target=\(targetFrame.debugDescription) "
-                    + "AX=\(actual.debugDescription) WindowServer=\(actual.debugDescription) outcome=constrained"
-            )
-            return recordLayoutFrameWrite(
-                windowID: windowID,
-                targetFrame: targetFrame,
-                observation: .converged(actual: actual),
-                in: result
-            ).result
-        case .clamped(let actual, let observed):
-            reporter.info(
-                "Clamped \(windowID.description) target=\(targetFrame.debugDescription) "
-                    + "actual=\(actual.debugDescription) observed=\(observed.debugDescription)"
-            )
-            return recordLayoutFrameWrite(
-                windowID: windowID,
-                targetFrame: targetFrame,
-                observation: .clamped(actual: actual, observed: observed),
-                in: result
-            ).result
-        case .failed(let error):
-            reporter.error("Failed applying \(windowID.description): \(error.description)")
-            return recordLayoutFrameWrite(
-                windowID: windowID,
-                targetFrame: targetFrame,
-                observation: .failed(message: error.description),
-                in: result
-            ).result
-        }
-    }
-}
-
-private extension WindowConstraints {
-    var debugDescription: String {
-        [
-            "minWidth=\(minWidth.map { String($0) } ?? "nil")",
-            "minHeight=\(minHeight.map { String($0) } ?? "nil")",
-            "maxWidth=\(maxWidth.map { String($0) } ?? "nil")",
-            "maxHeight=\(maxHeight.map { String($0) } ?? "nil")",
-            "widthAnchor=\(widthAnchor?.rawValue ?? "nil")",
-            "heightAnchor=\(heightAnchor?.rawValue ?? "nil")"
-        ].joined(separator: " ")
-    }
 }
