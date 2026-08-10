@@ -82,6 +82,9 @@ actor WorldActor {
         _ issue: WorkspaceReconciliationIssue,
         for key: WorkspaceKey
     ) {
+        guard world.displays[key.displayID] != nil,
+              world.spaces[key.spaceID]?.displays[key.displayID] != nil
+        else { return }
         runtimeState = worldRuntimeByRecordingReconciliationIssue(issue, for: key, in: runtimeState)
     }
 

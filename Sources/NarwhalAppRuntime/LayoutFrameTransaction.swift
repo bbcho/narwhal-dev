@@ -255,6 +255,32 @@ struct LayoutFrameTransaction {
         return .applied(originalFrames: originals, appliedFrames: applied)
     }
 
+    func rollback(
+        _ plan: CommandPlanResult,
+        originalFrames: [WindowID: CGRect],
+        preserving preservedFrames: [WindowID: CGRect] = [:],
+        failure: LayoutFrameTransactionFailure
+    ) async -> LayoutFrameTransactionOutcome {
+        let applier = LayoutApplier(
+            frameWriter: frameWriter,
+            reporter: reporter,
+            echoSuppressor: echoSuppressor
+        )
+        let planned = applier.plannedFrames(for: plan)
+        let moving = applier.movingWindowIDs(for: plan, preserving: preservedFrames)
+        let ordered = applier.orderedWindowIDs(
+            planned: planned,
+            movingWindowIDs: moving,
+            innerGap: plan.plannedWorld.config.gaps.inner
+        )
+        return await restore(
+            plan: plan,
+            originals: originalFrames,
+            attempted: ordered,
+            cause: failure
+        )
+    }
+
     private func readCompleteLayout(
         plan: CommandPlanResult,
         planned: [WindowID: CGRect]
