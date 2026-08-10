@@ -84,6 +84,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let startupArguments = StartupArguments.current
     private lazy var worldActor = WorldActor(runtimeMetrics: runtimeMetrics)
     private let reporter = StartupReporter()
+    private lazy var layoutTransactionCoordinator = LayoutTransactionCoordinator(
+        worldActor: worldActor,
+        frameTransaction: LayoutFrameTransaction(
+            axClient: axClient,
+            reporter: reporter,
+            echoSuppressor: echoSuppressor
+        )
+    )
+    private lazy var layoutPresentationCoordinator = LayoutPresentationCoordinator(
+        currentModel: { [weak self] in self?.overlayModel ?? .empty },
+        publish: { [weak self] model in
+            self?.publishOverlayModel(model)
+        }
+    )
     private lazy var workbenchController = LayoutWorkbenchController(
         worldActor: worldActor,
         snapshotQuality: { [weak self] in self?.operatingStatus.snapshotQuality },
@@ -437,11 +451,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func setFocusBorder(_ target: FocusBorderTarget?) {
         if let target {
-            overlayModel = overlayModel.showingFocusBorder(target)
+            publishOverlayModel(overlayModel.showingFocusBorder(target))
         } else {
-            overlayModel = overlayModel.hidingFocusBorder()
+            publishOverlayModel(overlayModel.hidingFocusBorder())
         }
-        overlay.render(overlayModel)
     }
 
     @MainActor
@@ -453,8 +466,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func setTiledBorders(_ targets: [FocusBorderTarget]) {
-        overlayModel = overlayModel.settingTiledBorders(targets)
-        let renderResult = overlay.render(overlayModel)
+        publishOverlayModel(overlayModel.settingTiledBorders(targets))
+    }
+
+    @MainActor
+    private func publishOverlayModel(_ model: OverlayModel) {
+        overlayModel = model
+        let renderResult = overlay.render(model)
         for windowID in renderResult.staleTiledBorderTargets {
             reporter.info("Tiled border target \(windowID.description) did not match live WindowServer bounds; scheduling environment refresh")
             scheduleCoalescedEnvironmentRefresh(.tiledBorderTargetMismatch(windowID))
@@ -463,14 +481,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func clearBorderOverlays() {
-        overlayModel = .empty
-        overlay.render(overlayModel)
+        publishOverlayModel(.empty)
     }
 
     @MainActor
     private func removeWindowFromOverlays(_ windowID: WindowID) {
-        overlayModel = overlayModel.removingWindow(windowID)
-        overlay.render(overlayModel)
+        publishOverlayModel(overlayModel.removingWindow(windowID))
     }
 
     private func focusBorderTarget(
@@ -2506,96 +2522,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         retryOnClamp: Bool,
         showFocusBorder: Bool = true,
         preserving preservedFrames: [WindowID: CGRect] = [:],
-        clampRetryState: LayoutClampRetryState? = nil,
-        replanAfterClamp: () async -> Result<CommandPlanResult, CommandError>
+        replanAfterClamp: @escaping @MainActor () async -> Result<CommandPlanResult, CommandError>
     ) async -> Bool {
-        if !result.desiredLayout.delta.moves.isEmpty {
-            setTiledBorders([])
-        }
-        let applyResult = await LayoutApplier(
-            axClient: axClient,
-            reporter: reporter,
-            echoSuppressor: echoSuppressor
-        ).apply(result, preserving: preservedFrames)
-        switch plannedLayoutApplyDecision(plan: result, applyResult: applyResult, retryOnClamp: retryOnClamp) {
-        case .commit(let appliedFrames, let focusUpdate):
-            guard await worldActor.commit(result, appliedFrames: appliedFrames) else {
-                reporter.error(
-                    "\(operation) moved windows but its source workspace changed before commit; reconciling live frames without history"
+        let affectedWindowIDs = layoutTransactionAffectedWindowIDs(result)
+        let sourceFocus = await liveSourceFocusTarget(
+            for: result,
+            showFocusBorder: showFocusBorder
+        )
+        layoutPresentationCoordinator.begin(
+            affectedWindowIDs: affectedWindowIDs,
+            source: sourceFocus
+        )
+
+        let outcome = await layoutTransactionCoordinator.execute(
+            initialPlan: result,
+            operation: operation,
+            retryOnConstraint: retryOnClamp,
+            preserving: preservedFrames,
+            replan: replanAfterClamp,
+            reconcileLiveWorld: {
+                await self.refreshEnvironmentLocked(
+                    reason: "reconcile \(operation.lowercased())",
+                    reconciliationMode: .observeOnly
                 )
-                _ = await refreshEnvironmentLocked(reason: "stale \(operation.lowercased()) commit")
-                showOperatorFeedback("\(operation) was not committed because the workspace changed", tone: .warning)
-                return false
+            }
+        )
+        switch outcome {
+        case .committed(let commit):
+            let presentationCommit = LayoutTransactionCommit(
+                appliedFrames: commit.appliedFrames,
+                focusUpdate: showFocusBorder ? commit.focusUpdate : nil,
+                affectedWorkspaces: commit.affectedWorkspaces
+            )
+            layoutPresentationCoordinator.committed(
+                presentationCommit,
+                windows: result.windows
+            )
+            if !showFocusBorder,
+               case .target(let focusedWindowID, let frame) = commit.focusUpdate {
+                suppressFocusBorder(for: focusedWindowID, frame: frame)
             }
             reporter.info("\(operation) completed")
-            await updateTiledBordersFromWorld()
             await refreshWorkspacePresentationSurfaces()
-            switch focusUpdate {
-            case .target(let focusedWindowID, let frame):
-                if showFocusBorder {
-                    let target = focusBorderTarget(windowID: focusedWindowID, frame: frame, windows: result.windows)
-                    setFocusBorder(target)
-                } else {
-                    suppressFocusBorder(for: focusedWindowID, frame: frame)
-                }
-            case .clear:
-                setFocusBorder(nil)
-            case nil:
-                break
-            }
             showOperatorFeedback("\(operation) completed", tone: .success, showsHUD: false)
             await persistRestore(reason: persistReason)
             return true
 
-        case .fail(let failureCount, let summary):
-            await updateTiledBordersFromWorld()
-            reporter.error(
-                "\(operation) failed applying \(failureCount) window(s); planned layout was not committed: \(summary)"
+        case .failed(_, let reason, let restoredFrames):
+            layoutPresentationCoordinator.rolledBack(
+                frames: restoredFrames,
+                windows: result.windows
             )
-            showOperatorFeedback("\(operation) failed applying windows", tone: .error)
+            await refreshWorkspacePresentationSurfaces()
+            reporter.error("\(operation) failed; live frames were restored: \(reason)")
+            showOperatorFeedback("\(operation) failed; layout restored", tone: .error)
             return false
 
-        case .clamp(let observedConstraints, let shouldRetry, let summary):
-            if !observedConstraints.isEmpty {
-                await worldActor.recordObservedConstraints(observedConstraints)
-            }
-
-            let retryState = clampRetryState
-                ?? LayoutClampRetryState(maxAttempts: result.desiredLayout.delta.moves.count)
-            guard shouldRetry,
-                  let nextRetryState = retryState.recording(observedConstraints)
-            else {
-                await updateTiledBordersFromWorld()
-                reporter.error(
-                    "\(operation) still clamped without a new bounded constraint observation; "
-                        + "planned layout was not committed: \(summary)"
-                )
-                showOperatorFeedback("\(operation) clamped by app minimum size", tone: .warning)
-                return false
-            }
-
-            reporter.info(
-                "\(operation) observed a new app size constraint; re-solving "
-                    + "with \(nextRetryState.remainingAttempts) bounded attempt(s) remaining: \(summary)"
+        case .reconciliationRequired(_, let reason):
+            layoutPresentationCoordinator.reconciliationRequired(
+                affectedWindowIDs: affectedWindowIDs
             )
-            showOperatorFeedback("\(operation) re-solving after size clamp", tone: .warning)
-            switch await replanAfterClamp() {
-            case .success(let retry):
-                return await applyPlannedLayout(
-                    retry,
-                    operation: operation,
-                    persistReason: persistReason,
-                    retryOnClamp: retryOnClamp,
-                    preserving: preservedFrames,
-                    clampRetryState: nextRetryState,
-                    replanAfterClamp: replanAfterClamp
-                )
-            case .failure(let error):
-                await updateTiledBordersFromWorld()
-                reporter.error("\(operation) rejected after min-size observation: \(error.message)")
-                showOperatorFeedback("\(operation) failed after clamp: \(error.message)", tone: .error)
-                return false
-            }
+            await refreshWorkspacePresentationSurfaces()
+            reporter.error("\(operation) requires workspace reconciliation: \(reason)")
+            showOperatorFeedback("\(operation) needs layout refresh", tone: .error)
+            return false
+        }
+    }
+
+    @MainActor
+    private func liveSourceFocusTarget(
+        for result: CommandPlanResult,
+        showFocusBorder: Bool
+    ) async -> FocusBorderTarget? {
+        guard showFocusBorder,
+              let windowID = result.focusedWindowID,
+              let window = result.windows[windowID]
+        else { return nil }
+
+        switch await WindowFrameWriter(axClient: axClient).readFrame(window) {
+        case .success(let readback)
+            where readback.accessibility.narwhalApproximatelyEquals(
+                readback.windowServer,
+                tolerance: configuredGapTolerance
+            ):
+            return FocusBorderTarget(window: window, frame: readback.accessibility)
+        case .success, .failure:
+            return FocusBorderTarget(window: window, frame: window.frame)
         }
     }
 

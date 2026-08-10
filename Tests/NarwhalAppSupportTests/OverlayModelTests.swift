@@ -57,6 +57,25 @@ struct OverlayModelTests {
         #expect(model.tiledBorders == [replacement])
     }
 
+    @Test("Removing and merging tiled borders preserve unrelated windows")
+    func tiledBorderSubsetUpdatesAreLocal() {
+        let first = target(1)
+        let second = target(2)
+        let replacement = FocusBorderTarget(
+            windowID: first.windowID,
+            frame: CGRect(x: 90, y: 80, width: 500, height: 300),
+            cornerRadius: 10
+        )
+
+        let hidden = OverlayModel.empty
+            .settingTiledBorders([first, second])
+            .removingTiledBorders(for: [first.windowID])
+        #expect(hidden.tiledBorders == [second])
+
+        let restored = hidden.mergingTiledBorders([replacement])
+        #expect(restored.tiledBorders == [replacement, second])
+    }
+
     private func target(_ id: CGWindowID) -> FocusBorderTarget {
         FocusBorderTarget(
             windowID: WindowID(raw: id),

@@ -14,6 +14,13 @@ enum LayoutTransactionOutcome: Equatable, Sendable {
     case reconciliationRequired(workspaces: Set<WorkspaceKey>, reason: String)
 }
 
+func layoutTransactionAffectedWindowIDs(_ plan: CommandPlanResult) -> Set<WindowID> {
+    Set(plan.desiredLayout.delta.moves.keys)
+        .union(plan.desiredLayout.delta.raises)
+        .union(plan.desiredLayout.delta.hides)
+        .union(plan.desiredLayout.delta.shows)
+}
+
 @MainActor
 final class LayoutTransactionCoordinator {
     private let worldActor: WorldActor
@@ -193,9 +200,6 @@ final class LayoutTransactionCoordinator {
     }
 
     private func affectedWindowIDs(for plan: CommandPlanResult) -> Set<WindowID> {
-        Set(plan.desiredLayout.delta.moves.keys)
-            .union(plan.desiredLayout.delta.raises)
-            .union(plan.desiredLayout.delta.hides)
-            .union(plan.desiredLayout.delta.shows)
+        layoutTransactionAffectedWindowIDs(plan)
     }
 }

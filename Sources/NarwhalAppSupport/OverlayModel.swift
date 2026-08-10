@@ -40,8 +40,28 @@ public struct OverlayModel: Equatable, Sendable {
         OverlayModel(focusBorder: focusBorder, tiledBorders: targets)
     }
 
-    public func removingWindow(_ windowID: WindowID) -> OverlayModel {
+    public func removingTiledBorders(for windowIDs: Set<WindowID>) -> OverlayModel {
+        OverlayModel(
+            focusBorder: focusBorder,
+            tiledBordersByWindowID: tiledBordersByWindowID.filter { !windowIDs.contains($0.key) }
+        )
+    }
+
+    public func mergingTiledBorders(_ targets: [FocusBorderTarget]) -> OverlayModel {
+        let replacements = Dictionary(
+            targets.map { ($0.windowID, $0) },
+            uniquingKeysWith: { _, last in last }
+        )
         return OverlayModel(
+            focusBorder: focusBorder,
+            tiledBordersByWindowID: tiledBordersByWindowID.merging(replacements) { _, replacement in
+                replacement
+            }
+        )
+    }
+
+    public func removingWindow(_ windowID: WindowID) -> OverlayModel {
+        OverlayModel(
             focusBorder: focusBorder?.windowID == windowID ? nil : focusBorder,
             tiledBordersByWindowID: tiledBordersByWindowID.filter { $0.key != windowID }
         )
