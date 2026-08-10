@@ -40,7 +40,9 @@ public func resizeVisibleSeamInTree(
     }
 
     let gapInset = CGFloat(innerGap) / 2
-    let newBoundary = partitionBoundary(for: change, frame: newFrame, gapInset: gapInset)
+    let newBoundary = quantizedSplitBoundary(
+        partitionBoundary(for: change, frame: newFrame, gapInset: gapInset)
+    )
     var adjusted = rendered.slots
     let sourceFrame = adjusted[sourceIndex].frame
     let neighborIndices = adjusted.indices.filter { index in
@@ -73,6 +75,9 @@ public func resizeVisibleSeamInTree(
             to: newBoundary
         )
     }
+    let normalizedSourceFrame = adjusted[sourceIndex].frame
+        .insetBy(dx: gapInset, dy: gapInset)
+        .standardized
 
     guard isValidPartition(adjusted, covering: rootFrame) else {
         return .failure(.invalidPartition)
@@ -95,7 +100,7 @@ public func resizeVisibleSeamInTree(
     guard partitionsMatch(adjusted, rebuiltSlots),
           let rebuiltSource = rebuiltSlots.first(where: { $0.occupancy == .occupied(windowID) }),
           rebuiltSource.frame.insetBy(dx: gapInset, dy: gapInset).standardized
-            .narwhalApproximatelyEquals(newFrame, tolerance: configuredGapTolerance)
+            .narwhalApproximatelyEquals(normalizedSourceFrame, tolerance: configuredGapTolerance)
     else {
         return .failure(.reconstructionMismatch)
     }

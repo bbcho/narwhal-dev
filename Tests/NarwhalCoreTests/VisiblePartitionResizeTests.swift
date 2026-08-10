@@ -202,6 +202,51 @@ struct VisiblePartitionResizeTests {
         #expect(after[lowerNeighbor] == CGRect(x: 704, y: 404, width: 492, height: 392))
     }
 
+    @Test("Half-point external seams are normalized to rendered split boundaries")
+    func halfPointExternalSeamUsesRenderedBoundary() throws {
+        let source = WindowID(raw: 20)
+        let lowerLeft = WindowID(raw: 21)
+        let lowerRight = WindowID(raw: 22)
+        let root = CGRect(x: -1_440, y: 30, width: 1_440, height: 2_530)
+        let tree = Node.split(try split(.vertical, [
+            try cell(.leaf(source)),
+            try cell(.split(try split(.horizontal, [
+                try cell(.leaf(lowerLeft), weight: 1.1),
+                try cell(.leaf(lowerRight), weight: 0.9)
+            ])))
+        ]))
+        let requested = CGRect(x: -1_440, y: 30, width: 1_440, height: 1_391.5)
+
+        let resized = try resizeVisibleSeamInTree(
+            source,
+            from: CGRect(x: -1_440, y: 30, width: 1_440, height: 1_265),
+            to: requested,
+            rootFrame: root,
+            innerGap: 0,
+            tree
+        ).get()
+        let after = layout(
+            spaceState: SpaceState(
+                id: SpaceID(raw: 1),
+                displays: [
+                    DisplayID(raw: 1): DisplaySpaceState(
+                        displayID: DisplayID(raw: 1),
+                        tree: resized,
+                        floating: []
+                    )
+                ],
+                focused: source
+            ),
+            displayID: DisplayID(raw: 1),
+            frame: root,
+            gaps: Gaps(inner: 0, outer: Insets(top: 0, left: 0, bottom: 0, right: 0))
+        ).tiled
+
+        #expect(after[source] == CGRect(x: -1_440, y: 30, width: 1_440, height: 1_392))
+        #expect(after[lowerLeft]?.minY == 1_422)
+        #expect(after[lowerRight]?.minY == 1_422)
+    }
+
     @Test("Moving an outer edge reports that no visible neighbor exists")
     func outerEdgeHasNoVisibleNeighbor() throws {
         let tree = try columnRootTree()

@@ -95,8 +95,13 @@ private func framesFromLengths(_ frame: CGRect, axis: Axis, lengths: [CGFloat]) 
     }.frames
 }
 
-private func quantizedSplitBoundary(_ value: CGFloat) -> CGFloat {
-    value.rounded(.up)
+func quantizedSplitBoundary(_ value: CGFloat) -> CGFloat {
+    let nearestInteger = value.rounded()
+    let floatingPointNoise = max(1, abs(value)) * CGFloat.ulpOfOne * 16
+    if abs(value - nearestInteger) <= floatingPointNoise {
+        return nearestInteger
+    }
+    return value.rounded(.up)
 }
 
 public extension CGRect {
