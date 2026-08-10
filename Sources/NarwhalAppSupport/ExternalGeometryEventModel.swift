@@ -13,43 +13,6 @@ public struct ExternalGeometryEventSelection: Equatable, Sendable {
     }
 }
 
-public struct ExternalGeometryEventQueue<Event: Sendable>: Sendable {
-    private var windowOrder: [WindowID]
-    private var eventsByWindow: [WindowID: Event]
-
-    public init() {
-        self.windowOrder = []
-        self.eventsByWindow = [:]
-    }
-
-    public var isEmpty: Bool {
-        eventsByWindow.isEmpty
-    }
-
-    public var count: Int {
-        eventsByWindow.count
-    }
-
-    public mutating func enqueue(_ event: Event, for windowID: WindowID) {
-        if eventsByWindow[windowID] == nil {
-            windowOrder.append(windowID)
-        }
-        eventsByWindow[windowID] = event
-    }
-
-    public mutating func dequeue() -> Event? {
-        while !windowOrder.isEmpty {
-            let windowID = windowOrder.removeFirst()
-            if let event = eventsByWindow.removeValue(forKey: windowID) {
-                return event
-            }
-        }
-        return nil
-    }
-}
-
-extension ExternalGeometryEventQueue: Equatable where Event: Equatable {}
-
 public func externalGeometryWindowID(for event: AXEvent) -> WindowID? {
     switch event {
     case .windowMoved(let id, _), .windowResized(let id, _):

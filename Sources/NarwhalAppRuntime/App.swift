@@ -52,11 +52,6 @@ public enum NarwhalApplication {
     }
 }
 
-private struct PendingExternalGeometryEvent {
-    let event: AXEvent
-    let snapshot: FocusedWindowSnapshot?
-}
-
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let instance = AppDelegate()
@@ -89,8 +84,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         frameTransaction: LayoutFrameTransaction(
             axClient: axClient,
             reporter: reporter,
-            echoSuppressor: echoSuppressor
-        )
+            echoSuppressor: echoSuppressor,
+            runtimeMetrics: runtimeMetrics
+        ),
+        runtimeMetrics: runtimeMetrics
     )
     private lazy var layoutPresentationCoordinator = LayoutPresentationCoordinator(
         currentModel: { [weak self] in self?.overlayModel ?? .empty },
@@ -98,6 +95,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.publishOverlayModel(model)
         }
     )
+    private lazy var externalGeometryCoordinator = ExternalGeometryCoordinator {
+        [weak self] event, snapshot in
+        await self?.handleSettledExternalGeometryEvent(event, snapshot: snapshot)
+    }
     private lazy var workbenchController = LayoutWorkbenchController(
         worldActor: worldActor,
         snapshotQuality: { [weak self] in self?.operatingStatus.snapshotQuality },
@@ -142,9 +143,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingHotkeys: [HotkeyAction] = []
     private var isDrainingHotkeys = false
     private let workspaceMutationGate = WorkspaceMutationGate()
-    private var isHandlingExternalGeometry = false
-    private var pendingExternalGeometryEvents =
-        ExternalGeometryEventQueue<PendingExternalGeometryEvent>()
     private var runningServices: RunningServices?
     private var servicesStarted = false
     private var isPaused = false
@@ -282,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environmentRefreshCoalescingTimerGeneration = nil
         cancelDisplaySettledRefreshTimer()
         cancelSpaceTransitionTimers()
+        externalGeometryCoordinator.cancelAll()
         runningServices?.stopAll()
         runningServices = nil
         servicesStarted = false
@@ -2786,6 +2785,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func handleAXEvent(_ event: AXEvent, snapshot: FocusedWindowSnapshot?) async {
+        if externalGeometryWindowID(for: event) != nil {
+            externalGeometryCoordinator.observe(event, snapshot: snapshot)
+            return
+        }
         await workspaceMutationGate.perform {
             await self.handleAXEventLocked(event, snapshot: snapshot)
         }
@@ -2803,10 +2806,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             await updateTiledBordersFromWorld()
         case .windowMoved, .windowResized:
-            await handleExternalGeometryEvent(event, snapshot: snapshot)
+            break
         case .windowOpened(let metadata):
             scheduleCoalescedEnvironmentRefresh(.windowOpened(metadata.id))
         case .windowClosed(let windowID):
+            externalGeometryCoordinator.cancel(windowID: windowID)
             await worldActor.removeWindowFromActiveSpace(windowID)
             removeWindowFromOverlays(windowID)
             if operatingStatus.focusedWindowID == windowID {
@@ -2818,37 +2822,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func handleExternalGeometryEvent(
+    private func handleSettledExternalGeometryEvent(
         _ event: AXEvent,
         snapshot: FocusedWindowSnapshot?
     ) async {
-        let incoming = PendingExternalGeometryEvent(event: event, snapshot: snapshot)
-        guard !isHandlingExternalGeometry else {
-            if let windowID = externalGeometryWindowID(for: event) {
-                pendingExternalGeometryEvents.enqueue(incoming, for: windowID)
-            }
-            return
-        }
-
-        isHandlingExternalGeometry = true
-        var current: PendingExternalGeometryEvent? = incoming
-        while let currentEvent = current {
-            let windowID = externalGeometryWindowID(for: currentEvent.event)
+        await workspaceMutationGate.perform {
+            let windowID = externalGeometryWindowID(for: event)
             if let windowID {
                 await worldActor.setWindowInteraction(.manualAdjustment, for: windowID)
                 await refreshWorkspacePresentationSurfaces()
             }
             let resolvedInteraction = await processExternalGeometryEvent(
-                currentEvent.event,
-                snapshot: currentEvent.snapshot
+                event,
+                snapshot: snapshot
             )
             if let windowID {
                 await worldActor.setWindowInteraction(resolvedInteraction, for: windowID)
                 await refreshWorkspacePresentationSurfaces()
             }
-            current = pendingExternalGeometryEvents.dequeue()
         }
-        isHandlingExternalGeometry = false
     }
 
     @MainActor
@@ -2928,6 +2920,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func activeSpaceChanged() {
+        externalGeometryCoordinator.cancelAll()
         cancelSpaceTransitionTimers()
         let preservation = beginSpaceTransitionPreservation(
             in: spaceTransitionPreservation,
@@ -3502,7 +3495,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             focusedWindowID: operatingStatus.focusedWindowID?.raw,
             lastCommand: operatingStatus.lastCommand,
             pendingHotkeyCount: pendingHotkeys.count,
-            pendingGeometryEventCount: pendingExternalGeometryEvents.count,
+            pendingGeometryEventCount: externalGeometryCoordinator.pendingCount,
             droppedLogLineCount: reporter.droppedLogLineCount,
             latency: runtimeMetrics.summaries()
         )

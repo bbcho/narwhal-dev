@@ -4,6 +4,13 @@ import NarwhalCore
 
 @Suite("Runtime metrics model")
 struct RuntimeMetricsModelTests {
+    @Test("Transaction recovery metrics have stable diagnostics identifiers")
+    func transactionMetricIdentifiersAreStable() {
+        #expect(RuntimeMetricKind.layoutTransaction.rawValue == "layout_transaction")
+        #expect(RuntimeMetricKind.layoutRollback.rawValue == "layout_rollback")
+        #expect(RuntimeMetricKind.workspaceReconciliation.rawValue == "workspace_reconciliation")
+    }
+
     @Test("Recording retains only the newest bounded samples")
     func recordingRetainsNewestBoundedSamples() {
         let initial = RuntimeMetricsState(capacityPerMetric: 3)

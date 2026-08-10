@@ -43,26 +43,31 @@ struct LayoutFrameTransaction {
     let frameWriter: WindowFrameWriter
     let reporter: StartupReporter
     let echoSuppressor: AXEchoSuppressor?
+    let runtimeMetrics: RuntimeMetrics?
 
     init(
         frameWriter: WindowFrameWriter,
         reporter: StartupReporter,
-        echoSuppressor: AXEchoSuppressor? = nil
+        echoSuppressor: AXEchoSuppressor? = nil,
+        runtimeMetrics: RuntimeMetrics? = nil
     ) {
         self.frameWriter = frameWriter
         self.reporter = reporter
         self.echoSuppressor = echoSuppressor
+        self.runtimeMetrics = runtimeMetrics
     }
 
     init(
         axClient: AXClient,
         reporter: StartupReporter,
-        echoSuppressor: AXEchoSuppressor? = nil
+        echoSuppressor: AXEchoSuppressor? = nil,
+        runtimeMetrics: RuntimeMetrics? = nil
     ) {
         self.init(
             frameWriter: WindowFrameWriter(axClient: axClient),
             reporter: reporter,
-            echoSuppressor: echoSuppressor
+            echoSuppressor: echoSuppressor,
+            runtimeMetrics: runtimeMetrics
         )
     }
 
@@ -321,6 +326,8 @@ struct LayoutFrameTransaction {
         cause: LayoutFrameTransactionFailure,
         observations: [WindowID: WindowConstraints] = [:]
     ) async -> LayoutFrameTransactionOutcome {
+        let metricInterval = runtimeMetrics?.begin(.layoutRollback)
+        defer { runtimeMetrics?.end(metricInterval) }
         var rollbackFailures: [LayoutFrameTransactionFailure] = []
         for windowID in attempted.reversed() {
             guard let metadata = plan.windows[windowID],

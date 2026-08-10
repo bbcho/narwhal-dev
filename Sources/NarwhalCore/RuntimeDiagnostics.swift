@@ -4,6 +4,9 @@ public enum RuntimeMetricKind: String, Codable, CaseIterable, Equatable, Sendabl
     case layoutPlan = "layout_plan"
     case coordinatedFrameWrite = "coordinated_frame_write"
     case manualResizeHandoff = "manual_resize_handoff"
+    case layoutTransaction = "layout_transaction"
+    case layoutRollback = "layout_rollback"
+    case workspaceReconciliation = "workspace_reconciliation"
     case restoreWrite = "restore_write"
 }
 

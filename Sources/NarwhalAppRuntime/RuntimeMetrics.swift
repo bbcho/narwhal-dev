@@ -74,6 +74,12 @@ final class RuntimeMetrics: @unchecked Sendable {
             return "CoordinatedFrameWrite"
         case .manualResizeHandoff:
             return "ManualResizeHandoff"
+        case .layoutTransaction:
+            return "LayoutTransaction"
+        case .layoutRollback:
+            return "LayoutRollback"
+        case .workspaceReconciliation:
+            return "WorkspaceReconciliation"
         case .restoreWrite:
             return "RestoreWrite"
         }

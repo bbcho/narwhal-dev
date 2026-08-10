@@ -25,10 +25,16 @@ func layoutTransactionAffectedWindowIDs(_ plan: CommandPlanResult) -> Set<Window
 final class LayoutTransactionCoordinator {
     private let worldActor: WorldActor
     private let frameTransaction: LayoutFrameTransaction
+    private let runtimeMetrics: RuntimeMetrics?
 
-    init(worldActor: WorldActor, frameTransaction: LayoutFrameTransaction) {
+    init(
+        worldActor: WorldActor,
+        frameTransaction: LayoutFrameTransaction,
+        runtimeMetrics: RuntimeMetrics? = nil
+    ) {
         self.worldActor = worldActor
         self.frameTransaction = frameTransaction
+        self.runtimeMetrics = runtimeMetrics
     }
 
     func execute(
@@ -39,6 +45,8 @@ final class LayoutTransactionCoordinator {
         replan: @escaping @MainActor () async -> Result<CommandPlanResult, CommandError>,
         reconcileLiveWorld: @escaping @MainActor () async -> EnvironmentRefreshResult
     ) async -> LayoutTransactionOutcome {
+        let metricInterval = runtimeMetrics?.begin(.layoutTransaction)
+        defer { runtimeMetrics?.end(metricInterval) }
         var plan = initialPlan
         var retryState = LayoutClampRetryState(
             maxAttempts: initialPlan.desiredLayout.delta.moves.count
@@ -149,7 +157,9 @@ final class LayoutTransactionCoordinator {
                 restoredFrames: originalFrames
             )
         case .reconciliationRequired(_, _, let failure, let rollbackFailures):
+            let metricInterval = runtimeMetrics?.begin(.workspaceReconciliation)
             _ = await reconcileLiveWorld()
+            runtimeMetrics?.end(metricInterval)
             let rollbackSummary = rollbackFailures.map { entry in
                 let window = entry.windowID.map(\.description) ?? "unknown window"
                 return "\(window): \(entry.message)"
