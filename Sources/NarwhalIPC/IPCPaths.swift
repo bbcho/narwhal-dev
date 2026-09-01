@@ -17,6 +17,12 @@ struct IPCPathMetadata: Equatable, Sendable {
     let inode: UInt64
 }
 
+struct IPCSocketIdentity: Equatable, Sendable {
+    let ownerUID: uid_t
+    let device: UInt64
+    let inode: UInt64
+}
+
 public enum IPCDefaults {
     public static func socketPath() throws -> String {
         let required = Darwin.confstr(_CS_DARWIN_USER_TEMP_DIR, nil, 0)
@@ -67,11 +73,68 @@ func validatePrivateRuntimeDirectory(
     return .success(())
 }
 
+func validateLockMetadata(
+    path: String,
+    metadata: IPCPathMetadata,
+    expectedUID: uid_t
+) -> Result<Void, IPCTransportError> {
+    guard metadata.kind == .regularFile,
+          metadata.ownerUID == expectedUID
+    else {
+        return .failure(.unsafeLockFile(path: path))
+    }
+    return .success(())
+}
+
+func reclaimableSocketIdentity(
+    path: String,
+    metadata: IPCPathMetadata,
+    expectedUID: uid_t
+) -> Result<IPCSocketIdentity, IPCTransportError> {
+    guard metadata.kind == .socket,
+          metadata.ownerUID == expectedUID
+    else {
+        return .failure(.unsafeSocketPath(path: path))
+    }
+    return .success(IPCSocketIdentity(
+        ownerUID: metadata.ownerUID,
+        device: metadata.device,
+        inode: metadata.inode
+    ))
+}
+
+func socketIdentityMatches(_ expected: IPCSocketIdentity, metadata: IPCPathMetadata) -> Bool {
+    metadata.kind == .socket
+        && metadata.ownerUID == expected.ownerUID
+        && metadata.device == expected.device
+        && metadata.inode == expected.inode
+}
+
 func ipcPathMetadata(at path: String) throws -> IPCPathMetadata {
     var value = stat()
     guard Darwin.lstat(path, &value) == 0 else {
         throw IPCTransportError.pathMetadataFailed(path: path, errno: errno)
     }
+    return ipcPathMetadata(from: value)
+}
+
+func ipcPathMetadataIfPresent(at path: String) throws -> IPCPathMetadata? {
+    do {
+        return try ipcPathMetadata(at: path)
+    } catch IPCTransportError.pathMetadataFailed(_, let currentErrno) where currentErrno == ENOENT {
+        return nil
+    }
+}
+
+func ipcPathMetadata(forFileDescriptor fd: Int32, path: String) throws -> IPCPathMetadata {
+    var value = stat()
+    guard Darwin.fstat(fd, &value) == 0 else {
+        throw IPCTransportError.pathMetadataFailed(path: path, errno: errno)
+    }
+    return ipcPathMetadata(from: value)
+}
+
+private func ipcPathMetadata(from value: stat) -> IPCPathMetadata {
     let fileType = value.st_mode & S_IFMT
     let kind: IPCPathKind
     switch fileType {

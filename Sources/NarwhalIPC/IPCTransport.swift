@@ -6,6 +6,9 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
     case runtimeDirectoryUnavailable(errno: Int32)
     case pathMetadataFailed(path: String, errno: Int32)
     case unsafeRuntimeDirectory(path: String)
+    case lockOpenFailed(path: String, errno: Int32)
+    case unsafeLockFile(path: String)
+    case unsafeSocketPath(path: String)
     case socketPathTooLong(String)
     case socketCreateFailed(errno: Int32)
     case bindFailed(path: String, errno: Int32)
@@ -30,6 +33,12 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
             return "lstat(\(path)) failed: \(Self.errnoDescription(errno))"
         case .unsafeRuntimeDirectory(let path):
             return "Private user runtime directory is unsafe: \(path)"
+        case .lockOpenFailed(let path, let errno):
+            return "open(\(path)) failed: \(Self.errnoDescription(errno))"
+        case .unsafeLockFile(let path):
+            return "IPC lock file is unsafe: \(path)"
+        case .unsafeSocketPath(let path):
+            return "IPC socket path is unsafe: \(path)"
         case .socketPathTooLong(let path):
             return "Unix socket path is too long: \(path)"
         case .socketCreateFailed(let errno):
@@ -150,13 +159,35 @@ public final class IPCServer: @unchecked Sendable {
     private let ioTimeout: TimeInterval
     private let handle: @Sendable (IPCCommandDTO) async -> IPCReplyDTO
     private let log: @Sendable (String) -> Void
+    private let beforePublishStartedResources: @Sendable () -> Void
+    private let lifecycleLock = NSLock()
     private let state = IPCServerState()
 
-    public init(
+    public convenience init(
         socketPath: String? = nil,
         maxLineBytes: Int = 64 * 1024,
         maxConnections: Int = 8,
         ioTimeout: TimeInterval = 5.0,
+        handle: @escaping @Sendable (IPCCommandDTO) async -> IPCReplyDTO,
+        log: @escaping @Sendable (String) -> Void = { _ in }
+    ) {
+        self.init(
+            socketPath: socketPath,
+            maxLineBytes: maxLineBytes,
+            maxConnections: maxConnections,
+            ioTimeout: ioTimeout,
+            beforePublishStartedResources: {},
+            handle: handle,
+            log: log
+        )
+    }
+
+    init(
+        socketPath: String?,
+        maxLineBytes: Int = 64 * 1024,
+        maxConnections: Int = 8,
+        ioTimeout: TimeInterval = 5.0,
+        beforePublishStartedResources: @escaping @Sendable () -> Void,
         handle: @escaping @Sendable (IPCCommandDTO) async -> IPCReplyDTO,
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
@@ -166,52 +197,120 @@ public final class IPCServer: @unchecked Sendable {
         self.ioTimeout = boundedSocketTimeout(ioTimeout)
         self.handle = handle
         self.log = log
+        self.beforePublishStartedResources = beforePublishStartedResources
     }
 
     public func start() throws {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         guard !state.isRunning else { return }
         let socketPath = try configuredSocketPath ?? IPCDefaults.socketPath()
-        let socketFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        guard socketFD >= 0 else {
-            throw IPCTransportError.socketCreateFailed(errno: errno)
-        }
-
-        do {
-            try configureSocket(socketFD)
-            if probeExistingDaemon(path: socketPath) {
-                Darwin.close(socketFD)
+        let lockPath = IPCDefaults.lockPath(forSocketPath: socketPath)
+        let lockFD = Darwin.open(
+            lockPath,
+            O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_EXLOCK | O_NONBLOCK,
+            S_IRUSR | S_IWUSR
+        )
+        guard lockFD >= 0 else {
+            if errno == EWOULDBLOCK || errno == EAGAIN {
                 throw IPCTransportError.alreadyRunning(path: socketPath)
             }
-            Darwin.unlink(socketPath)
+            throw IPCTransportError.lockOpenFailed(path: lockPath, errno: errno)
+        }
+
+        var socketFD: Int32?
+        var socketIdentity: IPCSocketIdentity?
+        var transferred = false
+        defer {
+            if !transferred {
+                if let socketIdentity {
+                    unlinkSocketIfOwned(path: socketPath, identity: socketIdentity)
+                }
+                if let socketFD {
+                    closeSocket(socketFD)
+                }
+                Darwin.close(lockFD)
+            }
+        }
+
+        let lockMetadata = try ipcPathMetadata(forFileDescriptor: lockFD, path: lockPath)
+        try validateLockMetadata(
+            path: lockPath,
+            metadata: lockMetadata,
+            expectedUID: Darwin.getuid()
+        ).get()
+        guard Darwin.fchmod(lockFD, S_IRUSR | S_IWUSR) == 0 else {
+            throw IPCTransportError.lockOpenFailed(path: lockPath, errno: errno)
+        }
+        if probeExistingDaemon(path: socketPath) {
+            throw IPCTransportError.alreadyRunning(path: socketPath)
+        }
+        if let existing = try ipcPathMetadataIfPresent(at: socketPath) {
+            _ = try reclaimableSocketIdentity(
+                path: socketPath,
+                metadata: existing,
+                expectedUID: Darwin.getuid()
+            ).get()
+            guard Darwin.unlink(socketPath) == 0 else {
+                throw IPCTransportError.bindFailed(path: socketPath, errno: errno)
+            }
+        }
+
+        let createdSocketFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard createdSocketFD >= 0 else {
+            throw IPCTransportError.socketCreateFailed(errno: errno)
+        }
+        socketFD = createdSocketFD
+        do {
+            try configureSocket(createdSocketFD)
             try withSocketAddress(path: socketPath) { address, length in
-                guard Darwin.bind(socketFD, address, length) == 0 else {
+                guard Darwin.bind(createdSocketFD, address, length) == 0 else {
                     throw IPCTransportError.bindFailed(path: socketPath, errno: errno)
                 }
             }
+            let boundMetadata = try ipcPathMetadata(at: socketPath)
+            socketIdentity = try reclaimableSocketIdentity(
+                path: socketPath,
+                metadata: boundMetadata,
+                expectedUID: Darwin.getuid()
+            ).get()
             guard Darwin.chmod(socketPath, S_IRUSR | S_IWUSR) == 0 else {
                 throw IPCTransportError.chmodFailed(path: socketPath, errno: errno)
             }
-            guard Darwin.listen(socketFD, Int32(maxConnections)) == 0 else {
+            guard Darwin.listen(createdSocketFD, Int32(maxConnections)) == 0 else {
                 throw IPCTransportError.listenFailed(errno: errno)
             }
-            state.start(fd: socketFD)
+            beforePublishStartedResources()
+            guard let socketIdentity else {
+                throw IPCTransportError.unsafeSocketPath(path: socketPath)
+            }
+            state.start(resources: IPCServerResources(
+                socketPath: socketPath,
+                socketIdentity: socketIdentity,
+                socketFD: createdSocketFD,
+                lockFD: lockFD
+            ))
+            transferred = true
             Task.detached { [self] in
-                await acceptLoop(socketFD)
+                await acceptLoop(createdSocketFD)
             }
         } catch {
-            Darwin.close(socketFD)
-            Darwin.unlink(socketPath)
             throw error
         }
     }
 
     public func stop() {
-        guard let socketPath = try? configuredSocketPath ?? IPCDefaults.socketPath() else { return }
-        let sockets = state.stop()
-        for fd in sockets {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        guard let stopped = state.stop() else { return }
+        for fd in stopped.socketFDs {
             closeSocket(fd)
         }
-        Darwin.unlink(socketPath)
+        unlinkSocketIfOwned(
+            path: stopped.resources.socketPath,
+            identity: stopped.resources.socketIdentity
+        )
+        Darwin.close(stopped.resources.lockFD)
     }
 
     private func acceptLoop(_ socketFD: Int32) async {
@@ -325,39 +424,52 @@ public final class IPCServer: @unchecked Sendable {
     }
 }
 
+private struct IPCServerResources {
+    let socketPath: String
+    let socketIdentity: IPCSocketIdentity
+    let socketFD: Int32
+    let lockFD: Int32
+}
+
+private struct IPCStoppedServerResources {
+    let resources: IPCServerResources
+    let socketFDs: [Int32]
+}
+
 private final class IPCServerState: @unchecked Sendable {
     private let lock = NSLock()
-    private var fd: Int32?
-    private var running = false
+    private var resources: IPCServerResources?
     private var clientFDs = Set<Int32>()
 
     var isRunning: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return running
+        return resources != nil
     }
 
-    func start(fd: Int32) {
+    func start(resources: IPCServerResources) {
         lock.lock()
-        self.fd = fd
-        running = true
+        self.resources = resources
         lock.unlock()
     }
 
-    func stop() -> [Int32] {
+    func stop() -> IPCStoppedServerResources? {
         lock.lock()
-        running = false
-        let sockets = [fd].compactMap { $0 } + clientFDs.sorted()
-        fd = nil
+        guard let resources else {
+            lock.unlock()
+            return nil
+        }
+        self.resources = nil
+        let sockets = [resources.socketFD] + clientFDs.sorted()
         clientFDs.removeAll()
         lock.unlock()
-        return sockets
+        return IPCStoppedServerResources(resources: resources, socketFDs: sockets)
     }
 
     func openConnection(_ clientFD: Int32, limit: Int) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard running && clientFDs.count < limit else { return false }
+        guard resources != nil && clientFDs.count < limit else { return false }
         clientFDs.insert(clientFD)
         return true
     }
@@ -368,6 +480,13 @@ private final class IPCServerState: @unchecked Sendable {
         lock.unlock()
         return wasActive
     }
+}
+
+private func unlinkSocketIfOwned(path: String, identity: IPCSocketIdentity) {
+    guard let current = try? ipcPathMetadata(at: path),
+          socketIdentityMatches(identity, metadata: current)
+    else { return }
+    Darwin.unlink(path)
 }
 
 private func closeSocket(_ fd: Int32) {
