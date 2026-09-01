@@ -3,13 +3,14 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+source "$script_dir/ipc_path.sh"
 package_root="/private/tmp/narwhal-packaged-smoke"
 tmp_root="/private/tmp/narwhal-packaged-smoke-state"
 config="$tmp_root/config/init.lua"
 state_path="$tmp_root/state/state.json"
 log_path="$tmp_root/log/narwhal.log"
 export NARWHAL_LOG_PATH="$log_path"
-socket_path="/tmp/narwhal-$(id -u).sock"
+socket_path="$(narwhal_socket_path)"
 app_pid=""
 
 cleanup() {

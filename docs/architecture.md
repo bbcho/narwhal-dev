@@ -168,14 +168,16 @@ bounds.
 
 IPC uses a newline-delimited JSON protocol over a per-user Unix socket:
 
-```text
-/tmp/narwhal-$(id -u).sock
+```sh
+"$(getconf DARWIN_USER_TEMP_DIR)narwhal.sock"
 ```
 
 The transport layer is intentionally small:
 
 - `IPCClient` connects and sends DTOs.
 - `IPCServer` accepts connections and decodes request lines.
+- `narwhal.lock` provides exclusive ownership beside the socket, and both
+  endpoints require the peer's effective UID to match the current user.
 - `IPCCommandDTO` and `IPCReplyDTO` live in the core because they are pure
   protocol values shared by app, CLI, and tests.
 

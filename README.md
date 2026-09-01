@@ -121,7 +121,7 @@ Config, state, logs, and IPC:
   uses its built-in defaults.
 - Restore state: `~/Library/Application Support/narwhal/state.json`.
 - Log file: `~/Library/Logs/Narwhal/narwhal.log`.
-- IPC socket: `/tmp/narwhal-$(id -u).sock`.
+- IPC socket: `$(getconf DARWIN_USER_TEMP_DIR)narwhal.sock` in macOS's private per-user temporary directory.
 
 ## Known Limitations
 

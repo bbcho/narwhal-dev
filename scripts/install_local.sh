@@ -86,6 +86,7 @@ esac
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+source "$script_dir/installed_process.sh"
 if [ -z "$package_dir" ]; then
   package_dir="$repo_root/.build/narwhal-package-install"
 elif [[ "$package_dir" != /* ]]; then
@@ -105,8 +106,8 @@ source_app="$package_dir/Narwhal.app"
 installed_app="$app_dir/Narwhal.app"
 previous_app="$app_dir/Narwhal.app.previous"
 staged_app="$app_dir/.Narwhal.app.installing.$$"
-socket_path="/tmp/narwhal-$(id -u).sock"
 installed_ctl="$installed_app/Contents/MacOS/narwhalctl"
+installed_executable="$installed_app/Contents/MacOS/NarwhalApp"
 legacy_app="$app_dir/WinMgr.app"
 did_backup="false"
 install_succeeded="false"
@@ -123,15 +124,6 @@ cleanup() {
   return "$status"
 }
 trap cleanup EXIT
-
-wait_for_socket_absent() {
-  local attempts=50
-  for ((i = 0; i < attempts; i++)); do
-    [ ! -S "$socket_path" ] && return 0
-    sleep 0.1
-  done
-  [ ! -S "$socket_path" ]
-}
 
 if [ "$replace_existing" != "true" ] && { [ -e "$installed_app" ] || [ -e "$legacy_app" ]; }; then
   echo "install target exists; rerun with --replace" >&2
@@ -155,10 +147,9 @@ mkdir -p "$app_dir"
 cp -R "$source_app" "$staged_app"
 codesign --verify --deep --strict "$staged_app"
 
-if [ -x "$installed_ctl" ] && [ -S "$socket_path" ]; then
+if [ -x "$installed_executable" ]; then
   echo "Requesting Narwhal quit before replacement"
-  "$installed_ctl" quit >/dev/null
-  wait_for_socket_absent || {
+  narwhal_stop_installed_processes "$installed_executable" "$installed_ctl" 5 || {
     echo "Narwhal did not stop before replacement" >&2
     exit 1
   }

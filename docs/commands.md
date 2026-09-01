@@ -87,8 +87,8 @@ Rows are grouped by purpose:
 
 The CLI talks to the app over the per-user Unix socket:
 
-```text
-/tmp/narwhal-$(id -u).sock
+```sh
+"$(getconf DARWIN_USER_TEMP_DIR)narwhal.sock"
 ```
 
 Installed path:
