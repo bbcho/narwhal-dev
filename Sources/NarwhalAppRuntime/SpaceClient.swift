@@ -88,6 +88,27 @@ struct SpaceClient {
         )
     }
 
+    func spaces(forWindow windowID: WindowID) -> Result<[SpaceID], SpaceClientError> {
+        guard let copySpacesForWindows = symbols.copySpacesForWindows else {
+            return .failure(.symbolUnavailable("SLSCopySpacesForWindows"))
+        }
+        guard let connectionID = symbols.connectionID() else {
+            return .failure(.connectionUnavailable)
+        }
+        guard let raw = copySpacesForWindows(
+            connectionID,
+            7,
+            [NSNumber(value: windowID.raw)] as CFArray
+        )?.takeRetainedValue() else {
+            return .success([])
+        }
+
+        let spaces = (raw as NSArray).compactMap {
+            ($0 as? NSNumber).map { SpaceID(raw: $0.uint64Value) }
+        }
+        return .success(spaces)
+    }
+
     func switchActiveSpace(display: DisplayInfo, to spaceID: SpaceID) -> Result<Void, SpaceClientError> {
         guard let setCurrentSpace = symbols.setCurrentSpace else {
             return .failure(.symbolUnavailable("SLSManagedDisplaySetCurrentSpace"))
