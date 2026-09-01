@@ -1927,9 +1927,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showOperatorFeedback("Moved to desktop \(direction.rawValue)", tone: .success)
             return true
         case .failure(let error):
-            if error.requiresSourceDesktopRecovery {
-                _ = spaceClient.switchActiveSpace(display: display, to: plan.sourceSpace)
-            }
+            _ = spaceClient.switchActiveSpace(display: display, to: plan.sourceSpace)
             reporter.error("\(operation) failed: \(error.description)")
             showOperatorFeedback("Move desktop failed: \(error.description)", tone: .error)
             return false

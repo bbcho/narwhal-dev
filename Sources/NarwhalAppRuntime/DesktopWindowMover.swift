@@ -9,7 +9,6 @@ struct DesktopSwitchShortcut: Equatable {
 
 struct DesktopWindowMovePlan {
     let window: WindowMetadata
-    let direction: DesktopMoveDirection
     let sourceSpace: SpaceID
     let destinationSpace: SpaceID
     let display: DisplayInfo
@@ -22,7 +21,7 @@ enum DesktopWindowMoveError: Error, Equatable, CustomStringConvertible {
     case desktopTopologyUnavailable(DisplayID)
     case noAdjacentDesktop(DesktopMoveDirection)
     case windowNotOnActiveDesktop(WindowID, SpaceID)
-    case spaceClient(String)
+    case spaceClient(SpaceClientError)
     case windowServerFrameUnavailable(WindowID)
     case inputEventCreationFailed
     case dragDidNotEngage(WindowID)
@@ -41,8 +40,8 @@ enum DesktopWindowMoveError: Error, Equatable, CustomStringConvertible {
             return "no desktop exists to the \(direction.rawValue)"
         case .windowNotOnActiveDesktop(let windowID, let spaceID):
             return "window \(windowID.description) is not on active desktop \(spaceID.raw)"
-        case .spaceClient(let message):
-            return message
+        case .spaceClient(let error):
+            return error.description
         case .windowServerFrameUnavailable(let windowID):
             return "WindowServer frame unavailable for \(windowID.description)"
         case .inputEventCreationFailed:
@@ -60,23 +59,6 @@ enum DesktopWindowMoveError: Error, Equatable, CustomStringConvertible {
         }
     }
 
-    var requiresSourceDesktopRecovery: Bool {
-        switch self {
-        case .windowMoveTimedOut, .movedWindowNotVisible:
-            return true
-        case .shortcutUnavailable,
-             .desktopTopologyUnavailable,
-             .noAdjacentDesktop,
-             .windowNotOnActiveDesktop,
-             .spaceClient,
-             .windowServerFrameUnavailable,
-             .inputEventCreationFailed,
-             .dragDidNotEngage,
-             .desktopTransitionTimedOut,
-             .cancelled:
-            return false
-        }
-    }
 }
 
 @MainActor
@@ -117,7 +99,7 @@ struct DesktopWindowMover {
         case .success(let value):
             userSpaces = value
         case .failure(let error):
-            return .failure(.spaceClient(error.description))
+            return .failure(.spaceClient(error))
         }
 
         let destinationSpace: SpaceID
@@ -136,7 +118,7 @@ struct DesktopWindowMover {
         case .success:
             return .failure(.windowNotOnActiveDesktop(window.id, activeSpace))
         case .failure(let error):
-            return .failure(.spaceClient(error.description))
+            return .failure(.spaceClient(error))
         }
 
         guard let preferences = shortcutPreferences() else {
@@ -145,7 +127,6 @@ struct DesktopWindowMover {
         return desktopSwitchShortcut(for: direction, in: preferences).map { shortcut in
             DesktopWindowMovePlan(
                 window: window,
-                direction: direction,
                 sourceSpace: activeSpace,
                 destinationSpace: destinationSpace,
                 display: display,
@@ -165,6 +146,9 @@ struct DesktopWindowMover {
         }
 
         let originalCursor = CGEvent(source: nil)?.location
+        defer {
+            if let originalCursor { _ = CGWarpMouseCursorPosition(originalCursor) }
+        }
         let titleBarPoint = CGPoint(x: originalFrame.midX, y: originalFrame.minY + 12)
         let dragPoint = CGPoint(x: titleBarPoint.x + 18, y: titleBarPoint.y)
         _ = CGWarpMouseCursorPosition(titleBarPoint)
@@ -198,16 +182,16 @@ struct DesktopWindowMover {
             virtualKey: plan.shortcut.keyCode,
             keyDown: false
         ) else {
-            if let originalCursor { _ = CGWarpMouseCursorPosition(originalCursor) }
             return .failure(.inputEventCreationFailed)
         }
 
         keyDown.flags = plan.shortcut.flags
         keyUp.flags = plan.shortcut.flags
         var mouseIsDown = false
+        var keyIsDown = false
         defer {
+            if keyIsDown { keyUp.post(tap: .cghidEventTap) }
             if mouseIsDown { mouseUp.post(tap: .cghidEventTap) }
-            if let originalCursor { _ = CGWarpMouseCursorPosition(originalCursor) }
         }
 
         mouseDown.post(tap: .cghidEventTap)
@@ -223,8 +207,10 @@ struct DesktopWindowMover {
         }
 
         keyDown.post(tap: .cghidEventTap)
+        keyIsDown = true
         guard await pause(for: 0.05) else { return .failure(.cancelled) }
         keyUp.post(tap: .cghidEventTap)
+        keyIsDown = false
         guard await waitForActiveDesktop(plan.destinationSpace, plan: plan) else {
             return .failure(.desktopTransitionTimedOut(plan.destinationSpace))
         }
