@@ -15,7 +15,7 @@ jobs:
     runs-on: [self-hosted, macOS, arm64, narwhal-live]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Verify trusted runner and real applications
         run: scripts/live_verify_all.sh
       - name: Verify startup and durable shutdown
