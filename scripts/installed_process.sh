@@ -2,11 +2,12 @@
 
 narwhal_candidate_pids() {
   local output status
-  if output="$(pgrep -x NarwhalApp 2>/dev/null)"; then
+  if output="$(/usr/bin/pgrep -x NarwhalApp 2>/dev/null)"; then
     printf '%s\n' "$output"
     return 0
+  else
+    status="$?"
   fi
-  status="$?"
   [ "$status" -eq 1 ] && return 0
   echo "could not enumerate NarwhalApp processes" >&2
   return 2
@@ -14,10 +15,11 @@ narwhal_candidate_pids() {
 
 narwhal_pid_is_candidate() {
   local target_pid="$1"
-  local candidate
+  local candidates candidate
+  candidates="$(narwhal_candidate_pids)" || return 2
   while IFS= read -r candidate; do
     [ "$candidate" = "$target_pid" ] && return 0
-  done < <(narwhal_candidate_pids) || return 2
+  done <<< "$candidates"
   return 1
 }
 

@@ -47,7 +47,7 @@ start_fixture() {
 
 rm -rf "$tmp_root"
 mkdir -p "$app_root/Contents/MacOS"
-clang "$script_dir/fixtures/narwhal_process_fixture.c" -o "$executable"
+/usr/bin/clang "$script_dir/fixtures/narwhal_process_fixture.c" -o "$executable"
 chmod 755 "$executable"
 ln -s "$app_root" "$alias_root"
 
@@ -77,7 +77,7 @@ fixture_pid=""
 
 unrelated="$tmp_root/Unrelated/NarwhalApp"
 mkdir -p "$(dirname "$unrelated")"
-clang "$script_dir/fixtures/narwhal_process_fixture.c" -o "$unrelated"
+/usr/bin/clang "$script_dir/fixtures/narwhal_process_fixture.c" -o "$unrelated"
 chmod 755 "$unrelated"
 "$unrelated" 60 &
 unrelated_pid="$!"
