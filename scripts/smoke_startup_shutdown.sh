@@ -3,18 +3,24 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+source "$script_dir/ipc_path.sh"
 tmp_root="/private/tmp/narwhal-startup-shutdown-smoke"
 config="$tmp_root/config/init.lua"
 state_path="$tmp_root/state/state.json"
 log_path="$tmp_root/log/narwhal.log"
 export NARWHAL_LOG_PATH="$log_path"
-socket_path="/tmp/narwhal-$(id -u).sock"
+socket_path="$(narwhal_socket_path)"
 app_pid=""
+second_app_pid=""
 
 cleanup() {
   if [ -n "$app_pid" ] && kill -0 "$app_pid" 2>/dev/null; then
     kill "$app_pid" 2>/dev/null || true
     wait "$app_pid" 2>/dev/null || true
+  fi
+  if [ -n "$second_app_pid" ] && kill -0 "$second_app_pid" 2>/dev/null; then
+    kill "$second_app_pid" 2>/dev/null || true
+    wait "$second_app_pid" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
@@ -124,6 +130,18 @@ printf '%s\n' "$status_json" | plutil -convert json -o /dev/null -- - \
 printf '%s\n' "$status_json" \
   | grep -Eq '"notificationFastPathActive"[[:space:]]*:[[:space:]]*true' \
   || fail "narwhalctl status --json did not report the active notification fast path"
+
+"$bin_path/NarwhalApp" --config "$config" --restore-state "$state_path" &
+second_app_pid="$!"
+wait_for_log "service startup failed at ipcServer" 10
+[ -S "$socket_path" ] || fail "second instance removed the live daemon socket"
+"$bin_path/NarwhalCtl" status >/dev/null \
+  || fail "new client could not reach the first daemon after second-instance rejection"
+printf '%s\n' "$status_output" | grep -Fq "State: running" \
+  || fail "existing first-daemon status evidence was invalid"
+kill "$second_app_pid"
+wait "$second_app_pid" 2>/dev/null || true
+second_app_pid=""
 
 "$bin_path/NarwhalCtl" balance | grep -Eq '^ok ipc-' || fail "narwhalctl balance did not return ok"
 wait_for_log "IPC balance completed" 10

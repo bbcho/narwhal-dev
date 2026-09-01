@@ -1121,8 +1121,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard ipcServer == nil else {
             return {}
         }
+        let socketPath = try IPCDefaults.socketPath()
         let server = IPCServer(
-            socketPath: IPCDefaults.socketPath,
+            socketPath: socketPath,
             handle: { [weak self] command in
                 await self?.handleIPCCommand(command) ?? .error(
                     commandID: CommandID(raw: "app-unavailable"),
@@ -1138,7 +1139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         try server.start()
         ipcServer = server
-        reporter.info("IPC server ready at \(IPCDefaults.socketPath)")
+        reporter.info("IPC server ready at \(socketPath)")
         return { [weak self, server] in
             server.stop()
             if self?.ipcServer === server {

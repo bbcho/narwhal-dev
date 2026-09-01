@@ -120,7 +120,7 @@ normal installation.
 | Restore state | `~/Library/Application Support/narwhal/state.json` |
 | Restore backup | `~/Library/Application Support/narwhal/state.json.previous` |
 | Log | `~/Library/Logs/Narwhal/narwhal.log` |
-| IPC socket | `/tmp/narwhal-$(id -u).sock` |
+| IPC socket | `$(getconf DARWIN_USER_TEMP_DIR)narwhal.sock` |
 
 Invalid restore files are moved beside the primary file as
 `state.json.corrupt-IDENTIFIER` with owner-only permissions. A valid backup is
@@ -180,12 +180,12 @@ use a stable `NARWHAL_SIGNING_IDENTITY` for repeated installed-app testing.
 Confirm Narwhal is running and inspect the socket and log:
 
 ```sh
-ls -l "/tmp/narwhal-$(id -u).sock"
+ls -l "$(getconf DARWIN_USER_TEMP_DIR)narwhal.sock"
 tail -n 100 "$HOME/Library/Logs/Narwhal/narwhal.log"
 ```
 
-If no Narwhal process owns a stale socket, remove that exact socket and restart
-the app.
+Restart Narwhal if no process is serving the socket. The lock-owning process
+reclaims a validated same-owner stale socket; do not manually remove IPC files.
 
 ### Config reload failed
 

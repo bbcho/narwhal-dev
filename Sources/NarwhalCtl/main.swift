@@ -108,7 +108,7 @@ private enum NarwhalCtlError: Error, CustomStringConvertible {
 }
 
 private func parseInvocation(_ arguments: [String]) throws -> Invocation {
-    var socketPath = IPCDefaults.socketPath
+    var socketPath = try IPCDefaults.socketPath()
     var positional: [String] = []
     var explicitWindowID: WindowID?
     var resizeDelta: Double?

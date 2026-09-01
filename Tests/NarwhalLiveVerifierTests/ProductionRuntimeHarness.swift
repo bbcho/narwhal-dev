@@ -20,7 +20,8 @@ struct ProductionRuntimeHarness {
     let consoleHandle: FileHandle
 
     static func start(config: Config = .default) throws -> ProductionRuntimeHarness {
-        guard !FileManager.default.fileExists(atPath: IPCDefaults.socketPath) else {
+        let socketPath = try IPCDefaults.socketPath()
+        guard !FileManager.default.fileExists(atPath: socketPath) else {
             throw RealAppWindowVerifierFailure("production verifier requires no existing Narwhal IPC socket")
         }
 
@@ -80,7 +81,7 @@ struct ProductionRuntimeHarness {
                     "production NarwhalApp exited during startup with status \(process.terminationStatus)"
                 )
             }
-            if FileManager.default.fileExists(atPath: IPCDefaults.socketPath),
+            if FileManager.default.fileExists(atPath: try IPCDefaults.socketPath()),
                let status = try? diagnostics(),
                status.accessibilityTrusted,
                status.notificationFastPathActive,

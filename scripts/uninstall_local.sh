@@ -43,6 +43,7 @@ done
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+source "$script_dir/installed_process.sh"
 if [[ "$app_dir" != /* ]]; then
   app_dir="$repo_root/$app_dir"
 fi
@@ -57,22 +58,11 @@ installed_app="$app_dir/Narwhal.app"
 previous_app="$app_dir/Narwhal.app.previous"
 ctl="$installed_app/Contents/MacOS/narwhalctl"
 app_executable="$installed_app/Contents/MacOS/NarwhalApp"
-socket_path="/tmp/narwhal-$(id -u).sock"
 unregister_status="app-not-found"
 
-wait_for_socket_absent() {
-  local attempts=50
-  for ((i = 0; i < attempts; i++)); do
-    [ ! -S "$socket_path" ] && return 0
-    sleep 0.1
-  done
-  [ ! -S "$socket_path" ]
-}
-
-if [ -x "$ctl" ] && [ -S "$socket_path" ]; then
+if [ -x "$app_executable" ]; then
   echo "Requesting Narwhal quit"
-  "$ctl" quit >/dev/null
-  wait_for_socket_absent || {
+  narwhal_stop_installed_processes "$app_executable" "$ctl" 5 || {
     echo "Narwhal did not stop; refusing to remove a running app" >&2
     exit 1
   }
