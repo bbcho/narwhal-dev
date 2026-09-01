@@ -68,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var axClient = AXClient(runtimeMetrics: runtimeMetrics)
     private let displayClient = DisplayClient()
     private let spaceClient = SpaceClient()
+    private lazy var desktopWindowMover = DesktopWindowMover(axClient: axClient, spaceClient: spaceClient)
     private var restorePersistence = RestorePersistence(manager: RestoreManager())
     private let managedRulesStore = ManagedRulesStore()
     private let echoSuppressor = AXEchoSuppressor()
@@ -1261,6 +1262,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await performRedoLayout()
         case .command(.moveToNextDisplay):
             await performMoveToNextDisplay()
+        case .command(.moveToDesktop(let direction)):
+            await performMoveToDesktop(direction)
         case .command(.togglePause):
             await togglePause()
         case .command(.resetLayout):
@@ -1869,6 +1872,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .failure(let error):
             reporter.error("Move display rejected by core: \(error.message)")
             showOperatorFeedback("Move display failed: \(error.message)", tone: .error)
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func performMoveToDesktop(_ direction: DesktopMoveDirection) async -> Bool {
+        let operation = "Move desktop \(direction.rawValue)"
+        guard let context = await focusedLayoutContext(operation: operation),
+              let displayID = displayForFocusedWindow(context, operation: operation),
+              let display = context.displays[displayID]
+        else { return false }
+
+        let plan: DesktopWindowMovePlan
+        switch desktopWindowMover.plan(
+            window: context.metadata,
+            direction: direction,
+            display: display,
+            displays: context.displays
+        ) {
+        case .success(let value):
+            plan = value
+        case .failure(let error):
+            reporter.error("\(operation) preflight failed: \(error.description)")
+            showOperatorFeedback("Move desktop failed: \(error.description)", tone: .error)
+            return false
+        }
+
+        guard await prepareLayoutWorld(
+            context,
+            displayID: displayID,
+            operation: operation,
+            refreshReason: "pre-move-desktop-\(direction.rawValue)"
+        ) else { return false }
+
+        switch await worldActor.planEject(context.id) {
+        case .success(let result):
+            guard await applyPlannedEject(result, windowID: context.id, retryOnClamp: true) else {
+                return false
+            }
+        case .failure(let error):
+            reporter.error("\(operation) could not float the focused window: \(error.message)")
+            showOperatorFeedback("Move desktop failed: \(error.message)", tone: .error)
+            return false
+        }
+
+        switch await desktopWindowMover.execute(plan) {
+        case .success:
+            reporter.info(
+                "Moved \(context.id.description) from desktop \(plan.sourceSpace.raw) "
+                    + "to \(plan.destinationSpace.raw) as floating"
+            )
+            showOperatorFeedback("Moved to desktop \(direction.rawValue)", tone: .success)
+            return true
+        case .failure(let error):
+            if error.requiresSourceDesktopRecovery {
+                _ = spaceClient.switchActiveSpace(display: display, to: plan.sourceSpace)
+            }
+            reporter.error("\(operation) failed: \(error.description)")
+            showOperatorFeedback("Move desktop failed: \(error.description)", tone: .error)
             return false
         }
     }

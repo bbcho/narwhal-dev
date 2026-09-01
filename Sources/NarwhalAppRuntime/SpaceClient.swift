@@ -109,6 +109,16 @@ struct SpaceClient {
         return .success(spaces)
     }
 
+    func userSpaceIDs(in spaces: [SpaceID]) -> Result<[SpaceID], SpaceClientError> {
+        guard let getSpaceType = symbols.getSpaceType else {
+            return .failure(.symbolUnavailable("SLSSpaceGetType"))
+        }
+        guard let connectionID = symbols.connectionID() else {
+            return .failure(.connectionUnavailable)
+        }
+        return .success(spaces.filter { getSpaceType(connectionID, $0.raw) == 0 })
+    }
+
     func switchActiveSpace(display: DisplayInfo, to spaceID: SpaceID) -> Result<Void, SpaceClientError> {
         guard let setCurrentSpace = symbols.setCurrentSpace else {
             return .failure(.symbolUnavailable("SLSManagedDisplaySetCurrentSpace"))
@@ -139,6 +149,7 @@ typealias CGSConnectionIDFunction = @convention(c) () -> CGSConnectionID
 typealias SLSCopyManagedDisplaySpacesFunction = @convention(c) (CGSConnectionID) -> Unmanaged<CFArray>?
 typealias SLSCopySpacesForWindowsFunction = @convention(c) (CGSConnectionID, Int, CFArray) -> Unmanaged<CFArray>?
 typealias SLSManagedDisplaySetCurrentSpaceFunction = @convention(c) (CGSConnectionID, CFString, UInt64) -> Int32
+typealias SLSSpaceGetTypeFunction = @convention(c) (CGSConnectionID, UInt64) -> Int32
 
 struct SpaceSymbols {
     static let live = SpaceSymbols(
@@ -148,6 +159,8 @@ struct SpaceSymbols {
             ?? loadSymbol("CGSCopySpacesForWindows", as: SLSCopySpacesForWindowsFunction.self),
         setCurrentSpace: loadSymbol("SLSManagedDisplaySetCurrentSpace", as: SLSManagedDisplaySetCurrentSpaceFunction.self)
             ?? loadSymbol("CGSManagedDisplaySetCurrentSpace", as: SLSManagedDisplaySetCurrentSpaceFunction.self),
+        getSpaceType: loadSymbol("SLSSpaceGetType", as: SLSSpaceGetTypeFunction.self)
+            ?? loadSymbol("CGSSpaceGetType", as: SLSSpaceGetTypeFunction.self),
         mainConnectionID: loadSymbol("CGSMainConnectionID", as: CGSConnectionIDFunction.self),
         defaultConnection: loadSymbol("_CGSDefaultConnection", as: CGSConnectionIDFunction.self)
     )
@@ -156,6 +169,7 @@ struct SpaceSymbols {
     let copyManagedDisplaySpaces: SLSCopyManagedDisplaySpacesFunction?
     let copySpacesForWindows: SLSCopySpacesForWindowsFunction?
     let setCurrentSpace: SLSManagedDisplaySetCurrentSpaceFunction?
+    let getSpaceType: SLSSpaceGetTypeFunction?
     let mainConnectionID: CGSConnectionIDFunction?
     let defaultConnection: CGSConnectionIDFunction?
 
