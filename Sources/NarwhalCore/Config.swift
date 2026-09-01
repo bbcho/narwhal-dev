@@ -89,6 +89,7 @@ public enum CommandTemplate: Equatable, Sendable {
     case undoLayout
     case redoLayout
     case moveToNextDisplay
+    case moveToDesktop(DesktopMoveDirection)
     case togglePause
     case resetLayout
 }
@@ -201,6 +202,8 @@ public enum DefaultKeymap {
         HotkeyBinding(key: KeySpec(key: "f", modifiers: [.control, .option, .command]), action: .openFinderWindow),
         HotkeyBinding(key: KeySpec(key: "m", modifiers: [.control, .option, .command]), action: .command(.maximizeReset)),
         HotkeyBinding(key: KeySpec(key: "n", modifiers: [.control, .option, .command]), action: .command(.moveToNextDisplay)),
+        HotkeyBinding(key: KeySpec(key: "left", modifiers: [.control, .option, .command]), action: .command(.moveToDesktop(.left))),
+        HotkeyBinding(key: KeySpec(key: "right", modifiers: [.control, .option, .command]), action: .command(.moveToDesktop(.right))),
         HotkeyBinding(key: KeySpec(key: "s", modifiers: [.control, .option, .command]), action: .command(.shuffle)),
         HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.left, delta: 0.25))),
         HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.right, delta: 0.25))),
@@ -300,6 +303,8 @@ public enum DefaultConfigLua {
             return "{ type = \"redo_layout\" }"
         case .moveToNextDisplay:
             return "{ type = \"move_to_next_display\" }"
+        case .moveToDesktop(let direction):
+            return "{ type = \"move_to_desktop\", direction = \(quoted(direction.rawValue)) }"
         case .togglePause:
             return "{ type = \"toggle_pause\" }"
         case .resetLayout:

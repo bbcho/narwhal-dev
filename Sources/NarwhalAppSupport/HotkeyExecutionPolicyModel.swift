@@ -53,6 +53,7 @@ public func workspaceStabilityPolicy(for action: HotkeyAction) -> HotkeyWorkspac
              .undoLayout,
              .redoLayout,
              .moveToNextDisplay,
+             .moveToDesktop,
              .focusDirection,
              .focusCycle,
              .focusPrevious:

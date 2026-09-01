@@ -68,6 +68,20 @@ struct RealAppWindowVerificationTests {
         try expectPassed(await ProductionManualResizeVerification.verifyTwoByTwoTerminalResize())
     }
 
+    @Test("Real Terminal moves to an adjacent Space and back")
+    func realTerminalMovesAcrossSpaces() async throws {
+        _ = NSApplication.shared
+        VerifierAppDelegate.installIfNeeded()
+        try expectPassed(await RealTerminalSpaceMoveVerification.verifyRoundTrip())
+    }
+
+    @Test("Production hotkey moves Terminal to a desktop as floating")
+    func productionHotkeyMovesTerminalToDesktopAsFloating() async throws {
+        _ = NSApplication.shared
+        VerifierAppDelegate.installIfNeeded()
+        try expectPassed(await RealTerminalSpaceMoveVerification.verifyProductionHotkey())
+    }
+
     @Test("Three Firefox windows stack vertically")
     func threeFirefoxWindowsStackVertically() async throws {
         _ = NSApplication.shared

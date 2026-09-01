@@ -225,6 +225,10 @@ private func carbonKeyCode(for key: String) -> UInt32? {
         return UInt32(kVK_Space)
     case "delete":
         return UInt32(kVK_Delete)
+    case "left":
+        return UInt32(kVK_LeftArrow)
+    case "right":
+        return UInt32(kVK_RightArrow)
     default:
         return nil
     }
@@ -308,6 +312,8 @@ private func describe(_ template: CommandTemplate) -> String {
         return "redo layout"
     case .moveToNextDisplay:
         return "move display"
+    case .moveToDesktop(let direction):
+        return "move desktop \(direction.rawValue)"
     case .togglePause:
         return "toggle pause"
     case .resetLayout:
