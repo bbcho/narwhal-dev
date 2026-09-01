@@ -9,6 +9,9 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
     case lockOpenFailed(path: String, errno: Int32)
     case unsafeLockFile(path: String)
     case unsafeSocketPath(path: String)
+    case socketProbeFailed(path: String, errno: Int32)
+    case peerCredentialsFailed(errno: Int32)
+    case peerUIDMismatch(expected: uid_t, actual: uid_t)
     case socketPathTooLong(String)
     case socketCreateFailed(errno: Int32)
     case bindFailed(path: String, errno: Int32)
@@ -39,6 +42,12 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
             return "IPC lock file is unsafe: \(path)"
         case .unsafeSocketPath(let path):
             return "IPC socket path is unsafe: \(path)"
+        case .socketProbeFailed(let path, let errno):
+            return "IPC socket probe failed for \(path): \(Self.errnoDescription(errno))"
+        case .peerCredentialsFailed(let errno):
+            return "getpeereid() failed: \(Self.errnoDescription(errno))"
+        case .peerUIDMismatch(let expected, let actual):
+            return "IPC peer UID mismatch: expected \(expected), got \(actual)"
         case .socketPathTooLong(let path):
             return "Unix socket path is too long: \(path)"
         case .socketCreateFailed(let errno):
@@ -77,22 +86,40 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
     }
 }
 
+typealias IPCPeerUIDReader = @Sendable (Int32) -> Result<uid_t, IPCTransportError>
+
 /// Not thread-safe. Sequential use across threads requires external synchronization.
 /// CLI usage is single-threaded.
 public final class IPCClient {
     private let configuredSocketPath: String?
     private let maxLineBytes: Int
     private let ioTimeout: TimeInterval
+    private let peerUIDReader: IPCPeerUIDReader
     private var fd: Int32?
 
-    public init(
+    public convenience init(
         socketPath: String? = nil,
         maxLineBytes: Int = 64 * 1024,
         ioTimeout: TimeInterval = 5.0
     ) {
+        self.init(
+            socketPath: socketPath,
+            maxLineBytes: maxLineBytes,
+            ioTimeout: ioTimeout,
+            peerUIDReader: livePeerUID
+        )
+    }
+
+    init(
+        socketPath: String?,
+        maxLineBytes: Int = 64 * 1024,
+        ioTimeout: TimeInterval = 5.0,
+        peerUIDReader: @escaping IPCPeerUIDReader
+    ) {
         self.configuredSocketPath = socketPath
         self.maxLineBytes = maxLineBytes
         self.ioTimeout = boundedSocketTimeout(ioTimeout)
+        self.peerUIDReader = peerUIDReader
     }
 
     deinit {
@@ -113,6 +140,7 @@ public final class IPCClient {
                     throw IPCTransportError.connectFailed(path: socketPath, errno: errno)
                 }
             }
+            try requireCurrentPeerUID(socketFD, using: peerUIDReader)
             fd = socketFD
         } catch {
             Darwin.close(socketFD)
@@ -159,6 +187,7 @@ public final class IPCServer: @unchecked Sendable {
     private let ioTimeout: TimeInterval
     private let handle: @Sendable (IPCCommandDTO) async -> IPCReplyDTO
     private let log: @Sendable (String) -> Void
+    private let peerUIDReader: IPCPeerUIDReader
     private let beforePublishStartedResources: @Sendable () -> Void
     private let lifecycleLock = NSLock()
     private let state = IPCServerState()
@@ -176,6 +205,7 @@ public final class IPCServer: @unchecked Sendable {
             maxLineBytes: maxLineBytes,
             maxConnections: maxConnections,
             ioTimeout: ioTimeout,
+            peerUIDReader: livePeerUID,
             beforePublishStartedResources: {},
             handle: handle,
             log: log
@@ -187,7 +217,8 @@ public final class IPCServer: @unchecked Sendable {
         maxLineBytes: Int = 64 * 1024,
         maxConnections: Int = 8,
         ioTimeout: TimeInterval = 5.0,
-        beforePublishStartedResources: @escaping @Sendable () -> Void,
+        peerUIDReader: @escaping IPCPeerUIDReader = livePeerUID,
+        beforePublishStartedResources: @escaping @Sendable () -> Void = {},
         handle: @escaping @Sendable (IPCCommandDTO) async -> IPCReplyDTO,
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
@@ -195,6 +226,7 @@ public final class IPCServer: @unchecked Sendable {
         self.maxLineBytes = maxLineBytes
         self.maxConnections = maxConnections
         self.ioTimeout = boundedSocketTimeout(ioTimeout)
+        self.peerUIDReader = peerUIDReader
         self.handle = handle
         self.log = log
         self.beforePublishStartedResources = beforePublishStartedResources
@@ -242,7 +274,7 @@ public final class IPCServer: @unchecked Sendable {
         guard Darwin.fchmod(lockFD, S_IRUSR | S_IWUSR) == 0 else {
             throw IPCTransportError.lockOpenFailed(path: lockPath, errno: errno)
         }
-        if probeExistingDaemon(path: socketPath) {
+        if try probeExistingDaemon(path: socketPath) {
             throw IPCTransportError.alreadyRunning(path: socketPath)
         }
         if let existing = try ipcPathMetadataIfPresent(at: socketPath) {
@@ -339,6 +371,7 @@ public final class IPCServer: @unchecked Sendable {
             }
 
             do {
+                try requireCurrentPeerUID(clientFD, using: peerUIDReader)
                 try configureSocket(clientFD, ioTimeout: ioTimeout)
             } catch {
                 log(String(describing: error))
@@ -357,24 +390,27 @@ public final class IPCServer: @unchecked Sendable {
         }
     }
 
-    private func probeExistingDaemon(path: String) -> Bool {
+    private func probeExistingDaemon(path: String) throws -> Bool {
         let probeFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        guard probeFD >= 0 else { return false }
-        defer { Darwin.close(probeFD) }
-        try? configureSocket(probeFD, ioTimeout: min(ioTimeout, 0.25))
-        var alive = false
-        do {
-            try withSocketAddress(path: path) { address, length in
-                // Blocking connect on a UNIX socket: stale socket file returns ECONNREFUSED
-                // immediately; live daemon returns 0. Non-blocking errnos cannot occur here.
-                if Darwin.connect(probeFD, address, length) == 0 {
-                    alive = true
-                }
-            }
-        } catch {
-            // address construction failed; treat as no daemon present.
+        guard probeFD >= 0 else {
+            throw IPCTransportError.socketCreateFailed(errno: errno)
         }
-        return alive
+        defer { Darwin.close(probeFD) }
+        try configureSocket(probeFD, ioTimeout: min(ioTimeout, 0.25))
+        let result = try withSocketAddress(path: path) { address, length in
+            Darwin.connect(probeFD, address, length)
+        }
+        if result == 0 {
+            try requireCurrentPeerUID(probeFD, using: peerUIDReader)
+            return true
+        }
+        let currentErrno = errno
+        switch currentErrno {
+        case ENOENT, ECONNREFUSED:
+            return false
+        default:
+            throw IPCTransportError.socketProbeFailed(path: path, errno: currentErrno)
+        }
     }
 
     private func processConnection(_ clientFD: Int32) async {
@@ -421,6 +457,26 @@ public final class IPCServer: @unchecked Sendable {
                 message: "Invalid IPC command JSON"
             )
         }
+    }
+}
+
+private let livePeerUID: IPCPeerUIDReader = { fd in
+    var effectiveUID: uid_t = 0
+    var effectiveGID: gid_t = 0
+    guard Darwin.getpeereid(fd, &effectiveUID, &effectiveGID) == 0 else {
+        return .failure(.peerCredentialsFailed(errno: errno))
+    }
+    return .success(effectiveUID)
+}
+
+private func requireCurrentPeerUID(
+    _ fd: Int32,
+    using reader: IPCPeerUIDReader
+) throws {
+    let actual = try reader(fd).get()
+    let expected = Darwin.getuid()
+    guard actual == expected else {
+        throw IPCTransportError.peerUIDMismatch(expected: expected, actual: actual)
     }
 }
 

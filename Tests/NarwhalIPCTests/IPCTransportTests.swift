@@ -225,6 +225,85 @@ struct IPCTransportTests {
         }
     }
 
+    @Test("Client rejects a server with the wrong peer UID")
+    func clientRejectsWrongServerUID() throws {
+        let endpoint = try temporaryEndpoint()
+        defer { endpoint.cleanup() }
+        let server = IPCServer(socketPath: endpoint.socketPath) { _ in
+            .ok(commandID: CommandID(raw: "server"))
+        }
+        try server.start()
+        defer { server.stop() }
+        let client = IPCClient(
+            socketPath: endpoint.socketPath,
+            peerUIDReader: { _ in .success(Darwin.getuid() + 1) }
+        )
+
+        #expect(throws: IPCTransportError.self) {
+            _ = try client.send(.status)
+        }
+
+        let validClient = IPCClient(socketPath: endpoint.socketPath)
+        defer { validClient.close() }
+        #expect(try validClient.send(.status) == .ok(commandID: CommandID(raw: "server")))
+    }
+
+    @Test("Startup probe rejects a live listener with the wrong peer UID")
+    func startupProbeRejectsWrongPeerUID() throws {
+        let endpoint = try temporaryEndpoint()
+        defer { endpoint.cleanup() }
+        let listener = try rawListeningSocket(path: endpoint.socketPath)
+        defer { closeSocketForTest(listener) }
+        let server = IPCServer(
+            socketPath: endpoint.socketPath,
+            peerUIDReader: { _ in .success(Darwin.getuid() + 1) },
+            handle: { _ in .ok(commandID: CommandID(raw: "unexpected")) }
+        )
+
+        do {
+            try server.start()
+            Issue.record("Expected wrong-UID probe failure")
+        } catch IPCTransportError.peerUIDMismatch(let expected, let actual) {
+            #expect(expected == Darwin.getuid())
+            #expect(actual == Darwin.getuid() + 1)
+        } catch {
+            Issue.record("Expected peerUIDMismatch, got \(String(describing: error))")
+        }
+        #expect(FileManager.default.fileExists(atPath: endpoint.socketPath))
+    }
+
+    @Test("Server rejects one wrong-UID client and continues accepting")
+    func serverRejectsWrongUIDAndContinues() throws {
+        let endpoint = try temporaryEndpoint()
+        defer { endpoint.cleanup() }
+        let peerUIDs = LockedPeerUIDSequence([
+            Darwin.getuid() + 1,
+            Darwin.getuid()
+        ])
+        let handled = LockedCounter()
+        let server = IPCServer(
+            socketPath: endpoint.socketPath,
+            peerUIDReader: { _ in .success(peerUIDs.next()) },
+            handle: { _ in
+                handled.increment()
+                return .ok(commandID: CommandID(raw: "accepted"))
+            }
+        )
+        try server.start()
+        defer { server.stop() }
+
+        let rejected = IPCClient(socketPath: endpoint.socketPath)
+        #expect(throws: IPCTransportError.self) {
+            _ = try rejected.send(.status)
+        }
+        #expect(handled.value == 0)
+
+        let accepted = IPCClient(socketPath: endpoint.socketPath)
+        defer { accepted.close() }
+        #expect(try accepted.send(.status) == .ok(commandID: CommandID(raw: "accepted")))
+        #expect(handled.value == 1)
+    }
+
     @Test("Production IPC path uses the private Darwin user temporary directory")
     func productionPathUsesPrivateUserDirectory() throws {
         let expectedDirectory = try darwinUserTemporaryDirectoryForTest()
@@ -488,6 +567,38 @@ struct IPCTransportTests {
         }
     }
 
+    private final class LockedPeerUIDSequence: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [uid_t]
+
+        init(_ values: [uid_t]) {
+            self.values = values
+        }
+
+        func next() -> uid_t {
+            lock.lock()
+            defer { lock.unlock() }
+            return values.isEmpty ? Darwin.getuid() : values.removeFirst()
+        }
+    }
+
+    private final class LockedCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storedValue = 0
+
+        var value: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedValue
+        }
+
+        func increment() {
+            lock.lock()
+            storedValue += 1
+            lock.unlock()
+        }
+    }
+
     private func temporaryEndpoint() throws -> TestEndpoint {
         let token = UUID().uuidString.prefix(8)
         let directory = URL(fileURLWithPath: "/private/tmp/ni-\(token)", isDirectory: true)
@@ -541,6 +652,30 @@ struct IPCTransportTests {
             Darwin.close(fd)
             throw error
         }
+    }
+
+    private func rawListeningSocket(path: String) throws -> Int32 {
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw POSIXError(.EIO) }
+        do {
+            try withSocketAddress(path: path) { address, length in
+                guard Darwin.bind(fd, address, length) == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+            }
+            guard Darwin.listen(fd, 1) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            return fd
+        } catch {
+            Darwin.close(fd)
+            throw error
+        }
+    }
+
+    private func closeSocketForTest(_ fd: Int32) {
+        Darwin.shutdown(fd, SHUT_RDWR)
+        Darwin.close(fd)
     }
 
     private func configureNoSIGPIPE(_ fd: Int32) throws {
