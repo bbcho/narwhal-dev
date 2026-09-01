@@ -6,6 +6,78 @@ import NarwhalCore
 
 @Suite("IPC transport")
 struct IPCTransportTests {
+    @Test("Production IPC path uses the private Darwin user temporary directory")
+    func productionPathUsesPrivateUserDirectory() throws {
+        let expectedDirectory = try darwinUserTemporaryDirectoryForTest()
+
+        #expect(try IPCDefaults.socketPath() == expectedDirectory + "/narwhal.sock")
+        #expect(IPCDefaults.lockPath(forSocketPath: expectedDirectory + "/narwhal.sock") == expectedDirectory + "/narwhal.lock")
+    }
+
+    @Test("Explicit IPC endpoints receive independent lock paths")
+    func explicitEndpointsReceiveIndependentLocks() {
+        #expect(IPCDefaults.lockPath(forSocketPath: "/private/tmp/first.sock") == "/private/tmp/first.lock")
+        #expect(IPCDefaults.lockPath(forSocketPath: "/private/tmp/second") == "/private/tmp/second.lock")
+    }
+
+    @Test("Private runtime directory validation rejects unsafe metadata")
+    func privateRuntimeDirectoryRejectsUnsafeMetadata() throws {
+        let path = "/private/var/folders/example/T"
+        let safe = IPCPathMetadata(
+            kind: .directory,
+            ownerUID: Darwin.getuid(),
+            permissions: 0o700,
+            device: 1,
+            inode: 2
+        )
+        try validatePrivateRuntimeDirectory(path: path, metadata: safe, expectedUID: Darwin.getuid()).get()
+
+        let worldAccessible = IPCPathMetadata(
+            kind: .directory,
+            ownerUID: Darwin.getuid(),
+            permissions: 0o755,
+            device: 1,
+            inode: 2
+        )
+        #expect(throws: IPCTransportError.self) {
+            try validatePrivateRuntimeDirectory(
+                path: path,
+                metadata: worldAccessible,
+                expectedUID: Darwin.getuid()
+            ).get()
+        }
+
+        let wrongOwner = IPCPathMetadata(
+            kind: .directory,
+            ownerUID: Darwin.getuid() + 1,
+            permissions: 0o700,
+            device: 1,
+            inode: 2
+        )
+        #expect(throws: IPCTransportError.self) {
+            try validatePrivateRuntimeDirectory(
+                path: path,
+                metadata: wrongOwner,
+                expectedUID: Darwin.getuid()
+            ).get()
+        }
+
+        let regularFile = IPCPathMetadata(
+            kind: .regularFile,
+            ownerUID: Darwin.getuid(),
+            permissions: 0o700,
+            device: 1,
+            inode: 2
+        )
+        #expect(throws: IPCTransportError.self) {
+            try validatePrivateRuntimeDirectory(
+                path: path,
+                metadata: regularFile,
+                expectedUID: Darwin.getuid()
+            ).get()
+        }
+    }
+
     @Test("Server handles multiple newline-delimited commands on one connection")
     func serverReusesConnectionForMultipleCommands() async throws {
         let path = tempSocketPath()
@@ -148,6 +220,21 @@ struct IPCTransportTests {
 
     private func tempSocketPath() -> String {
         "/private/tmp/narwhal-ipc-\(UUID().uuidString).sock"
+    }
+
+    private func darwinUserTemporaryDirectoryForTest() throws -> String {
+        let required = Darwin.confstr(_CS_DARWIN_USER_TEMP_DIR, nil, 0)
+        guard required > 1 else { throw POSIXError(.EIO) }
+        var buffer = [CChar](repeating: 0, count: required)
+        guard Darwin.confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, required) == required else {
+            throw POSIXError(.EIO)
+        }
+        return String(cString: buffer).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .isEmpty
+            ? "/"
+            : "/" + String(cString: buffer)
+                .split(separator: "/", omittingEmptySubsequences: true)
+                .joined(separator: "/")
     }
 
     private func connectRawSocket(path: String, nonBlocking: Bool = true) throws -> Int32 {

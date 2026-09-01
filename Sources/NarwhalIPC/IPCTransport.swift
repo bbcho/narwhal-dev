@@ -2,13 +2,10 @@ import Darwin
 import Foundation
 import NarwhalCore
 
-public enum IPCDefaults {
-    public static var socketPath: String {
-        "/tmp/narwhal-\(Darwin.getuid()).sock"
-    }
-}
-
 public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
+    case runtimeDirectoryUnavailable(errno: Int32)
+    case pathMetadataFailed(path: String, errno: Int32)
+    case unsafeRuntimeDirectory(path: String)
     case socketPathTooLong(String)
     case socketCreateFailed(errno: Int32)
     case bindFailed(path: String, errno: Int32)
@@ -27,6 +24,12 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
 
     public var description: String {
         switch self {
+        case .runtimeDirectoryUnavailable(let errno):
+            return "Could not resolve the private user runtime directory: \(Self.errnoDescription(errno))"
+        case .pathMetadataFailed(let path, let errno):
+            return "lstat(\(path)) failed: \(Self.errnoDescription(errno))"
+        case .unsafeRuntimeDirectory(let path):
+            return "Private user runtime directory is unsafe: \(path)"
         case .socketPathTooLong(let path):
             return "Unix socket path is too long: \(path)"
         case .socketCreateFailed(let errno):
@@ -68,17 +71,17 @@ public enum IPCTransportError: Error, CustomStringConvertible, Sendable {
 /// Not thread-safe. Sequential use across threads requires external synchronization.
 /// CLI usage is single-threaded.
 public final class IPCClient {
-    private let socketPath: String
+    private let configuredSocketPath: String?
     private let maxLineBytes: Int
     private let ioTimeout: TimeInterval
     private var fd: Int32?
 
     public init(
-        socketPath: String = IPCDefaults.socketPath,
+        socketPath: String? = nil,
         maxLineBytes: Int = 64 * 1024,
         ioTimeout: TimeInterval = 5.0
     ) {
-        self.socketPath = socketPath
+        self.configuredSocketPath = socketPath
         self.maxLineBytes = maxLineBytes
         self.ioTimeout = boundedSocketTimeout(ioTimeout)
     }
@@ -89,6 +92,7 @@ public final class IPCClient {
 
     public func connect() throws {
         guard fd == nil else { return }
+        let socketPath = try configuredSocketPath ?? IPCDefaults.socketPath()
         let socketFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard socketFD >= 0 else {
             throw IPCTransportError.socketCreateFailed(errno: errno)
@@ -140,7 +144,7 @@ public final class IPCClient {
 }
 
 public final class IPCServer: @unchecked Sendable {
-    private let socketPath: String
+    private let configuredSocketPath: String?
     private let maxLineBytes: Int
     private let maxConnections: Int
     private let ioTimeout: TimeInterval
@@ -149,14 +153,14 @@ public final class IPCServer: @unchecked Sendable {
     private let state = IPCServerState()
 
     public init(
-        socketPath: String = IPCDefaults.socketPath,
+        socketPath: String? = nil,
         maxLineBytes: Int = 64 * 1024,
         maxConnections: Int = 8,
         ioTimeout: TimeInterval = 5.0,
         handle: @escaping @Sendable (IPCCommandDTO) async -> IPCReplyDTO,
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
-        self.socketPath = socketPath
+        self.configuredSocketPath = socketPath
         self.maxLineBytes = maxLineBytes
         self.maxConnections = maxConnections
         self.ioTimeout = boundedSocketTimeout(ioTimeout)
@@ -166,6 +170,7 @@ public final class IPCServer: @unchecked Sendable {
 
     public func start() throws {
         guard !state.isRunning else { return }
+        let socketPath = try configuredSocketPath ?? IPCDefaults.socketPath()
         let socketFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard socketFD >= 0 else {
             throw IPCTransportError.socketCreateFailed(errno: errno)
@@ -201,6 +206,7 @@ public final class IPCServer: @unchecked Sendable {
     }
 
     public func stop() {
+        guard let socketPath = try? configuredSocketPath ?? IPCDefaults.socketPath() else { return }
         let sockets = state.stop()
         for fd in sockets {
             closeSocket(fd)

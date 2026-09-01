@@ -372,7 +372,7 @@ enum RealAppWindowVerification {
         var runtime: ProductionRuntime?
         do {
             try waitForUnlockedSession()
-            guard !FileManager.default.fileExists(atPath: IPCDefaults.socketPath) else {
+            guard !FileManager.default.fileExists(atPath: try IPCDefaults.socketPath()) else {
                 throw RealAppWindowVerifierFailure(
                     "production runtime verifier requires no existing Narwhal IPC socket"
                 )
@@ -643,7 +643,7 @@ enum RealAppWindowVerification {
             let log = (try? String(contentsOf: runtime.logURL, encoding: .utf8)) ?? ""
             if log.contains("Accessibility trusted"),
                log.contains("Layout command loop ready"),
-               FileManager.default.fileExists(atPath: IPCDefaults.socketPath) {
+               FileManager.default.fileExists(atPath: try IPCDefaults.socketPath()) {
                 return
             }
             await settleLiveVerifier(for: 0.1)
