@@ -68,7 +68,10 @@ struct LiveAppKitVerifierTests {
         try expectPassed(WorkspaceScopeVerification.verifyFocusedCommandsStayOnOneDisplay())
     }
 
-    @Test("Live multi-display workflow")
+    @Test(
+        "Live multi-display workflow",
+        .enabled(if: NSScreen.screens.count >= 2, "Requires at least two displays.")
+    )
     func liveMultiDisplayWorkflow() throws {
         try expectPassed(LiveMultiDisplayVerification.verifyDisplayScopedPushAndCycle())
     }

@@ -47,7 +47,14 @@ run_phase() {
     exit "$test_status"
   fi
 
-  if grep -Eqi 'skipped:|skipped after|test .* skipped|↳ .*requires ' "$log_file"; then
+  local unexpected_skips
+  unexpected_skips="$(
+    grep -Ei 'skipped:|skipped after|test .* skipped|↳ .*requires ' "$log_file" \
+      | grep -Fv 'Test "Live multi-display workflow" skipped: "Requires at least two displays."' \
+      || true
+  )"
+  if [ -n "$unexpected_skips" ]; then
+    printf '%s\n' "$unexpected_skips" >&2
     echo "live_verify_all failed: $label contains skipped tests" >&2
     exit 1
   fi

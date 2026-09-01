@@ -5,6 +5,7 @@ import CoreGraphics
 import Darwin
 import NarwhalAppSupport
 import NarwhalCore
+import Testing
 
 @MainActor
 enum LiveCommandWorkflowVerification {
@@ -26,7 +27,9 @@ enum LiveCommandWorkflowVerification {
             try verifyDropZone(display: context.primaryDisplay, coverage: &coverage)
             try verifyMoveDisplayIfAvailable(context: context, coverage: &coverage)
 
-            let missingCommands = coverage.missingRequiredCommands()
+            let missingCommands = coverage.missingRequiredCommands(
+                requiresMoveDisplay: context.orderedDisplays.count >= 2
+            )
             guard missingCommands.isEmpty else {
                 throw LiveCommandWorkflowFailure("live command workflow verification missed command coverage: \(missingCommands.joined(separator: ", "))")
             }
@@ -1590,8 +1593,8 @@ private struct LiveCommandWorkflowCoverage {
         )
     }
 
-    func missingRequiredCommands() -> [String] {
-        let required = Set([
+    func missingRequiredCommands(requiresMoveDisplay: Bool) -> [String] {
+        var required = Set([
             "push",
             "center",
             "eject",
@@ -1613,6 +1616,9 @@ private struct LiveCommandWorkflowCoverage {
             "tiled borders",
             "focus border"
         ])
+        if !requiresMoveDisplay {
+            required.remove("move display")
+        }
         return required.subtracting(commands).sorted()
     }
 
@@ -1628,6 +1634,21 @@ private struct LiveCommandWorkflowCoverage {
             "commands=\(commands.sorted().joined(separator: ","))",
             "skips=\(skips.isEmpty ? "none" : skips.joined(separator: ";"))"
         ].joined(separator: " ")
+    }
+}
+
+@Suite("Live verifier capability policy")
+private struct LiveVerifierCapabilityPolicyTests {
+    @Test("Single-display command coverage does not require moving between displays")
+    func singleDisplayDoesNotRequireMoveDisplay() {
+        let missing = LiveCommandWorkflowCoverage.empty.missingRequiredCommands(requiresMoveDisplay: false)
+        #expect(!missing.contains("move display"))
+    }
+
+    @Test("Multi-display command coverage requires moving between displays")
+    func multipleDisplaysRequireMoveDisplay() {
+        let missing = LiveCommandWorkflowCoverage.empty.missingRequiredCommands(requiresMoveDisplay: true)
+        #expect(missing.contains("move display"))
     }
 }
 
