@@ -1778,7 +1778,7 @@ private func commandOverlayCategory(for action: HotkeyAction) -> CommandOverlayC
         switch template {
         case .focusDirection, .focusCycle, .focusPrevious:
             return .movement
-        case .push, .center, .eject, .toggleFloat, .moveToNextDisplay, .maximizeReset:
+        case .push, .center, .eject, .toggleFloat, .moveToNextDisplay, .moveToDesktop, .maximizeReset:
             return .placement
         case .swap, .resizeSplit, .balance, .shuffle, .cascade, .undoLayout, .redoLayout:
             return .arrangement
@@ -1850,6 +1850,8 @@ private func commandOverlayCommand(for template: CommandTemplate) -> String {
         return "Redo layout"
     case .moveToNextDisplay:
         return "Move display"
+    case .moveToDesktop(let direction):
+        return "Move desktop \(direction.rawValue)"
     case .togglePause:
         return "Pause tiling"
     case .resetLayout:
@@ -1917,6 +1919,8 @@ private func commandOverlayDescription(for template: CommandTemplate) -> String 
         return "Reapply the next tiled layout after an undo"
     case .moveToNextDisplay:
         return "Move focused window to the next display and tile it in the center"
+    case .moveToDesktop(let direction):
+        return "Move focused window to the desktop on the \(direction.rawValue) and leave it floating"
     case .togglePause:
         return "Pause or resume automatic tiling actions"
     case .resetLayout:

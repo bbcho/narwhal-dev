@@ -91,6 +91,11 @@ private struct ConfigParser {
             return .command(.redoLayout)
         case "move_to_next_display":
             return .command(.moveToNextDisplay)
+        case "move_to_desktop":
+            return .command(.moveToDesktop(try parseDesktopMoveDirection(
+                required("direction", in: table, path: key),
+                key: "\(key).direction"
+            )))
         case "toggle_pause":
             return .command(.togglePause)
         case "reset_layout":
@@ -315,6 +320,14 @@ private struct ConfigParser {
         let raw = try string(value, key: key)
         guard let direction = FocusCycleDirection(rawValue: raw) else {
             throw ConfigError.invalidValue(key: key, reason: "unsupported focus cycle direction '\(raw)'")
+        }
+        return direction
+    }
+
+    private func parseDesktopMoveDirection(_ value: LuaValue, key: String) throws -> DesktopMoveDirection {
+        let raw = try string(value, key: key)
+        guard let direction = DesktopMoveDirection(rawValue: raw) else {
+            throw ConfigError.invalidValue(key: key, reason: "unsupported desktop move direction '\(raw)'")
         }
         return direction
     }

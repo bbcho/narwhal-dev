@@ -25,6 +25,8 @@ return {
     { key = "f", modifiers = { "control", "option", "command" }, action = { type = "open_finder_window" } },
     { key = "m", modifiers = { "control", "option", "command" }, action = { type = "maximize_reset" } },
     { key = "n", modifiers = { "control", "option", "command" }, action = { type = "move_to_next_display" } },
+    { key = "left", modifiers = { "control", "option", "command" }, action = { type = "move_to_desktop", direction = "left" } },
+    { key = "right", modifiers = { "control", "option", "command" }, action = { type = "move_to_desktop", direction = "right" } },
     { key = "s", modifiers = { "control", "option", "command" }, action = { type = "shuffle" } },
     { key = "h", modifiers = { "control", "option", "shift", "command" }, action = { type = "resize_split", direction = "left", delta = 0.25 } },
     { key = "l", modifiers = { "control", "option", "shift", "command" }, action = { type = "resize_split", direction = "right", delta = 0.25 } },

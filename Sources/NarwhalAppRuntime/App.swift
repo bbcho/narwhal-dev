@@ -1311,7 +1311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch action {
         case .command(let template):
             switch template {
-            case .push, .center, .eject, .swap, .resizeSplit, .toggleFloat, .balance, .shuffle, .cascade, .maximizeReset, .undoLayout, .redoLayout, .moveToNextDisplay:
+            case .push, .center, .eject, .swap, .resizeSplit, .toggleFloat, .balance, .shuffle, .cascade, .maximizeReset, .undoLayout, .redoLayout, .moveToNextDisplay, .moveToDesktop:
                 return true
             case .focusDirection, .focusCycle, .focusPrevious, .togglePause, .resetLayout:
                 return false

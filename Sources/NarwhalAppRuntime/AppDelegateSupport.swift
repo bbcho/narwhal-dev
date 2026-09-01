@@ -132,6 +132,8 @@ enum AppDelegateText {
             return "redo layout"
         case .moveToNextDisplay:
             return "move display"
+        case .moveToDesktop(let direction):
+            return "move desktop \(direction.rawValue)"
         case .togglePause:
             return "toggle pause"
         case .resetLayout:

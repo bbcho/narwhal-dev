@@ -30,6 +30,8 @@ struct ConfigTests {
             HotkeyBinding(key: KeySpec(key: "f", modifiers: [.control, .option, .command]), action: .openFinderWindow),
             HotkeyBinding(key: KeySpec(key: "m", modifiers: [.control, .option, .command]), action: .command(.maximizeReset)),
             HotkeyBinding(key: KeySpec(key: "n", modifiers: [.control, .option, .command]), action: .command(.moveToNextDisplay)),
+            HotkeyBinding(key: KeySpec(key: "left", modifiers: [.control, .option, .command]), action: .command(.moveToDesktop(.left))),
+            HotkeyBinding(key: KeySpec(key: "right", modifiers: [.control, .option, .command]), action: .command(.moveToDesktop(.right))),
             HotkeyBinding(key: KeySpec(key: "s", modifiers: [.control, .option, .command]), action: .command(.shuffle)),
             HotkeyBinding(key: KeySpec(key: "h", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.left, delta: 0.25))),
             HotkeyBinding(key: KeySpec(key: "l", modifiers: [.control, .option, .shift, .command]), action: .command(.resizeSplit(.right, delta: 0.25))),
@@ -40,6 +42,30 @@ struct ConfigTests {
             HotkeyBinding(key: KeySpec(key: "/", modifiers: [.control, .option]), action: .showCommands),
             HotkeyBinding(key: KeySpec(key: "delete", modifiers: [.control, .option]), action: .command(.resetLayout))
         ])
+    }
+
+    @Test("Lua config parses and renders desktop movement")
+    func luaConfigParsesAndRendersDesktopMovement() throws {
+        var root = defaultLuaRoot()
+        root["keymap"] = .array([
+            binding(
+                key: "left",
+                modifiers: ["control", "option", "command"],
+                action: ["type": .string("move_to_desktop"), "direction": .string("left")]
+            )
+        ])
+
+        let config = try parseConfig(LuaConfigData(root: root)).get()
+
+        #expect(config.keymap == [
+            HotkeyBinding(
+                key: KeySpec(key: "left", modifiers: [.control, .option, .command]),
+                action: .command(.moveToDesktop(.left))
+            )
+        ])
+        #expect(DefaultConfigLua.render(config).contains(
+            #"{ key = "left", modifiers = { "control", "option", "command" }, action = { type = "move_to_desktop", direction = "left" } }"#
+        ))
     }
 
     @Test("Default keymap has no duplicate key specs")
@@ -542,6 +568,8 @@ struct ConfigTests {
                 binding(key: "f", modifiers: ["control", "option", "command"], action: ["type": .string("open_finder_window")]),
                 binding(key: "m", modifiers: ["control", "option", "command"], action: ["type": .string("maximize_reset")]),
                 binding(key: "n", modifiers: ["control", "option", "command"], action: ["type": .string("move_to_next_display")]),
+                binding(key: "left", modifiers: ["control", "option", "command"], action: ["type": .string("move_to_desktop"), "direction": .string("left")]),
+                binding(key: "right", modifiers: ["control", "option", "command"], action: ["type": .string("move_to_desktop"), "direction": .string("right")]),
                 binding(key: "s", modifiers: ["control", "option", "command"], action: ["type": .string("shuffle")]),
                 binding(key: "h", modifiers: ["control", "option", "shift", "command"], action: ["type": .string("resize_split"), "direction": .string("left"), "delta": .number(0.25)]),
                 binding(key: "l", modifiers: ["control", "option", "shift", "command"], action: ["type": .string("resize_split"), "direction": .string("right"), "delta": .number(0.25)]),
