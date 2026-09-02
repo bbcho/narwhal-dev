@@ -7,6 +7,32 @@ struct DesktopSwitchShortcut: Equatable {
     let flags: CGEventFlags
 }
 
+func desktopWindowDragPoint(
+    windowFrame: CGRect,
+    controlFrames: [CGRect]
+) -> CGPoint? {
+    let titleBarBottom = min(windowFrame.maxY, windowFrame.minY + 80)
+    let titleBarControls = controlFrames.filter { frame in
+        !frame.isEmpty
+            && windowFrame.contains(CGPoint(x: frame.midX, y: frame.midY))
+            && frame.midY <= titleBarBottom
+    }
+    guard let rightmostControl = titleBarControls.max(by: { $0.maxX < $1.maxX }) else {
+        return nil
+    }
+    let point = CGPoint(x: rightmostControl.maxX + 8, y: rightmostControl.midY)
+    return windowFrame.contains(point) ? point : nil
+}
+
+func desktopWindowDragOffset(
+    windowFrame: CGRect,
+    controlFrames: [CGRect]
+) -> CGVector? {
+    desktopWindowDragPoint(windowFrame: windowFrame, controlFrames: controlFrames).map {
+        CGVector(dx: $0.x - windowFrame.minX, dy: $0.y - windowFrame.minY)
+    }
+}
+
 struct DesktopWindowMovePlan {
     let window: WindowMetadata
     let sourceSpace: SpaceID
@@ -14,6 +40,7 @@ struct DesktopWindowMovePlan {
     let display: DisplayInfo
     let displays: [DisplayID: DisplayInfo]
     let shortcut: DesktopSwitchShortcut
+    let titleBarOffset: CGVector
 }
 
 enum DesktopWindowMoveError: Error, Equatable, CustomStringConvertible {
@@ -23,6 +50,7 @@ enum DesktopWindowMoveError: Error, Equatable, CustomStringConvertible {
     case windowNotOnActiveDesktop(WindowID, SpaceID)
     case spaceClient(SpaceClientError)
     case windowServerFrameUnavailable(WindowID)
+    case draggableTitleBarPointUnavailable(WindowID)
     case inputEventCreationFailed
     case dragDidNotEngage(WindowID)
     case desktopTransitionTimedOut(SpaceID)
@@ -44,6 +72,8 @@ enum DesktopWindowMoveError: Error, Equatable, CustomStringConvertible {
             return error.description
         case .windowServerFrameUnavailable(let windowID):
             return "WindowServer frame unavailable for \(windowID.description)"
+        case .draggableTitleBarPointUnavailable(let windowID):
+            return "draggable title-bar point unavailable for \(windowID.description)"
         case .inputEventCreationFailed:
             return "could not create desktop-move input events"
         case .dragDidNotEngage(let windowID):
@@ -87,7 +117,7 @@ struct DesktopWindowMover {
         direction: DesktopMoveDirection,
         display: DisplayInfo,
         displays: [DisplayID: DisplayInfo]
-    ) -> Result<DesktopWindowMovePlan, DesktopWindowMoveError> {
+    ) async -> Result<DesktopWindowMovePlan, DesktopWindowMoveError> {
         guard let row = spaceClient.managedDisplaySpaceRows(displays: displays)[display.id],
               let activeSpace = row.activeSpace
         else {
@@ -124,16 +154,33 @@ struct DesktopWindowMover {
         guard let preferences = shortcutPreferences() else {
             return .failure(.shortcutUnavailable(direction))
         }
-        return desktopSwitchShortcut(for: direction, in: preferences).map { shortcut in
+        let shortcut: DesktopSwitchShortcut
+        switch desktopSwitchShortcut(for: direction, in: preferences) {
+        case .success(let value):
+            shortcut = value
+        case .failure(let error):
+            return .failure(error)
+        }
+
+        let titleBarOffset: CGVector
+        switch await axClient.draggableTitleBarOffset(of: window) {
+        case .success(let value):
+            titleBarOffset = value
+        case .failure:
+            return .failure(.draggableTitleBarPointUnavailable(window.id))
+        }
+
+        return .success(
             DesktopWindowMovePlan(
                 window: window,
                 sourceSpace: activeSpace,
                 destinationSpace: destinationSpace,
                 display: display,
                 displays: displays,
-                shortcut: shortcut
+                shortcut: shortcut,
+                titleBarOffset: titleBarOffset
             )
-        }
+        )
     }
 
     func execute(_ plan: DesktopWindowMovePlan) async -> Result<Void, DesktopWindowMoveError> {
@@ -149,7 +196,10 @@ struct DesktopWindowMover {
         defer {
             if let originalCursor { _ = CGWarpMouseCursorPosition(originalCursor) }
         }
-        let titleBarPoint = CGPoint(x: originalFrame.midX, y: originalFrame.minY + 12)
+        let titleBarPoint = CGPoint(
+            x: originalFrame.minX + plan.titleBarOffset.dx,
+            y: originalFrame.minY + plan.titleBarOffset.dy
+        )
         let dragPoint = CGPoint(x: titleBarPoint.x + 18, y: titleBarPoint.y)
         _ = CGWarpMouseCursorPosition(titleBarPoint)
         guard await pause(for: 0.08) else { return .failure(.cancelled) }

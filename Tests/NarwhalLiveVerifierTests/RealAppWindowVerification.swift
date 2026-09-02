@@ -33,6 +33,13 @@ struct RealAppWindowVerificationTests {
         try expectPassed(await RealAppWindowVerification.verifyChrome())
     }
 
+    @Test("Chrome accepts the resolved title-bar drag point")
+    func chromeAcceptsResolvedTitleBarDragPoint() async throws {
+        _ = NSApplication.shared
+        VerifierAppDelegate.installIfNeeded()
+        try expectPassed(await RealAppWindowVerification.verifyChromeTitleBarDragPoint())
+    }
+
     @Test("System Settings accepts real AX frame writes")
     func systemSettingsAcceptsRealAXFrameWrites() async throws {
         _ = NSApplication.shared
@@ -80,6 +87,16 @@ struct RealAppWindowVerificationTests {
         _ = NSApplication.shared
         VerifierAppDelegate.installIfNeeded()
         try expectPassed(await RealTerminalSpaceMoveVerification.verifyProductionHotkey())
+    }
+
+    @Test(
+        "Chrome moves between Spaces on a secondary display",
+        .enabled(if: NSScreen.screens.count >= 2, "Requires at least two displays.")
+    )
+    func chromeMovesAcrossSpacesOnSecondaryDisplay() async throws {
+        _ = NSApplication.shared
+        VerifierAppDelegate.installIfNeeded()
+        try expectPassed(await RealAppWindowVerification.verifyChromeSpaceMoveOnSecondaryDisplay())
     }
 
     @Test("Three Firefox windows stack vertically")
@@ -146,6 +163,251 @@ enum RealAppWindowVerification {
 
     static func verifyChrome() async -> (passed: Bool, message: String) {
         await verifyApp(chromeSpec())
+    }
+
+    static func verifyChromeTitleBarDragPoint() async -> (passed: Bool, message: String) {
+        let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
+        var chrome: RealAppOriginal?
+        let originalCursor = CGEvent(source: nil)?.location
+        defer {
+            if let originalCursor {
+                _ = CGWarpMouseCursorPosition(originalCursor)
+            }
+        }
+
+        do {
+            try waitForUnlockedSession()
+            let tracked = try await launchTrackedWindow(
+                spec: chromeSpec(),
+                using: axClient,
+                requiringNewWindow: true,
+                token: "title-bar-drag"
+            )
+            chrome = tracked
+            try await focusIfPossible(
+                tracked.metadata,
+                appName: "Google Chrome title-bar drag",
+                using: axClient
+            )
+
+            let originalFrame = try axClient.windowServerFrame(of: tracked.metadata).get()
+            let titleBarOffset = try await axClient.draggableTitleBarOffset(of: tracked.metadata).get()
+            let titleBarPoint = CGPoint(
+                x: originalFrame.minX + titleBarOffset.dx,
+                y: originalFrame.minY + titleBarOffset.dy
+            )
+            let draggedPoint = CGPoint(x: titleBarPoint.x + 24, y: titleBarPoint.y)
+            guard let mouseDown = CGEvent(
+                mouseEventSource: nil,
+                mouseType: .leftMouseDown,
+                mouseCursorPosition: titleBarPoint,
+                mouseButton: .left
+            ),
+            let mouseDragged = CGEvent(
+                mouseEventSource: nil,
+                mouseType: .leftMouseDragged,
+                mouseCursorPosition: draggedPoint,
+                mouseButton: .left
+            ),
+            let mouseUp = CGEvent(
+                mouseEventSource: nil,
+                mouseType: .leftMouseUp,
+                mouseCursorPosition: draggedPoint,
+                mouseButton: .left
+            ) else {
+                throw RealAppWindowVerifierFailure("Could not create Chrome title-bar drag events")
+            }
+
+            _ = CGWarpMouseCursorPosition(titleBarPoint)
+            await settleLiveVerifier(for: 0.08)
+            mouseDown.post(tap: .cghidEventTap)
+            await settleLiveVerifier(for: 0.15)
+            mouseDragged.post(tap: .cghidEventTap)
+            await settleLiveVerifier(for: 0.15)
+            mouseUp.post(tap: .cghidEventTap)
+            await settleLiveVerifier(for: 0.3)
+
+            let draggedServerFrame = try axClient.windowServerFrame(of: tracked.metadata).get()
+            guard abs(draggedServerFrame.minX - originalFrame.minX) >= 8 else {
+                throw RealAppWindowVerifierFailure(
+                    "Resolved Chrome title-bar point did not engage the window; "
+                        + "point=\(titleBarPoint.debugDescription) "
+                        + "before=\(originalFrame.debugDescription) after=\(draggedServerFrame.debugDescription)"
+                )
+            }
+            guard case .success(let draggedAXFrame) = await axClient.frame(of: tracked.metadata),
+                  draggedAXFrame.narwhalApproximatelyEquals(
+                    draggedServerFrame,
+                    tolerance: frameWriteSettleTolerance
+                  )
+            else {
+                throw RealAppWindowVerifierFailure(
+                    "Chrome AX and WindowServer frames disagreed after the resolved title-bar drag"
+                )
+            }
+
+            _ = try await verifyFrameWrite(
+                originalFrame,
+                metadata: tracked.metadata,
+                appName: "Google Chrome title-bar drag restore",
+                step: 1,
+                using: axClient
+            )
+            try await cleanupApp(tracked, using: axClient)
+            chrome = nil
+            return (
+                true,
+                "real Chrome moved from \(originalFrame.shortDescription) to "
+                    + "\(draggedServerFrame.shortDescription) using AX-resolved title-bar point"
+            )
+        } catch let error as RealAppWindowVerifierFailure {
+            if let chrome {
+                await cleanupAppsBestEffort([chrome], using: axClient, context: "CHROME TITLE-BAR DRAG")
+            }
+            return (false, error.message)
+        } catch {
+            if let chrome {
+                await cleanupAppsBestEffort([chrome], using: axClient, context: "CHROME TITLE-BAR DRAG")
+            }
+            return (false, "Chrome title-bar drag failed: \(String(describing: error))")
+        }
+    }
+
+    static func verifyChromeSpaceMoveOnSecondaryDisplay() async -> (passed: Bool, message: String) {
+        let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
+        let spaceClient = SpaceClient()
+        var chrome: RealAppOriginal?
+        var sourceSpace: SpaceID?
+        var targetDisplay: DisplayInfo?
+        do {
+            try waitForUnlockedSession()
+            let displays = DisplayClient().currentDisplays()
+            let orderedDisplays = displays.values.sorted { $0.slot < $1.slot }
+            guard orderedDisplays.count >= 2 else {
+                throw RealAppWindowVerifierFailure("Chrome secondary-display Space move requires at least two displays")
+            }
+
+            let secondaryDisplays = orderedDisplays.dropFirst().filter {
+                $0.visibleFrame.width >= 700 && $0.visibleFrame.height >= 500
+            }
+            var selectedTopology: (display: DisplayInfo, active: SpaceID, spaces: [SpaceID])?
+            for display in secondaryDisplays {
+                guard let row = spaceClient.managedDisplaySpaceRows(displays: displays)[display.id],
+                      let active = row.activeSpace,
+                      case .success(let spaces) = spaceClient.userSpaceIDs(in: row.spaces.map(\.id)),
+                      spaces.count >= 2
+                else { continue }
+                selectedTopology = (display, active, spaces)
+                break
+            }
+            guard let selectedTopology else {
+                throw RealAppWindowVerifierFailure(
+                    "Chrome secondary-display Space move requires a secondary display with two ordinary Spaces"
+                )
+            }
+            targetDisplay = selectedTopology.display
+            sourceSpace = selectedTopology.active
+
+            let tracked = try await launchTrackedWindow(
+                spec: chromeSpec(),
+                using: axClient,
+                requiringNewWindow: true,
+                token: "secondary-space-move"
+            )
+            chrome = tracked
+            let visible = selectedTopology.display.visibleFrame
+            let targetFrame = CGRect(
+                x: visible.minX + 60,
+                y: visible.minY + 60,
+                width: min(900, visible.width - 120),
+                height: min(700, visible.height - 120)
+            )
+            _ = try await verifyFrameWrite(
+                targetFrame,
+                metadata: tracked.metadata,
+                appName: "Google Chrome secondary-display Space move",
+                step: 1,
+                using: axClient
+            )
+            let staged = try currentWorkflowMetadata(for: tracked, using: axClient)
+            try requireFrame(
+                staged.frame,
+                isOn: selectedTopology.display,
+                context: "Chrome secondary-display Space move staging"
+            )
+            try await focusIfPossible(
+                staged,
+                appName: "Google Chrome secondary-display Space move",
+                using: axClient
+            )
+
+            let direction: DesktopMoveDirection = selectedTopology.spaces.last == selectedTopology.active
+                ? .left
+                : .right
+            let mover = DesktopWindowMover(axClient: axClient, spaceClient: spaceClient)
+            let plan = try await mover.plan(
+                window: staged,
+                direction: direction,
+                display: selectedTopology.display,
+                displays: displays
+            ).get()
+            try await mover.execute(plan).get()
+            try await RealTerminalSpaceMoveVerification.requireWindow(
+                staged.id,
+                on: plan.destinationSpace,
+                using: spaceClient,
+                timeout: 8
+            )
+            guard case .success(let destinationAXFrame) = await axClient.frame(of: staged),
+                  case .success(let destinationServerFrame) = axClient.windowServerFrame(of: staged),
+                  destinationAXFrame.narwhalApproximatelyEquals(
+                    destinationServerFrame,
+                    tolerance: frameWriteSettleTolerance
+                  )
+            else {
+                throw RealAppWindowVerifierFailure(
+                    "Chrome AX and WindowServer frames did not agree on the destination Space"
+                )
+            }
+
+            let returnPlan = try await mover.plan(
+                window: staged,
+                direction: direction == .right ? .left : .right,
+                display: selectedTopology.display,
+                displays: displays
+            ).get()
+            try await mover.execute(returnPlan).get()
+            try await RealTerminalSpaceMoveVerification.requireWindow(
+                staged.id,
+                on: selectedTopology.active,
+                using: spaceClient,
+                timeout: 8
+            )
+
+            try await cleanupApp(tracked, using: axClient)
+            chrome = nil
+            return (
+                true,
+                "real Chrome moved on secondary display \(selectedTopology.display.slot) "
+                    + "from Space \(selectedTopology.active.raw) to \(plan.destinationSpace.raw) and back"
+            )
+        } catch let error as RealAppWindowVerifierFailure {
+            if let sourceSpace, let targetDisplay {
+                _ = spaceClient.switchActiveSpace(display: targetDisplay, to: sourceSpace)
+            }
+            if let chrome {
+                await cleanupAppsBestEffort([chrome], using: axClient, context: "CHROME SECONDARY SPACE MOVE")
+            }
+            return (false, error.message)
+        } catch {
+            if let sourceSpace, let targetDisplay {
+                _ = spaceClient.switchActiveSpace(display: targetDisplay, to: sourceSpace)
+            }
+            if let chrome {
+                await cleanupAppsBestEffort([chrome], using: axClient, context: "CHROME SECONDARY SPACE MOVE")
+            }
+            return (false, "Chrome secondary-display Space move failed: \(String(describing: error))")
+        }
     }
 
     static func verifySystemSettings() async -> (passed: Bool, message: String) {

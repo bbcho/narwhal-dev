@@ -1654,6 +1654,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
              .invalidFrame,
              .visibleWindowListUnavailable,
              .windowServerFrameUnavailable,
+             .draggableTitleBarPointUnavailable,
              .windowNotRaised:
             return false
         }
@@ -1887,7 +1888,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { return false }
 
         let plan: DesktopWindowMovePlan
-        switch desktopWindowMover.plan(
+        switch await desktopWindowMover.plan(
             window: context.metadata,
             direction: direction,
             display: display,

@@ -51,6 +51,7 @@ run_phase() {
   unexpected_skips="$(
     grep -Ei 'skipped:|skipped after|test .* skipped|↳ .*requires ' "$log_file" \
       | grep -Fv 'Test "Live multi-display workflow" skipped: "Requires at least two displays."' \
+      | grep -Fv 'Test "Chrome moves between Spaces on a secondary display" skipped: "Requires at least two displays."' \
       || true
   )"
   if [ -n "$unexpected_skips" ]; then

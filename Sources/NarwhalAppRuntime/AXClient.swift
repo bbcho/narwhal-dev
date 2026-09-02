@@ -95,6 +95,7 @@ enum AXClientError: Error, CustomStringConvertible, Sendable {
     case invalidFrame(CGRect)
     case visibleWindowListUnavailable
     case windowServerFrameUnavailable(WindowID)
+    case draggableTitleBarPointUnavailable(WindowID)
     case windowNotRaised(WindowID, blocker: WindowID?)
 
     var description: String {
@@ -137,6 +138,8 @@ enum AXClientError: Error, CustomStringConvertible, Sendable {
             return "visible CG window list unavailable"
         case .windowServerFrameUnavailable(let windowID):
             return "WindowServer frame unavailable for \(windowID.description)"
+        case .draggableTitleBarPointUnavailable(let windowID):
+            return "draggable title-bar point unavailable for \(windowID.description)"
         case .windowNotRaised(let windowID, let blocker):
             if let blocker {
                 return "\(windowID.description) was not raised above overlapping window \(blocker.description)"
@@ -465,6 +468,47 @@ struct AXClient {
             return .failure(.windowServerFrameUnavailable(window.id))
         }
         return .success(frame)
+    }
+
+    @MainActor
+    func draggableTitleBarOffset(of window: WindowMetadata) async -> Result<CGVector, AXClientError> {
+        let element: AXUIElement
+        switch await windowElement(matching: window) {
+        case .success(let value):
+            element = value
+        case .failure(let error):
+            return .failure(error)
+        }
+
+        let controlAttributes = [
+            kAXCloseButtonAttribute,
+            kAXMinimizeButtonAttribute,
+            kAXZoomButtonAttribute,
+            kAXFullScreenButtonAttribute,
+        ]
+        let controlFrames = controlAttributes.compactMap { attribute -> CGRect? in
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+                  let value,
+                  CFGetTypeID(value) == AXUIElementGetTypeID()
+            else { return nil }
+
+            let control = Self.bounded(value as! AXUIElement)
+            guard case .success(let position) = pointAttribute(control, kAXPositionAttribute),
+                  case .success(let size) = sizeAttribute(control, kAXSizeAttribute)
+            else { return nil }
+            return CGRect(origin: position, size: size)
+        }
+
+        guard case .success(let windowFrame) = windowServerFrame(of: window),
+              let offset = desktopWindowDragOffset(
+                windowFrame: windowFrame,
+                controlFrames: controlFrames
+              )
+        else {
+            return .failure(.draggableTitleBarPointUnavailable(window.id))
+        }
+        return .success(offset)
     }
 
     @MainActor

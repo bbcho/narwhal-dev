@@ -117,7 +117,7 @@ enum RealTerminalSpaceMoveVerification {
             }
             originalSpace = active
             let direction: DesktopMoveDirection = activeIndex + 1 < row.spaces.count ? .right : .left
-            let plan = try mover.plan(
+            let plan = try await mover.plan(
                 window: tracked.metadata,
                 direction: direction,
                 display: targetDisplay,
@@ -134,7 +134,7 @@ enum RealTerminalSpaceMoveVerification {
                 throw RealAppWindowVerifierFailure("Terminal WindowServer surface was absent on destination Space")
             }
 
-            let returnPlan = try mover.plan(
+            let returnPlan = try await mover.plan(
                 window: tracked.metadata,
                 direction: direction == .right ? .left : .right,
                 display: targetDisplay,
@@ -164,7 +164,7 @@ enum RealTerminalSpaceMoveVerification {
         }
     }
 
-    private static func requireWindow(
+    static func requireWindow(
         _ windowID: WindowID,
         on spaceID: SpaceID,
         using spaceClient: SpaceClient,
