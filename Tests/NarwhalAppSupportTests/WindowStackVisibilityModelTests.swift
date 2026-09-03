@@ -56,6 +56,92 @@ struct WindowStackVisibilityModelTests {
         ) == .targetMissing)
     }
 
+    @Test("Focus border stacking keeps an already visible border")
+    func focusBorderStackingKeepsVisibleBorder() {
+        let target = WindowID(raw: 60)
+        let border = WindowID(raw: 61)
+
+        #expect(focusBorderStackingDecision(
+            target: target,
+            border: border,
+            frontToBackWindows: [
+                entry(border.raw, x: -1, y: -1, width: 302, height: 302),
+                entry(target.raw, x: 0, y: 0, width: 300, height: 300)
+            ],
+            ignoredWindowIDs: [border]
+        ) == .keepVisible)
+    }
+
+    @Test("Focus border stacking restacks a missing or buried border")
+    func focusBorderStackingRestacksMissingOrBuriedBorder() {
+        let target = WindowID(raw: 70)
+        let border = WindowID(raw: 71)
+        let targetEntry = entry(target.raw, x: 0, y: 0, width: 300, height: 300)
+
+        #expect(focusBorderStackingDecision(
+            target: target,
+            border: nil,
+            frontToBackWindows: [targetEntry],
+            ignoredWindowIDs: []
+        ) == .restack)
+        #expect(focusBorderStackingDecision(
+            target: target,
+            border: border,
+            frontToBackWindows: [
+                targetEntry,
+                entry(border.raw, x: -1, y: -1, width: 302, height: 302)
+            ],
+            ignoredWindowIDs: [border]
+        ) == .restack)
+    }
+
+    @Test("Focus border stacking hides an obscured or missing target")
+    func focusBorderStackingHidesInvalidTarget() {
+        let target = WindowID(raw: 80)
+        let border = WindowID(raw: 81)
+        let blocker = WindowID(raw: 82)
+
+        #expect(focusBorderStackingDecision(
+            target: target,
+            border: border,
+            frontToBackWindows: [
+                entry(border.raw, x: -1, y: -1, width: 302, height: 302),
+                entry(blocker.raw, x: 20, y: 20, width: 100, height: 100),
+                entry(target.raw, x: 0, y: 0, width: 300, height: 300)
+            ],
+            ignoredWindowIDs: [border]
+        ) == .hideBlockedBy(blocker))
+        #expect(focusBorderStackingDecision(
+            target: target,
+            border: border,
+            frontToBackWindows: [
+                entry(border.raw, x: -1, y: -1, width: 302, height: 302),
+                entry(blocker.raw, x: 20, y: 20, width: 100, height: 100)
+            ],
+            ignoredWindowIDs: [border]
+        ) == .hideTargetMissing)
+    }
+
+    @Test("Focus border stacking ignores Narwhal overlays and non-overlapping windows")
+    func focusBorderStackingIgnoresNonBlockers() {
+        let target = WindowID(raw: 90)
+        let border = WindowID(raw: 91)
+        let overlay = WindowID(raw: 92)
+        let unrelated = WindowID(raw: 93)
+
+        #expect(focusBorderStackingDecision(
+            target: target,
+            border: border,
+            frontToBackWindows: [
+                entry(overlay.raw, x: 20, y: 20, width: 100, height: 100),
+                entry(unrelated.raw, x: 500, y: 0, width: 300, height: 300),
+                entry(border.raw, x: -1, y: -1, width: 302, height: 302),
+                entry(target.raw, x: 0, y: 0, width: 300, height: 300)
+            ],
+            ignoredWindowIDs: [border, overlay]
+        ) == .keepVisible)
+    }
+
     @Test("Tiled border target visibility requires live matching bounds")
     func tiledBorderTargetVisibilityRequiresLiveMatchingBounds() {
         let target = WindowID(raw: 50)

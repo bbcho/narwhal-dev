@@ -23,6 +23,13 @@ public enum TiledBorderTargetVisibilityDecision: Equatable, Sendable {
     case hideFrameMismatch(actual: CGRect)
 }
 
+public enum FocusBorderStackingDecision: Equatable, Sendable {
+    case keepVisible
+    case restack
+    case hideBlockedBy(WindowID)
+    case hideTargetMissing
+}
+
 public func windowStackVisibility(
     target: WindowID,
     frontToBackWindows: [WindowStackEntry],
@@ -38,6 +45,41 @@ public func windowStackVisibility(
         }
     }
     return .visible
+}
+
+public func focusBorderStackingDecision(
+    target: WindowID,
+    border: WindowID?,
+    frontToBackWindows: [WindowStackEntry],
+    ignoredWindowIDs: Set<WindowID>,
+    minimumIntersectionArea: CGFloat = 1
+) -> FocusBorderStackingDecision {
+    var visibilityIgnoredWindowIDs = ignoredWindowIDs
+    if let border {
+        visibilityIgnoredWindowIDs.insert(border)
+    }
+    let targetVisibility = windowStackVisibility(
+        target: target,
+        frontToBackWindows: frontToBackWindows.filter {
+            !visibilityIgnoredWindowIDs.contains($0.id)
+        },
+        minimumIntersectionArea: minimumIntersectionArea
+    )
+
+    switch targetVisibility {
+    case .visible:
+        guard let border,
+              let borderIndex = frontToBackWindows.firstIndex(where: { $0.id == border }),
+              let targetIndex = frontToBackWindows.firstIndex(where: { $0.id == target })
+        else {
+            return .restack
+        }
+        return borderIndex < targetIndex ? .keepVisible : .restack
+    case .blockedBy(let blocker):
+        return .hideBlockedBy(blocker)
+    case .targetMissing:
+        return .hideTargetMissing
+    }
 }
 
 public func tiledBorderTargetVisibility(
