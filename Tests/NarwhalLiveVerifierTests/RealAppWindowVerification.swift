@@ -61,6 +61,13 @@ struct RealAppWindowVerificationTests {
         try expectPassed(await RealAppWindowVerification.verifyProductionRuntimeIPCWorkflow())
     }
 
+    @Test("Production focus border survives late raises in Chrome, Kitty, and Terminal")
+    func productionFocusBorderSurvivesLateRaises() async throws {
+        _ = NSApplication.shared
+        VerifierAppDelegate.installIfNeeded()
+        try expectPassed(await RealAppWindowVerification.verifyProductionFocusBorderRestacking())
+    }
+
     @Test("Chrome and Firefox complete real manual tile resize")
     func chromeAndFirefoxCompleteRealManualTileResize() async throws {
         _ = NSApplication.shared
@@ -163,6 +170,368 @@ enum RealAppWindowVerification {
 
     static func verifyChrome() async -> (passed: Bool, message: String) {
         await verifyApp(chromeSpec())
+    }
+
+    static func verifyProductionFocusBorderRestacking() async -> (passed: Bool, message: String) {
+        var axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
+        var originals: [RealAppOriginal] = []
+        var runtime: ProductionRuntimeHarness?
+        let originalCursor = CGEvent(source: nil)?.location
+        defer {
+            if let originalCursor {
+                _ = CGWarpMouseCursorPosition(originalCursor)
+            }
+        }
+
+        do {
+            try waitForUnlockedSession()
+            let displays = DisplayClient().currentDisplays()
+            let activeRuntime = try ProductionRuntimeHarness.start()
+            runtime = activeRuntime
+            _ = try await activeRuntime.waitUntilReady()
+            axClient = AXClient(
+                processID: activeRuntime.process.processIdentifier,
+                settleStrategy: .servicingRunLoop
+            )
+
+            let cases: [(spec: RealAppSpec, requiresNewWindow: Bool)] = [
+                (chromeSpec(), true),
+                (kittySpec(), false),
+                (terminalSpec(), true)
+            ]
+            var summaries: [String] = []
+            for (index, testCase) in cases.enumerated() {
+                let tracked = testCase.spec.name == "kitty"
+                    ? try await launchTrackedKittyFocusWindow(using: axClient)
+                    : try await launchTrackedWindow(
+                        spec: testCase.spec,
+                        using: axClient,
+                        requiringNewWindow: testCase.requiresNewWindow,
+                        token: "focus-border-\(index + 1)"
+                    )
+                originals.append(tracked)
+                summaries.append(try await verifyProductionFocusBorderRestacking(
+                    tracked,
+                    displays: displays,
+                    runtime: activeRuntime,
+                    axClient: axClient
+                ))
+                try await cleanupFocusBorderApp(tracked, using: axClient)
+                originals.removeLast()
+            }
+
+            try activeRuntime.stop()
+            runtime = nil
+            try await cleanupApps(originals, using: axClient)
+            originals.removeAll()
+            return (true, summaries.joined(separator: "; "))
+        } catch let error as RealAppWindowVerifierFailure {
+            let runtimeLog = runtime?.logText.split(whereSeparator: \.isNewline).suffix(40).joined(separator: "\n") ?? ""
+            runtime?.stopBestEffort()
+            await cleanupFocusBorderAppsBestEffort(originals, using: axClient)
+            return (false, error.message + "\nruntime log tail:\n" + runtimeLog)
+        } catch {
+            runtime?.stopBestEffort()
+            await cleanupFocusBorderAppsBestEffort(originals, using: axClient)
+            return (false, "production focus-border restacking failed: \(String(describing: error))")
+        }
+    }
+
+    private static func launchTrackedKittyFocusWindow(
+        using axClient: AXClient
+    ) async throws -> RealAppOriginal {
+        let spec = kittySpec()
+        let bundleID = try installedBundleID(for: spec)
+        let preexistingPIDs = Set(
+            NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                .map(\.processIdentifier)
+        )
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-n", "-a", spec.launchName]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw RealAppWindowVerifierFailure("fresh kitty launch failed with status \(process.terminationStatus)")
+        }
+
+        let deadline = Date().addingTimeInterval(8)
+        var lastDescription = "no focused snapshot"
+        while Date() < deadline {
+            let newPIDs = Set(
+                NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                    .map(\.processIdentifier)
+            ).subtracting(preexistingPIDs)
+            for application in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                where newPIDs.contains(application.processIdentifier) {
+                application.activate(options: [.activateAllWindows])
+            }
+            switch axClient.focusedWindowSnapshot() {
+            case .success(let snapshot)
+                where snapshot.bundleID.raw == bundleID
+                    && newPIDs.contains(snapshot.processID)
+                    && !snapshot.isFullscreen
+                    && snapshot.frame.width >= spec.minimumWindowSize.width
+                    && snapshot.frame.height >= spec.minimumWindowSize.height
+                    && LiveWindowServerVerification.frame(for: Int(snapshot.id.raw)) != nil:
+                return RealAppOriginal(
+                    spec: spec,
+                    bundleID: bundleID,
+                    metadata: snapshot.metadata,
+                    frame: snapshot.frame,
+                    createdByVerifier: true
+                )
+            case .success(let snapshot):
+                lastDescription = "focused=\(snapshot.id.description) bundle=\(snapshot.bundleID.raw) frame=\(snapshot.frame.debugDescription)"
+            case .failure(let error):
+                lastDescription = error.description
+            }
+            await settleLiveVerifier(for: 0.10)
+        }
+        throw RealAppWindowVerifierFailure("kitty did not expose a focused AX/WindowServer window: \(lastDescription)")
+    }
+
+    private static func cleanupFocusBorderApp(
+        _ original: RealAppOriginal,
+        using axClient: AXClient
+    ) async throws {
+        guard original.spec.name == "kitty" else {
+            try await cleanupApp(original, using: axClient)
+            return
+        }
+        guard original.createdByVerifier else { return }
+        guard let app = NSRunningApplication(processIdentifier: original.metadata.pid),
+              app.terminate()
+        else {
+            throw RealAppWindowVerifierFailure("verifier-created kitty process did not terminate")
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while !app.isTerminated, Date() < deadline {
+            await settleLiveVerifier(for: 0.05)
+        }
+        guard app.isTerminated else {
+            throw RealAppWindowVerifierFailure("verifier-created kitty process remained running")
+        }
+    }
+
+    private static func cleanupFocusBorderAppsBestEffort(
+        _ originals: [RealAppOriginal],
+        using axClient: AXClient
+    ) async {
+        for original in originals.reversed() {
+            do {
+                try await cleanupFocusBorderApp(original, using: axClient)
+            } catch {
+                report(
+                    "FOCUS BORDER RESTACK: failed to clean up \(original.spec.name) "
+                        + "window \(original.metadata.id.description): \(String(describing: error))"
+                )
+            }
+        }
+    }
+
+    private static func verifyProductionFocusBorderRestacking(
+        _ tracked: RealAppOriginal,
+        displays: [DisplayID: DisplayInfo],
+        runtime: ProductionRuntimeHarness,
+        axClient: AXClient
+    ) async throws -> String {
+        let metadata = tracked.spec.name == "kitty"
+            ? tracked.metadata
+            : try currentWorkflowMetadata(for: tracked, using: axClient)
+        if tracked.spec.name != "kitty" {
+            try await axClient.focusWindow(metadata).get()
+            await settleLiveVerifier(for: 0.12)
+        }
+        guard let display = displayContaining(metadata.frame, displays: displays) else {
+            throw RealAppWindowVerifierFailure("\(tracked.spec.name) focus border target was not on a known display")
+        }
+        try requireFocusedWindow(metadata.id, using: axClient, context: "\(tracked.spec.name) initial focus")
+        try requireTargetWindowServerFrame(metadata, using: axClient, context: "\(tracked.spec.name) initial frame")
+        _ = try await waitForProductionFocusBorderOrder(
+            borderAboveTarget: true,
+            target: metadata,
+            ownerPID: runtime.process.processIdentifier,
+            display: display,
+            timeout: 1.5,
+            context: "\(tracked.spec.name) initial focus border"
+        )
+
+        await settleLiveVerifier(for: 0.40)
+        let titleBarOffset = try await axClient.draggableTitleBarOffset(of: metadata).get()
+        let targetWindowServerFrame = try axClient.windowServerFrame(of: metadata).get()
+        let titleBarPoint = CGPoint(
+            x: targetWindowServerFrame.minX + titleBarOffset.dx,
+            y: targetWindowServerFrame.minY + titleBarOffset.dy
+        )
+        for click in 1...3 {
+            try postSafeLeftClick(at: titleBarPoint)
+            await settleLiveVerifier(for: 0.08)
+            try requireFocusedWindow(
+                metadata.id,
+                using: axClient,
+                context: "\(tracked.spec.name) click \(click) focus"
+            )
+            try requireTargetWindowServerFrame(
+                metadata,
+                using: axClient,
+                context: "\(tracked.spec.name) click \(click) frame"
+            )
+            _ = try await waitForProductionFocusBorderOrder(
+                borderAboveTarget: true,
+                target: metadata,
+                ownerPID: runtime.process.processIdentifier,
+                display: display,
+                timeout: 0.45,
+                context: "\(tracked.spec.name) click \(click) focus border"
+            )
+            await settleLiveVerifier(for: 0.32)
+        }
+
+        return "\(tracked.spec.name) repaired an observed late mouse raise"
+    }
+
+    private static func requireFocusedWindow(
+        _ expected: WindowID,
+        using axClient: AXClient,
+        context: String
+    ) throws {
+        switch axClient.focusedWindowSnapshot() {
+        case .success(let snapshot) where snapshot.id == expected:
+            return
+        case .success(let snapshot):
+            throw RealAppWindowVerifierFailure(
+                "\(context) expected focused \(expected.description), saw \(snapshot.id.description) \(snapshot.title.debugDescription)"
+            )
+        case .failure(let error):
+            throw RealAppWindowVerifierFailure(
+                "\(context) could not read focused \(expected.description): \(error.description)"
+            )
+        }
+    }
+
+    private static func requireTargetWindowServerFrame(
+        _ target: WindowMetadata,
+        using axClient: AXClient,
+        context: String
+    ) throws {
+        switch axClient.windowServerFrame(of: target) {
+        case .success(let frame)
+            where frame.narwhalApproximatelyEquals(target.frame, tolerance: frameWriteSettleTolerance):
+            return
+        case .success(let frame):
+            if target.bundleID.raw == "net.kovidgoyal.kitty",
+               target.frame.insetBy(dx: -16, dy: -16).contains(frame),
+               abs(frame.minX - target.frame.minX) <= 16,
+               abs(frame.minY - target.frame.minY) <= 16,
+               abs(frame.maxX - target.frame.maxX) <= 16,
+               abs(frame.maxY - target.frame.maxY) <= 16 {
+                return
+            }
+            throw RealAppWindowVerifierFailure(
+                "\(context) AX frame \(target.frame.debugDescription) disagreed with "
+                    + "WindowServer \(frame.debugDescription) for \(target.id.description)"
+            )
+        case .failure(let error):
+            throw RealAppWindowVerifierFailure("\(context) WindowServer frame failed: \(error.description)")
+        }
+    }
+
+    private static func waitForProductionFocusBorderOrder(
+        borderAboveTarget: Bool,
+        target: WindowMetadata,
+        ownerPID: pid_t,
+        display: DisplayInfo,
+        timeout: TimeInterval,
+        context: String
+    ) async throws -> ProductionFocusBorderEvidence {
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastDescription = "no matching border surface"
+        while Date() < deadline {
+            if let evidence = productionFocusBorderEvidence(
+                target: target,
+                ownerPID: ownerPID,
+                display: display
+            ) {
+                lastDescription = evidence.description
+                if borderAboveTarget == (evidence.borderIndex < evidence.targetIndex) {
+                    return evidence
+                }
+            }
+            await settleLiveVerifier(for: 0.01)
+        }
+        let expectedOrder = borderAboveTarget ? "border-before-target" : "target-before-border"
+        let ownerFrames = productionOverlayFrames(ownerPID: ownerPID)
+        throw RealAppWindowVerifierFailure(
+            "\(context) did not observe \(expectedOrder): \(lastDescription) "
+                + "target=\(target.id.description) frame=\(target.frame.debugDescription) ownerFrames=\(ownerFrames)"
+        )
+    }
+
+    private static func productionFocusBorderEvidence(
+        target: WindowMetadata,
+        ownerPID: pid_t,
+        display: DisplayInfo
+    ) -> ProductionFocusBorderEvidence? {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]],
+        let targetIndex = windows.firstIndex(where: {
+            ($0[kCGWindowNumber as String] as? CGWindowID) == target.id.raw
+        }) else {
+            return nil
+        }
+        let expectedFrame = productionBorderFrame(forAXFrame: target.frame, on: display)
+        for (index, window) in windows.enumerated() {
+            guard let pid = window[kCGWindowOwnerPID as String] as? pid_t,
+                  pid == ownerPID,
+                  let layer = window[kCGWindowLayer as String] as? Int,
+                  layer == NSWindow.Level.normal.rawValue,
+                  let number = window[kCGWindowNumber as String] as? CGWindowID,
+                  let alpha = window[kCGWindowAlpha as String] as? Double,
+                  alpha > 0,
+                  let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds),
+                  LiveWindowServerVerification.borderSurfaceMatches(
+                      frame,
+                      contentFrame: expectedFrame,
+                      tolerance: 0.5
+                  )
+            else {
+                continue
+            }
+            return ProductionFocusBorderEvidence(
+                borderNumber: number,
+                targetNumber: target.id.raw,
+                borderFrame: frame,
+                targetFrame: target.frame,
+                alpha: alpha,
+                borderIndex: index,
+                targetIndex: targetIndex
+            )
+        }
+        return nil
+    }
+
+    private static func postSafeLeftClick(at point: CGPoint) throws {
+        guard let down = CGEvent(
+            mouseEventSource: nil,
+            mouseType: .leftMouseDown,
+            mouseCursorPosition: point,
+            mouseButton: .left
+        ),
+        let up = CGEvent(
+            mouseEventSource: nil,
+            mouseType: .leftMouseUp,
+            mouseCursorPosition: point,
+            mouseButton: .left
+        ) else {
+            throw RealAppWindowVerifierFailure("could not create focus-border click events")
+        }
+        _ = CGWarpMouseCursorPosition(point)
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
     }
 
     static func verifyChromeTitleBarDragPoint() async -> (passed: Bool, message: String) {
@@ -3635,6 +4004,9 @@ enum RealAppWindowVerification {
                     }
                 case .failure(let error):
                     lastIdentityFailure = "candidate=\(candidate.id.description) focus failed: \(error.description)"
+                    if spec.pattern == .browser {
+                        postEscapeKey()
+                    }
                 }
             }
             await settleLiveVerifier(for: 0.25)
@@ -3752,6 +4124,14 @@ enum RealAppWindowVerification {
     private static func report(_ message: String) {
         print(message)
         fflush(stdout)
+    }
+
+    private static func postEscapeKey() {
+        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: true),
+              let up = CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: false)
+        else { return }
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
     }
 
     private static func closeTerminalWindow(windowID: WindowID) -> Bool {
@@ -3947,6 +4327,22 @@ struct RealAppOriginal {
     let metadata: WindowMetadata
     let frame: CGRect
     let createdByVerifier: Bool
+}
+
+private struct ProductionFocusBorderEvidence {
+    let borderNumber: CGWindowID
+    let targetNumber: CGWindowID
+    let borderFrame: CGRect
+    let targetFrame: CGRect
+    let alpha: Double
+    let borderIndex: Int
+    let targetIndex: Int
+
+    var description: String {
+        "border=\(borderNumber) target=\(targetNumber) alpha=\(alpha) "
+            + "borderIndex=\(borderIndex) targetIndex=\(targetIndex) "
+            + "borderFrame=\(borderFrame.debugDescription) targetFrame=\(targetFrame.debugDescription)"
+    }
 }
 
 enum RealAppPattern {
