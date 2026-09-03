@@ -332,8 +332,11 @@ enum LiveFocusWorkflowVerification {
             .settingTiledBorders(tiledTargets)
             .showingFocusBorder(parentTarget)
         overlay.render(overlayModel)
-        guard overlay.debugFocusBorderIsVisuallyVisible() else {
-            throw LiveFocusWorkflowFailure("sheet workflow parent focus border was not initially visible")
+        try waitFor(
+            timeout: 0.5,
+            description: "sheet workflow parent focus border was not initially visible"
+        ) {
+            overlay.debugFocusBorderIsVisuallyVisible()
         }
 
         let sheet = NSPanel(

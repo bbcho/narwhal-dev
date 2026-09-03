@@ -252,7 +252,7 @@ enum LiveSpaceSwitchFocusBorderVerification {
               borderIndex < targetIndex
         else {
             throw SpaceSwitchFocusBorderFailure(
-                "live Space-switch focus border was not visibly above target \(context): target=\(targetWindow.windowNumber) border=\(String(describing: overlay.debugFocusBorderWindowNumber())) visible=\(overlay.debugFocusBorderIsVisible())"
+                "live Space-switch focus border was not visibly above target \(context): target=\(targetWindow.windowNumber) border=\(String(describing: overlay.debugFocusBorderWindowNumber())) visible=\(overlay.debugFocusBorderIsVisible()) visual=\(overlay.debugFocusBorderIsVisuallyVisible())"
             )
         }
     }
