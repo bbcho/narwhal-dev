@@ -1054,6 +1054,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             spaceChanged: { [weak self] in
                 self?.activeSpaceChanged()
+            },
+            reconcileFocusedWindow: { [weak self] snapshot in
+                self?.overlay.reconcileFocusBorderAfterObservation(ifCurrent: snapshot.id)
             }
         ) { [weak self] event, snapshot in
             Task { @MainActor in
@@ -1156,6 +1159,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let client = EventTapClient(
             modifier: config.dragModifier,
             reporter: reporter,
+            targetWindowMayRaise: { [weak self] in
+                self?.overlay.targetWindowMayRaise()
+            },
             dragChanged: { [weak self] location in
                 Task { @MainActor in
                     self?.previewDragDrop(at: location)

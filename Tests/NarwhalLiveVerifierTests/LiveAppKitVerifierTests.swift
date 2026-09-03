@@ -33,6 +33,11 @@ struct LiveAppKitVerifierTests {
         try expectPassed(FocusBorderVerification.verifyPerWindowCornerRadii())
     }
 
+    @Test("Focus border reconciliation lifecycle")
+    func focusBorderReconciliationLifecycle() throws {
+        try expectPassed(FocusBorderVerification.verifyReconciliationLifecycle())
+    }
+
     @Test("Tiled border stale target suppression")
     func tiledBorderStaleTargetSuppression() throws {
         try expectPassed(FocusBorderVerification.verifyTiledBorderStaleTargetSuppression())
@@ -84,6 +89,11 @@ struct LiveAppKitVerifierTests {
     @Test("Focused-unavailable polling")
     func focusedUnavailablePolling() throws {
         try expectPassed(FocusedUnavailablePollingVerification.verifyUnavailableFocusIsNotLoggedEveryPoll())
+    }
+
+    @Test("Stable focus reconciliation polling")
+    func stableFocusReconciliationPolling() throws {
+        try expectPassed(FocusedUnavailablePollingVerification.verifyStableFocusIsReconciledEveryPoll())
     }
 
     @Test("Space focus recovery")

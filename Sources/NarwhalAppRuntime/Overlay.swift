@@ -38,6 +38,14 @@ private let cgsOrderWindow: CGSOrderWindowFunc? =
 private let kCGSOrderAbove: Int32 = 1
 private let kCGSOrderBelow: Int32 = -1
 
+enum FocusBorderReconciliationOutcome: Equatable, Sendable {
+    case keptVisible
+    case restackedAwaitingConfirmation
+    case hidden
+    case snapshotUnavailable
+    case notCurrent
+}
+
 enum OverlayTone {
     case info
     case success
@@ -54,21 +62,16 @@ struct OverlayRenderResult: Equatable, Sendable {
     let staleTiledBorderTargets: [WindowID]
 }
 
-private struct OverlayWindowEntry {
-    let cgID: CGWindowID
-    let frame: CGRect
-
-    var stackEntry: WindowStackEntry {
-        WindowStackEntry(id: WindowID(raw: cgID), frame: frame)
-    }
-}
-
 @MainActor
 final class Overlay {
     private static let tiledBorderConfig = BorderConfig(width: 2, colorHex: "#30D158")
+    private static let focusBorderReconciliationInterval: TimeInterval = 0.05
+    private static let focusBorderReconciliationDuration: TimeInterval = 0.30
 
     private var borderConfig: BorderConfig
     private var hudConfig: HUDConfig
+    private let windowStackEntries: @MainActor () -> [WindowStackEntry]?
+    private let windowID: @MainActor (NSWindow) -> WindowID?
     private var borderWindow: NSWindow?
     private var borderView: BorderView?
     private var tiledBorderWindows: [WindowID: NSWindow] = [:]
@@ -79,12 +82,22 @@ final class Overlay {
     private var dragPreviewWindow: NSWindow?
     private var dragPreviewView: DragPreviewView?
     private var focusBorderSuppression: FocusBorderSuppression?
-    private var focusBorderRestackTimers: [Timer] = []
+    private var focusBorderReconciliationTimer: Timer?
+    private var focusBorderReconciliationTargetID: WindowID?
+    private var focusBorderReconciliationDeadline: TimeInterval?
+    private var focusBorderAwaitingConfirmation = false
     private var visibleWindowID: WindowID?
 
-    init(border: BorderConfig, hud: HUDConfig) {
+    init(
+        border: BorderConfig,
+        hud: HUDConfig,
+        windowStackEntries: (@MainActor () -> [WindowStackEntry]?)? = nil,
+        windowID: (@MainActor (NSWindow) -> WindowID?)? = nil
+    ) {
         self.borderConfig = border
         self.hudConfig = hud
+        self.windowStackEntries = windowStackEntries ?? Self.liveWindowStackEntries
+        self.windowID = windowID ?? Self.liveWindowID
     }
 
     func updateConfig(border: BorderConfig, hud: HUDConfig) {
@@ -103,10 +116,6 @@ final class Overlay {
         let staleTiledBorderTargets = renderTiledBorders(model.tiledBorders)
         if let focusBorder = model.focusBorder {
             showFocusBorder(focusBorder)
-            enforceFocusBorderObscurationVisibility(
-                target: focusBorder,
-                entries: currentOverlayWindowEntries()
-            )
         } else {
             hideFocusBorder()
         }
@@ -119,11 +128,10 @@ final class Overlay {
             hideTiledBorder(windowID)
         }
 
-        let liveWindowEntries = currentOverlayWindowEntries()
-        let liveStackEntries = liveWindowEntries?.map(\.stackEntry)
+        let liveWindowEntries = windowStackEntries()
         var staleTargets: [WindowID] = []
         for target in targets.sorted(by: { $0.windowID.raw < $1.windowID.raw }) {
-            if showTiledBorder(target, liveWindows: liveStackEntries) {
+            if showTiledBorder(target, liveWindows: liveWindowEntries) {
                 staleTargets.append(target.windowID)
             }
         }
@@ -137,21 +145,21 @@ final class Overlay {
         return staleTargets
     }
 
-    private func enforceTiledBorderObscurationVisibility(targets: [FocusBorderTarget], entries: [OverlayWindowEntry]) {
+    private func enforceTiledBorderObscurationVisibility(targets: [FocusBorderTarget], entries: [WindowStackEntry]) {
         let tileIDs = Set(targets.map(\.windowID.raw))
-        let overlayWindowNumbers = ownOverlayWindowNumbers()
+        let overlayWindowIDs = ownOverlayWindowIDs()
 
         for target in targets {
             guard let borderWindow = tiledBorderWindows[target.windowID] else { continue }
             let tileFrame = appKitFrame(forAXFrame: target.frame)
-            guard let tileIndex = entries.firstIndex(where: { $0.cgID == target.windowID.raw }) else {
+            guard let tileIndex = entries.firstIndex(where: { $0.id == target.windowID }) else {
                 if borderWindow.isVisible { borderWindow.orderOut(nil) }
                 continue
             }
             var obscured = false
             for above in entries[0..<tileIndex] {
-                if overlayWindowNumbers.contains(above.cgID) { continue }
-                if tileIDs.contains(above.cgID) { continue }
+                if overlayWindowIDs.contains(above.id) { continue }
+                if tileIDs.contains(above.id.raw) { continue }
                 if appKitFrame(forAXFrame: above.frame).intersects(tileFrame) {
                     obscured = true
                     break
@@ -164,31 +172,10 @@ final class Overlay {
         }
     }
 
-    private func enforceFocusBorderObscurationVisibility(
-        target: FocusBorderTarget,
-        entries: [OverlayWindowEntry]?
-    ) {
-        guard let borderWindow, let entries else { return }
-        let overlayWindowNumbers = ownOverlayWindowNumbers()
-        let targetFrame = appKitFrame(forAXFrame: target.frame)
-        guard let targetIndex = entries.firstIndex(where: { $0.cgID == target.windowID.raw }) else {
-            borderWindow.alphaValue = 0
-            return
-        }
-        let isObscured = entries[0..<targetIndex].contains { entry in
-            !overlayWindowNumbers.contains(entry.cgID)
-                && appKitFrame(forAXFrame: entry.frame).intersects(targetFrame)
-        }
-        borderWindow.alphaValue = isObscured ? 0 : 1
-    }
-
-    private func ownOverlayWindowNumbers() -> Set<CGWindowID> {
+    private func ownOverlayWindowIDs() -> Set<WindowID> {
         let windows = [borderWindow, commandWindow, hudWindow, dragPreviewWindow]
             + Array(tiledBorderWindows.values)
-        return Set(windows.compactMap { window -> CGWindowID? in
-            guard let number = window?.windowNumber, number > 0 else { return nil }
-            return CGWindowID(number)
-        })
+        return Set(windows.compactMap { window in window.flatMap(windowID) })
     }
 
 #if NARWHAL_ENABLE_VERIFIERS
@@ -214,6 +201,10 @@ final class Overlay {
 
     func debugFocusBorderLevelRawValue() -> Int? {
         borderWindow?.level.rawValue
+    }
+
+    func debugFocusBorderReconciliationIsScheduled() -> Bool {
+        focusBorderReconciliationTimer != nil
     }
 
     func debugTiledBorderWindowIDs() -> [WindowID] {
@@ -320,21 +311,28 @@ final class Overlay {
             return
         }
 
+        let wasCurrentTarget = visibleWindowID == target.windowID
         let appKitFrame = appKitFrame(forAXFrame: target.frame).insetBy(dx: -borderConfig.width / 2, dy: -borderConfig.width / 2)
         let window = borderWindow ?? makeBorderWindow(frame: appKitFrame)
+        let requiresMaterialization = !window.isVisible
         let view = borderView ?? BorderView(border: borderConfig, cornerRadius: target.cornerRadius)
         if borderView == nil {
             window.contentView = view
             borderView = view
         }
         view.update(border: borderConfig, cornerRadius: target.cornerRadius)
+        if !wasCurrentTarget || requiresMaterialization {
+            window.alphaValue = 0
+        }
         window.setFrame(appKitFrame, display: true)
-        window.alphaValue = 1
         borderWindow = window
         visibleWindowID = target.windowID
-        orderFocusBorderWindow(window, above: target.windowID)
+        if requiresMaterialization {
+            orderFocusBorderWindow(window, above: target.windowID)
+        }
         orderUnfocusedTiledBordersBelowFocusedWindow(target)
-        scheduleFocusBorderRestacks(above: target.windowID)
+        _ = reconcileFocusBorder(ifCurrent: target.windowID)
+        scheduleFocusBorderReconciliation(for: target.windowID)
     }
 
     private func showTiledBorder(_ target: FocusBorderTarget, liveWindows: [WindowStackEntry]?) -> Bool {
@@ -375,12 +373,12 @@ final class Overlay {
     }
 
     private func hideFocusBorder() {
-        cancelFocusBorderRestacks()
+        cancelFocusBorderReconciliation()
         borderWindow?.orderOut(nil)
         visibleWindowID = nil
     }
 
-    private func currentOverlayWindowEntries() -> [OverlayWindowEntry]? {
+    private static func liveWindowStackEntries() -> [WindowStackEntry]? {
         guard let windows = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements],
             kCGNullWindowID
@@ -388,16 +386,23 @@ final class Overlay {
 
         return windows.compactMap { window in
             guard let cgID = window[kCGWindowNumber as String] as? CGWindowID,
+                  let ownerPID = window[kCGWindowOwnerPID as String] as? pid_t,
                   let layer = window[kCGWindowLayer as String] as? Int,
                   layer == NSWindow.Level.normal.rawValue,
                   let boundsDict = window[kCGWindowBounds as String] as? NSDictionary,
                   let frame = CGRect(dictionaryRepresentation: boundsDict)
             else { return nil }
-            return OverlayWindowEntry(
-                cgID: cgID,
-                frame: frame
+            return WindowStackEntry(
+                id: WindowID(raw: cgID),
+                frame: frame,
+                ownerPID: ownerPID
             )
         }
+    }
+
+    private static func liveWindowID(_ window: NSWindow) -> WindowID? {
+        guard window.windowNumber > 0 else { return nil }
+        return WindowID(raw: CGWindowID(window.windowNumber))
     }
 
     private func showCommandOverlay(bindings: [HotkeyBinding], dragModifier: ModifierSet, zones: [Zone]) {
@@ -456,30 +461,116 @@ final class Overlay {
         window.orderFrontRegardless()
     }
 
-    private func scheduleFocusBorderRestacks(above targetWindowID: WindowID) {
-        cancelFocusBorderRestacks()
-        focusBorderRestackTimers = [0.05, 0.15, 0.30].map { delay in
-            let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.restackFocusBorderIfCurrent(above: targetWindowID)
-                }
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            return timer
+    func targetWindowMayRaise() {
+        guard let visibleWindowID else { return }
+        scheduleFocusBorderReconciliation(for: visibleWindowID)
+    }
+
+    func reconcileFocusBorderAfterObservation(ifCurrent targetWindowID: WindowID) {
+        if reconcileFocusBorder(ifCurrent: targetWindowID) == .restackedAwaitingConfirmation {
+            scheduleFocusBorderReconciliation(for: targetWindowID)
         }
     }
 
-    private func cancelFocusBorderRestacks() {
-        focusBorderRestackTimers.forEach { $0.invalidate() }
-        focusBorderRestackTimers.removeAll()
-    }
-
-    private func restackFocusBorderIfCurrent(above targetWindowID: WindowID) {
+    @discardableResult
+    func reconcileFocusBorder(ifCurrent targetWindowID: WindowID) -> FocusBorderReconciliationOutcome {
         guard visibleWindowID == targetWindowID,
               let borderWindow,
               borderWindow.isVisible
-        else { return }
-        orderFocusBorderWindow(borderWindow, above: targetWindowID)
+        else {
+            return .notCurrent
+        }
+        guard let entries = windowStackEntries() else {
+            return .snapshotUnavailable
+        }
+        let borderID = windowID(borderWindow)
+        let decision = focusBorderStackingDecision(
+            target: targetWindowID,
+            border: borderID,
+            frontToBackWindows: entries,
+            ignoredWindowIDs: ownOverlayWindowIDs()
+        )
+
+        switch decision {
+        case .keepVisible:
+            borderWindow.alphaValue = 1
+            return .keptVisible
+        case .restack:
+            borderWindow.alphaValue = 0
+            orderFocusBorderWindow(borderWindow, above: targetWindowID)
+            return .restackedAwaitingConfirmation
+        case .hideBlockedBy, .hideTargetMissing:
+            borderWindow.alphaValue = 0
+            return .hidden
+        }
+    }
+
+    private func scheduleFocusBorderReconciliation(for targetWindowID: WindowID) {
+        let deadline = ProcessInfo.processInfo.systemUptime + Self.focusBorderReconciliationDuration
+        if focusBorderReconciliationTargetID == targetWindowID,
+           focusBorderReconciliationTimer != nil {
+            focusBorderReconciliationDeadline = max(focusBorderReconciliationDeadline ?? deadline, deadline)
+            focusBorderAwaitingConfirmation = false
+            return
+        }
+
+        cancelFocusBorderReconciliation()
+        focusBorderReconciliationTargetID = targetWindowID
+        focusBorderReconciliationDeadline = deadline
+        scheduleNextFocusBorderReconciliation(after: Self.focusBorderReconciliationInterval)
+    }
+
+    private func scheduleNextFocusBorderReconciliation(after delay: TimeInterval) {
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, self.focusBorderReconciliationTimer === timer else { return }
+                self.focusBorderReconciliationTimer = nil
+                self.fireFocusBorderReconciliation()
+            }
+        }
+        focusBorderReconciliationTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func fireFocusBorderReconciliation() {
+        guard let targetWindowID = focusBorderReconciliationTargetID,
+              let deadline = focusBorderReconciliationDeadline
+        else {
+            cancelFocusBorderReconciliation()
+            return
+        }
+
+        let outcome = reconcileFocusBorder(ifCurrent: targetWindowID)
+        if outcome == .notCurrent {
+            cancelFocusBorderReconciliation()
+            return
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        if now < deadline {
+            let delay = min(Self.focusBorderReconciliationInterval, deadline - now)
+            scheduleNextFocusBorderReconciliation(after: delay)
+            return
+        }
+
+        if focusBorderAwaitingConfirmation {
+            cancelFocusBorderReconciliation()
+            return
+        }
+        if outcome == .restackedAwaitingConfirmation {
+            focusBorderAwaitingConfirmation = true
+            scheduleNextFocusBorderReconciliation(after: Self.focusBorderReconciliationInterval)
+            return
+        }
+        cancelFocusBorderReconciliation()
+    }
+
+    private func cancelFocusBorderReconciliation() {
+        focusBorderReconciliationTimer?.invalidate()
+        focusBorderReconciliationTimer = nil
+        focusBorderReconciliationTargetID = nil
+        focusBorderReconciliationDeadline = nil
+        focusBorderAwaitingConfirmation = false
     }
 
     private func makeTiledBorderWindow(frame: CGRect) -> NSWindow {

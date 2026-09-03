@@ -676,6 +676,133 @@ private struct VisualArtifactStats {
 
 @MainActor
 enum FocusBorderVerification {
+    static func verifyReconciliationLifecycle() -> (passed: Bool, message: String) {
+        let targetFrame = CGRect(x: 120, y: 120, width: 300, height: 220)
+        let targetID = WindowID(raw: 700)
+        let borderID = WindowID(raw: 701)
+        var stack: [WindowStackEntry]?
+        let overlay = Overlay(
+            border: Config.default.border,
+            hud: Config.default.hud,
+            windowStackEntries: { stack },
+            windowID: { _ in borderID }
+        )
+        defer {
+            overlay.stop()
+        }
+        let target = FocusBorderTarget(windowID: targetID, frame: targetFrame, cornerRadius: 12)
+
+        overlay.render(.empty.showingFocusBorder(target))
+        let borderEntry = WindowStackEntry(
+            id: borderID,
+            frame: targetFrame.insetBy(dx: -1, dy: -1)
+        )
+        let targetEntry = WindowStackEntry(id: targetID, frame: targetFrame)
+        guard overlay.debugFocusBorderIsVisible(),
+              !overlay.debugFocusBorderIsVisuallyVisible()
+        else {
+            return (false, "unverified focus border was visible during materialization")
+        }
+
+        stack = [borderEntry, targetEntry]
+        let confirmedOutcome = overlay.reconcileFocusBorder(ifCurrent: targetID)
+        guard confirmedOutcome == .keptVisible,
+              overlay.debugFocusBorderIsVisuallyVisible()
+        else {
+            return (
+                false,
+                "confirmed focus border did not become visible: outcome=\(confirmedOutcome) target=\(targetID.description) border=\(borderID.description) visible=\(overlay.debugFocusBorderIsVisible())"
+            )
+        }
+
+        stack = [targetEntry, borderEntry]
+        guard overlay.reconcileFocusBorder(ifCurrent: targetID) == .restackedAwaitingConfirmation,
+              !overlay.debugFocusBorderIsVisuallyVisible()
+        else {
+            return (false, "buried focus border was not restacked transparently")
+        }
+        stack = [borderEntry, targetEntry]
+        guard overlay.reconcileFocusBorder(ifCurrent: targetID) == .keptVisible,
+              overlay.debugFocusBorderIsVisuallyVisible()
+        else {
+            return (false, "restacked focus border became visible without confirmation")
+        }
+
+        let blocker = WindowStackEntry(
+            id: WindowID(raw: borderID.raw + 1),
+            frame: CGRect(x: 140, y: 140, width: 100, height: 100)
+        )
+        stack = [borderEntry, blocker, targetEntry]
+        guard overlay.reconcileFocusBorder(ifCurrent: targetID) == .hidden,
+              !overlay.debugFocusBorderIsVisuallyVisible()
+        else {
+            return (false, "obscured focus border was not hidden")
+        }
+        stack = nil
+        guard overlay.reconcileFocusBorder(ifCurrent: targetID) == .snapshotUnavailable,
+              !overlay.debugFocusBorderIsVisuallyVisible(),
+              overlay.reconcileFocusBorder(ifCurrent: WindowID(raw: targetID.raw + 10)) == .notCurrent
+        else {
+            return (false, "focus border reconciliation failure outcomes were not explicit")
+        }
+
+        stack = [targetEntry, borderEntry]
+        overlay.reconcileFocusBorderAfterObservation(ifCurrent: targetID)
+        stack = [borderEntry, targetEntry]
+        RunLoop.current.run(until: Date().addingTimeInterval(0.08))
+        guard overlay.debugFocusBorderIsVisuallyVisible() else {
+            return (false, "stable AX observation did not confirm its transparent restack")
+        }
+
+        var burstStarted = ProcessInfo.processInfo.systemUptime
+        var burstReads = 0
+        stack = [targetEntry, borderEntry]
+        overlay.targetWindowMayRaise()
+        let rapidRequestDeadline = burstStarted + 0.20
+        while ProcessInfo.processInfo.systemUptime < rapidRequestDeadline {
+            overlay.targetWindowMayRaise()
+            burstReads += 1
+            if burstReads == 3 {
+                stack = [borderEntry, targetEntry]
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        guard overlay.debugFocusBorderIsVisuallyVisible() else {
+            return (false, "rapid focus-border requests starved the earliest reconciliation")
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.38))
+        guard !overlay.debugFocusBorderReconciliationIsScheduled() else {
+            return (false, "focus-border reconciliation burst did not stop after rapid requests")
+        }
+
+        burstStarted = ProcessInfo.processInfo.systemUptime
+        stack = [targetEntry, borderEntry]
+        overlay.targetWindowMayRaise()
+        let confirmationSwitch = burstStarted + 0.32
+        while ProcessInfo.processInfo.systemUptime < burstStarted + 0.42 {
+            if ProcessInfo.processInfo.systemUptime >= confirmationSwitch {
+                stack = [borderEntry, targetEntry]
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        guard overlay.debugFocusBorderIsVisuallyVisible(),
+              !overlay.debugFocusBorderReconciliationIsScheduled()
+        else {
+            return (false, "deadline restack did not receive one visible confirmation tick")
+        }
+
+        stack = [targetEntry, borderEntry]
+        overlay.targetWindowMayRaise()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.42))
+        guard !overlay.debugFocusBorderIsVisuallyVisible(),
+              !overlay.debugFocusBorderReconciliationIsScheduled()
+        else {
+            return (false, "failed focus-border confirmation did not stop safely while transparent")
+        }
+
+        return (true, "focus border reconciliation kept, restacked, hid, coalesced, and confirmed safely")
+    }
+
     static func verifyTiledBorderStaleTargetSuppression() -> (passed: Bool, message: String) {
         _ = NSApplication.shared
         let targetWindow = makeVerificationWindow(

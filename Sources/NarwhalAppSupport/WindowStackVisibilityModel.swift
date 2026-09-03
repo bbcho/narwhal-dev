@@ -4,10 +4,12 @@ import NarwhalCore
 public struct WindowStackEntry: Equatable, Sendable {
     public let id: WindowID
     public let frame: CGRect
+    public let ownerPID: ProcessID?
 
-    public init(id: WindowID, frame: CGRect) {
+    public init(id: WindowID, frame: CGRect, ownerPID: ProcessID? = nil) {
         self.id = id
         self.frame = frame
+        self.ownerPID = ownerPID
     }
 }
 
@@ -58,6 +60,15 @@ public func focusBorderStackingDecision(
     if let border {
         visibilityIgnoredWindowIDs.insert(border)
     }
+    if let targetEntry = frontToBackWindows.first(where: { $0.id == target }),
+       let targetOwnerPID = targetEntry.ownerPID {
+        for entry in frontToBackWindows where entry.id != target {
+            if entry.ownerPID == targetOwnerPID,
+               isTargetSurfaceCompanion(entry.frame, of: targetEntry.frame) {
+                visibilityIgnoredWindowIDs.insert(entry.id)
+            }
+        }
+    }
     let targetVisibility = windowStackVisibility(
         target: target,
         frontToBackWindows: frontToBackWindows.filter {
@@ -80,6 +91,18 @@ public func focusBorderStackingDecision(
     case .targetMissing:
         return .hideTargetMissing
     }
+}
+
+private func isTargetSurfaceCompanion(_ candidate: CGRect, of target: CGRect) -> Bool {
+    let tolerance: CGFloat = 2
+    guard target.insetBy(dx: -tolerance, dy: -tolerance).contains(candidate) else {
+        return false
+    }
+    let spansWidth = abs(candidate.minX - target.minX) <= tolerance
+        && abs(candidate.width - target.width) <= tolerance * 2
+    let spansHeight = abs(candidate.minY - target.minY) <= tolerance
+        && abs(candidate.height - target.height) <= tolerance * 2
+    return spansWidth || spansHeight
 }
 
 public func tiledBorderTargetVisibility(

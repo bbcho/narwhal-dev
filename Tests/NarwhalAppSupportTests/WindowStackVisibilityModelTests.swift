@@ -142,6 +142,37 @@ struct WindowStackVisibilityModelTests {
         ) == .keepVisible)
     }
 
+    @Test("Focus border stacking ignores target companion surfaces but not sibling windows")
+    func focusBorderStackingClassifiesSameProcessSurfaces() {
+        let target = WindowID(raw: 94)
+        let border = WindowID(raw: 95)
+        let companion = WindowID(raw: 96)
+        let sibling = WindowID(raw: 97)
+        let targetEntry = entry(target.raw, x: 0, y: 0, width: 600, height: 400, ownerPID: 42)
+        let borderEntry = entry(border.raw, x: -1, y: -1, width: 602, height: 402, ownerPID: 7)
+
+        #expect(focusBorderStackingDecision(
+            target: target,
+            border: border,
+            frontToBackWindows: [
+                borderEntry,
+                entry(companion.raw, x: 0, y: 0, width: 600, height: 44, ownerPID: 42),
+                targetEntry
+            ],
+            ignoredWindowIDs: [border]
+        ) == .keepVisible)
+        #expect(focusBorderStackingDecision(
+            target: target,
+            border: border,
+            frontToBackWindows: [
+                borderEntry,
+                entry(sibling.raw, x: 40, y: 40, width: 300, height: 200, ownerPID: 42),
+                targetEntry
+            ],
+            ignoredWindowIDs: [border]
+        ) == .hideBlockedBy(sibling))
+    }
+
     @Test("Tiled border target visibility requires live matching bounds")
     func tiledBorderTargetVisibilityRequiresLiveMatchingBounds() {
         let target = WindowID(raw: 50)
@@ -177,11 +208,13 @@ struct WindowStackVisibilityModelTests {
         x: CGFloat,
         y: CGFloat,
         width: CGFloat,
-        height: CGFloat
+        height: CGFloat,
+        ownerPID: ProcessID? = nil
     ) -> WindowStackEntry {
         WindowStackEntry(
             id: WindowID(raw: raw),
-            frame: CGRect(x: x, y: y, width: width, height: height)
+            frame: CGRect(x: x, y: y, width: width, height: height),
+            ownerPID: ownerPID
         )
     }
 }

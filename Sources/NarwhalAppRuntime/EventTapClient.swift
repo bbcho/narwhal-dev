@@ -7,6 +7,7 @@ import NarwhalCore
 final class EventTapClient {
     private var modifier: ModifierSet
     private let reporter: StartupReporter
+    private let targetWindowMayRaise: () -> Void
     private let dragChanged: (CGPoint) -> Void
     private let dragEnded: () -> Void
     private let drop: (CGPoint) -> Void
@@ -17,12 +18,14 @@ final class EventTapClient {
     init(
         modifier: ModifierSet,
         reporter: StartupReporter,
+        targetWindowMayRaise: @escaping () -> Void,
         dragChanged: @escaping (CGPoint) -> Void,
         dragEnded: @escaping () -> Void,
         drop: @escaping (CGPoint) -> Void
     ) {
         self.modifier = modifier
         self.reporter = reporter
+        self.targetWindowMayRaise = targetWindowMayRaise
         self.dragChanged = dragChanged
         self.dragEnded = dragEnded
         self.drop = drop
@@ -31,7 +34,13 @@ final class EventTapClient {
     func start() throws {
         guard eventTap == nil else { return }
 
-        let mask = eventMask([.leftMouseDown, .leftMouseDragged, .leftMouseUp])
+        let mask = eventMask([
+            .leftMouseDown,
+            .rightMouseDown,
+            .otherMouseDown,
+            .leftMouseDragged,
+            .leftMouseUp
+        ])
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -72,7 +81,7 @@ final class EventTapClient {
         applyDragInput(.cancel)
     }
 
-    private func handle(type: CGEventType, location: CGPoint, flagsRaw: UInt64) {
+    func handle(type: CGEventType, location: CGPoint, flagsRaw: UInt64) {
         dispatchPrecondition(condition: .onQueue(.main))
         switch type {
         case .tapDisabledByTimeout:
@@ -85,7 +94,10 @@ final class EventTapClient {
             reporter.error("Drag-zone event tap disabled by user input")
             applyDragInput(.cancel)
         case .leftMouseDown:
+            targetWindowMayRaise()
             applyDragInput(.mouseDown(location: location, modifiers: modifiers(from: flagsRaw)))
+        case .rightMouseDown, .otherMouseDown:
+            targetWindowMayRaise()
         case .leftMouseDragged:
             applyDragInput(.mouseDragged(location: location, modifiers: modifiers(from: flagsRaw)))
         case .leftMouseUp:

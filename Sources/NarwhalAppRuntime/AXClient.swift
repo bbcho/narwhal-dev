@@ -310,7 +310,11 @@ struct AXClient {
             else {
                 return nil
             }
-            return WindowStackEntry(id: WindowID(raw: number), frame: frame)
+            return WindowStackEntry(
+                id: WindowID(raw: number),
+                frame: frame,
+                ownerPID: ownerPID
+            )
         }
 
         return .success(windowStackVisibility(target: target, frontToBackWindows: entries))

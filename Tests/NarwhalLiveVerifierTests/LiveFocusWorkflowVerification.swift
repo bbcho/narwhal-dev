@@ -203,6 +203,9 @@ enum LiveFocusWorkflowVerification {
                 reporter: StartupReporter(logPath: "/tmp/narwhal-live-focus-workflow.log"),
                 activeSpaceByDisplay: { _ in [display.id: activeSpace] },
                 spaceChanged: {},
+                reconcileFocusedWindow: { snapshot in
+                    overlay.reconcileFocusBorderAfterObservation(ifCurrent: snapshot.id)
+                },
                 emit: { event, snapshot in
                     guard case .windowFocused(let windowID) = event else { return }
                     if let snapshot,

@@ -13,6 +13,7 @@ final class AXObserverService {
     private let echoSuppressor: AXEchoSuppressor
     private let reporter: StartupReporter
     private let activeSpaceByDisplay: @MainActor ([WindowMetadata]) -> [DisplayID: SpaceID]
+    private let reconcileFocusedWindow: @MainActor (FocusedWindowSnapshot) -> Void
     private let emit: @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
     private let spaceChanged: @MainActor () -> Void
     private let notificationFastPathEnabled: Bool
@@ -32,6 +33,7 @@ final class AXObserverService {
         reporter: StartupReporter,
         activeSpaceByDisplay: @escaping @MainActor ([WindowMetadata]) -> [DisplayID: SpaceID],
         spaceChanged: @escaping @MainActor () -> Void,
+        reconcileFocusedWindow: @escaping @MainActor (FocusedWindowSnapshot) -> Void,
         emit: @escaping @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
     ) {
         self.focusedWindowSnapshot = axClient.focusedWindowSnapshot
@@ -40,6 +42,7 @@ final class AXObserverService {
         self.reporter = reporter
         self.activeSpaceByDisplay = activeSpaceByDisplay
         self.spaceChanged = spaceChanged
+        self.reconcileFocusedWindow = reconcileFocusedWindow
         self.emit = emit
         self.notificationFastPathEnabled = true
     }
@@ -52,6 +55,7 @@ final class AXObserverService {
         activeSpaceByDisplay: @escaping @MainActor ([WindowMetadata]) -> [DisplayID: SpaceID],
         spaceChanged: @escaping @MainActor () -> Void,
         notificationFastPathEnabled: Bool = false,
+        reconcileFocusedWindow: @escaping @MainActor (FocusedWindowSnapshot) -> Void,
         emit: @escaping @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
     ) {
         self.focusedWindowSnapshot = focusedWindowSnapshot
@@ -60,6 +64,7 @@ final class AXObserverService {
         self.reporter = reporter
         self.activeSpaceByDisplay = activeSpaceByDisplay
         self.spaceChanged = spaceChanged
+        self.reconcileFocusedWindow = reconcileFocusedWindow
         self.emit = emit
         self.notificationFastPathEnabled = notificationFastPathEnabled
     }
@@ -239,6 +244,7 @@ final class AXObserverService {
             )
             focusedObservationState = transition.state
             handleFocusedObservationEffects(transition.effects, snapshot: value)
+            reconcileFocusedWindow(value)
             handleFocusedAvailabilityEffects(reduceFocusedWindowAvailabilityLog(
                 state: focusedAvailabilityLogState,
                 input: .observed

@@ -17,6 +17,7 @@ enum FocusedUnavailablePollingVerification {
             focusedApplicationFailure
         )
         var emitted: [AXEvent] = []
+        var reconciled: [FocusedWindowSnapshot] = []
         let service = AXObserverService(
             focusedWindowSnapshot: { .failure(error) },
             windowSnapshot: { AXWindowSnapshot(windows: [], quality: .complete) },
@@ -24,6 +25,7 @@ enum FocusedUnavailablePollingVerification {
             reporter: reporter,
             activeSpaceByDisplay: { _ in [:] },
             spaceChanged: {},
+            reconcileFocusedWindow: { reconciled.append($0) },
             emit: { event, _ in emitted.append(event) }
         )
 
@@ -36,6 +38,9 @@ enum FocusedUnavailablePollingVerification {
 
         guard emitted.isEmpty else {
             return (false, "focused-unavailable polling emitted unexpected AX events: \(emitted)")
+        }
+        guard reconciled.isEmpty else {
+            return (false, "focused-unavailable polling reconciled an unavailable snapshot")
         }
         guard let log = try? String(contentsOfFile: logPath, encoding: .utf8) else {
             return (false, "focused-unavailable polling could not read log at \(logPath)")
@@ -57,6 +62,47 @@ enum FocusedUnavailablePollingVerification {
             true,
             "focused-unavailable polling verified: repeated AXFocusedApplication -25212 failures produced one log line and no focus-border hide events"
         )
+    }
+
+    static func verifyStableFocusIsReconciledEveryPoll() -> (passed: Bool, message: String) {
+        let snapshot = FocusedWindowSnapshot(
+            id: WindowID(raw: 700),
+            bundleID: BundleID(raw: "com.ben.narwhal.verifier"),
+            processID: 700,
+            title: "Stable focus",
+            role: kAXWindowRole,
+            subrole: kAXStandardWindowSubrole,
+            frame: CGRect(x: 10, y: 20, width: 400, height: 300),
+            isResizable: true,
+            isMinimized: false,
+            isFullscreen: false
+        )
+        var emitted: [AXEvent] = []
+        var reconciled: [FocusedWindowSnapshot] = []
+        let service = AXObserverService(
+            focusedWindowSnapshot: { .success(snapshot) },
+            windowSnapshot: { AXWindowSnapshot(windows: [], quality: .complete) },
+            echoSuppressor: AXEchoSuppressor(),
+            reporter: StartupReporter(logPath: "/tmp/narwhal-stable-focus-polling-\(UUID().uuidString).log"),
+            activeSpaceByDisplay: { _ in [:] },
+            spaceChanged: {},
+            reconcileFocusedWindow: { reconciled.append($0) },
+            emit: { event, _ in emitted.append(event) }
+        )
+
+        service.start()
+        service.pollFocusedWindowNow()
+        service.pollFocusedWindowNow()
+        service.pollFocusedWindowNow()
+        service.stop()
+
+        guard emitted == [.windowFocused(snapshot.id)] else {
+            return (false, "stable focused-window polling emitted unexpected AX events: \(emitted)")
+        }
+        guard reconciled == [snapshot, snapshot, snapshot, snapshot] else {
+            return (false, "stable focused-window polling reconciled \(reconciled.count) snapshots; expected 4")
+        }
+        return (true, "stable focused-window polling reconciled every snapshot without duplicate focus events")
     }
 }
 #endif
