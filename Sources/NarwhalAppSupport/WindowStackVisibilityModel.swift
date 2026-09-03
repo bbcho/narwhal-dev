@@ -5,11 +5,18 @@ public struct WindowStackEntry: Equatable, Sendable {
     public let id: WindowID
     public let frame: CGRect
     public let ownerPID: ProcessID?
+    public let alpha: Double
 
-    public init(id: WindowID, frame: CGRect, ownerPID: ProcessID? = nil) {
+    public init(
+        id: WindowID,
+        frame: CGRect,
+        ownerPID: ProcessID? = nil,
+        alpha: Double = 1
+    ) {
         self.id = id
         self.frame = frame
         self.ownerPID = ownerPID
+        self.alpha = alpha
     }
 }
 
@@ -41,7 +48,8 @@ public func windowStackVisibility(
         return .targetMissing
     }
     let targetFrame = frontToBackWindows[targetIndex].frame
-    for entry in frontToBackWindows.prefix(targetIndex) where entry.id != target {
+    for entry in frontToBackWindows.prefix(targetIndex)
+        where entry.id != target && entry.alpha > 0 {
         if entry.frame.intersection(targetFrame).narwhalArea > minimumIntersectionArea {
             return .blockedBy(entry.id)
         }

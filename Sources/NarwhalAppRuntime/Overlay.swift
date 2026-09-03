@@ -158,6 +158,7 @@ final class Overlay {
             }
             var obscured = false
             for above in entries[0..<tileIndex] {
+                if above.alpha <= 0 { continue }
                 if overlayWindowIDs.contains(above.id) { continue }
                 if tileIDs.contains(above.id.raw) { continue }
                 if appKitFrame(forAXFrame: above.frame).intersects(tileFrame) {
@@ -205,6 +206,27 @@ final class Overlay {
 
     func debugFocusBorderReconciliationIsScheduled() -> Bool {
         focusBorderReconciliationTimer != nil
+    }
+
+    func debugFocusBorderStackingDecision() -> FocusBorderStackingDecision? {
+        guard let visibleWindowID,
+              let borderWindow,
+              let entries = windowStackEntries()
+        else { return nil }
+        return focusBorderStackingDecision(
+            target: visibleWindowID,
+            border: windowID(borderWindow),
+            frontToBackWindows: entries,
+            ignoredWindowIDs: ownOverlayWindowIDs()
+        )
+    }
+
+    func debugFocusBorderStackDescription() -> String {
+        let borderID = borderWindow.flatMap(windowID)
+        let entries = windowStackEntries() ?? []
+        return "border=\(String(describing: borderID)) entries=" + entries.map {
+            "\($0.id.description)/pid=\(String(describing: $0.ownerPID))/alpha=\($0.alpha)/frame=\($0.frame.debugDescription)"
+        }.joined(separator: ",")
     }
 
     func debugTiledBorderWindowIDs() -> [WindowID] {
@@ -312,6 +334,11 @@ final class Overlay {
         }
 
         let wasCurrentTarget = visibleWindowID == target.windowID
+        if !wasCurrentTarget {
+            borderWindow?.orderOut(nil)
+            borderWindow = nil
+            borderView = nil
+        }
         let appKitFrame = appKitFrame(forAXFrame: target.frame).insetBy(dx: -borderConfig.width / 2, dy: -borderConfig.width / 2)
         let window = borderWindow ?? makeBorderWindow(frame: appKitFrame)
         let requiresMaterialization = !window.isVisible
@@ -389,13 +416,15 @@ final class Overlay {
                   let ownerPID = window[kCGWindowOwnerPID as String] as? pid_t,
                   let layer = window[kCGWindowLayer as String] as? Int,
                   layer == NSWindow.Level.normal.rawValue,
+                  let alpha = window[kCGWindowAlpha as String] as? Double,
                   let boundsDict = window[kCGWindowBounds as String] as? NSDictionary,
                   let frame = CGRect(dictionaryRepresentation: boundsDict)
             else { return nil }
             return WindowStackEntry(
                 id: WindowID(raw: cgID),
                 frame: frame,
-                ownerPID: ownerPID
+                ownerPID: ownerPID,
+                alpha: alpha
             )
         }
     }

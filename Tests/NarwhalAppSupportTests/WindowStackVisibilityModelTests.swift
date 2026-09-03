@@ -48,6 +48,24 @@ struct WindowStackVisibilityModelTests {
         #expect(decision == .visible)
     }
 
+    @Test("Transparent windows cannot block visibility")
+    func transparentWindowsCannotBlockVisibility() {
+        let target = WindowID(raw: 35)
+        let decision = windowStackVisibility(
+            target: target,
+            frontToBackWindows: [
+                WindowStackEntry(
+                    id: WindowID(raw: 36),
+                    frame: CGRect(x: 20, y: 20, width: 300, height: 300),
+                    alpha: 0
+                ),
+                entry(target.raw, x: 0, y: 0, width: 300, height: 300)
+            ]
+        )
+
+        #expect(decision == .visible)
+    }
+
     @Test("Missing target is explicit")
     func missingTargetIsExplicit() {
         #expect(windowStackVisibility(

@@ -304,6 +304,7 @@ struct AXClient {
                 let layer = window[kCGWindowLayer as String] as? Int,
                 let ownerPID = window[kCGWindowOwnerPID as String] as? pid_t,
                 let number = window[kCGWindowNumber as String] as? CGWindowID,
+                let alpha = window[kCGWindowAlpha as String] as? Double,
                 let boundsDictionary = window[kCGWindowBounds as String] as? NSDictionary,
                 let frame = CGRect(dictionaryRepresentation: boundsDictionary),
                 inventoryFilter.accepts(layer: layer, ownerPID: ownerPID, frame: frame)
@@ -313,7 +314,8 @@ struct AXClient {
             return WindowStackEntry(
                 id: WindowID(raw: number),
                 frame: frame,
-                ownerPID: ownerPID
+                ownerPID: ownerPID,
+                alpha: alpha
             )
         }
 
