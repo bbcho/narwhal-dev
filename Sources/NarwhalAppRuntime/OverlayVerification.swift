@@ -1343,16 +1343,21 @@ enum FocusBorderVerification {
             FocusBorderTarget(windowID: coverID, frame: coverFrame, cornerRadius: cornerRadius)
         )
         overlay.render(model)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.12))
 
         guard overlay.debugFocusBorderWindowID() == coverID else {
             return (false, "focus border did not retarget to newly focused floating window")
         }
+        guard let retargetedBorderNumber = overlay.debugFocusBorderWindowNumber(),
+              overlay.debugFocusBorderIsVisuallyVisible()
+        else {
+            return (false, "retargeted focus border did not become visually visible")
+        }
         guard let focusedOrderedWindowNumbers = waitForFrontToBackWindowNumbers(containing: [
-            borderNumber,
+            retargetedBorderNumber,
             coverWindow.windowNumber
         ]),
-              let focusedBorderIndex = focusedOrderedWindowNumbers.firstIndex(of: borderNumber),
+              let focusedBorderIndex = focusedOrderedWindowNumbers.firstIndex(of: retargetedBorderNumber),
               let focusedCoverIndex = focusedOrderedWindowNumbers.firstIndex(of: coverWindow.windowNumber)
         else {
             return (false, "could not verify retargeted focus border stacking")
@@ -1366,7 +1371,7 @@ enum FocusBorderVerification {
 
         return (
             true,
-            "focus border stacking verified border=\(borderNumber) target=\(targetWindow.windowNumber) cover=\(coverWindow.windowNumber)"
+            "focus border stacking verified border=\(borderNumber),\(retargetedBorderNumber) target=\(targetWindow.windowNumber) cover=\(coverWindow.windowNumber)"
         )
     }
 

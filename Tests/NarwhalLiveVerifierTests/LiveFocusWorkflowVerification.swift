@@ -384,6 +384,13 @@ enum LiveFocusWorkflowVerification {
         overlayModel = overlayModel.showingFocusBorder(snapshot.focusBorderTarget)
         overlay.render(overlayModel)
         let liveSheet = LiveFocusWindow(id: snapshot.id, window: sheet, metadata: snapshot.metadata)
+        try waitFor(
+            timeout: 0.5,
+            description: "focused sheet border did not become visually visible"
+        ) {
+            overlay.debugFocusBorderWindowID() == snapshot.id
+                && overlay.debugFocusBorderIsVisuallyVisible()
+        }
         try requireFocusBorderVisible(
             overlay: overlay,
             target: snapshot.focusBorderTarget,

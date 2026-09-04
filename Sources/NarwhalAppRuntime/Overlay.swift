@@ -67,6 +67,7 @@ final class Overlay {
     private static let tiledBorderConfig = BorderConfig(width: 2, colorHex: "#30D158")
     private static let focusBorderReconciliationInterval: TimeInterval = 0.05
     private static let focusBorderReconciliationDuration: TimeInterval = 0.30
+    private static let unverifiedFocusBorderAlpha: CGFloat = 0.001
 
     private var borderConfig: BorderConfig
     private var hudConfig: HUDConfig
@@ -189,7 +190,8 @@ final class Overlay {
     }
 
     func debugFocusBorderIsVisuallyVisible() -> Bool {
-        borderWindow?.isVisible == true && (borderWindow?.alphaValue ?? 0) > 0
+        borderWindow?.isVisible == true
+            && (borderWindow?.alphaValue ?? 0) > Self.unverifiedFocusBorderAlpha
     }
 
     func debugFocusBorderWindowNumber() -> Int? {
@@ -349,7 +351,7 @@ final class Overlay {
         }
         view.update(border: borderConfig, cornerRadius: target.cornerRadius)
         if !wasCurrentTarget || requiresMaterialization {
-            window.alphaValue = 0
+            window.alphaValue = Self.unverifiedFocusBorderAlpha
         }
         window.setFrame(appKitFrame, display: true)
         borderWindow = window
@@ -525,7 +527,7 @@ final class Overlay {
             borderWindow.alphaValue = 1
             return .keptVisible
         case .restack:
-            borderWindow.alphaValue = 0
+            borderWindow.alphaValue = Self.unverifiedFocusBorderAlpha
             orderFocusBorderWindow(borderWindow, above: targetWindowID)
             return .restackedAwaitingConfirmation
         case .hideBlockedBy, .hideTargetMissing:
