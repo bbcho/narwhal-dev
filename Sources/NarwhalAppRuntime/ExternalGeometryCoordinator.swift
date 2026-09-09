@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import NarwhalAppSupport
 import NarwhalCore
@@ -20,6 +21,7 @@ final class ExternalGeometryCoordinator {
 
     private let settleInterval: TimeInterval
     private let schedule: ExternalGeometrySettleScheduler
+    private let pointerIsDown: @MainActor () -> Bool
     private let handoff: @MainActor (AXEvent, FocusedWindowSnapshot?) async -> Void
     private var nextGeneration: UInt64 = 0
     private var pendingByWindowID: [WindowID: PendingEvent] = [:]
@@ -27,10 +29,12 @@ final class ExternalGeometryCoordinator {
     init(
         settleInterval: TimeInterval = ExternalGeometryCoordinator.settleInterval,
         schedule: @escaping ExternalGeometrySettleScheduler = scheduleExternalGeometrySettle,
+        pointerIsDown: @escaping @MainActor () -> Bool = { NSEvent.pressedMouseButtons & 1 != 0 },
         handoff: @escaping @MainActor (AXEvent, FocusedWindowSnapshot?) async -> Void
     ) {
         self.settleInterval = settleInterval
         self.schedule = schedule
+        self.pointerIsDown = pointerIsDown
         self.handoff = handoff
     }
 
@@ -72,6 +76,10 @@ final class ExternalGeometryCoordinator {
         guard let pending = pendingByWindowID[windowID],
               pending.generation == generation
         else { return }
+        guard !pointerIsDown() else {
+            observe(pending.event, snapshot: pending.snapshot)
+            return
+        }
         pendingByWindowID.removeValue(forKey: windowID)
         await handoff(pending.event, pending.snapshot)
     }

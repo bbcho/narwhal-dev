@@ -7,6 +7,31 @@ import Testing
 @MainActor
 @Suite("External geometry coordinator")
 struct ExternalGeometryCoordinatorTests {
+    @Test("A pause during a held resize drag waits for mouse release")
+    func heldDragWaitsForRelease() async {
+        let scheduler = GeometrySettleScheduler()
+        let windowID = WindowID(raw: 46)
+        var pointerDown = true
+        var handoffs: [AXEvent] = []
+        let coordinator = ExternalGeometryCoordinator(
+            schedule: scheduler.schedule,
+            pointerIsDown: { pointerDown }
+        ) { event, _ in handoffs.append(event) }
+        coordinator.observe(.windowResized(windowID, CGSize(width: 600, height: 700)), snapshot: nil)
+        await scheduler.fireLatest()
+        await scheduler.fireLatest()
+        #expect(handoffs.isEmpty)
+        #expect(coordinator.pendingCount == 1)
+        coordinator.observe(.windowResized(windowID, CGSize(width: 650, height: 700)), snapshot: nil)
+        await scheduler.fireLatest()
+        #expect(handoffs.isEmpty)
+        pointerDown = false
+        await scheduler.fireLatest()
+        #expect(handoffs == [.windowResized(windowID, CGSize(width: 650, height: 700))])
+        #expect(coordinator.pendingCount == 0)
+        #expect(scheduler.activeCount == 0)
+    }
+
     @Test("Thirty resize notifications settle into one handoff with the latest geometry")
     func burstUsesLatestEventOnce() async {
         let scheduler = GeometrySettleScheduler()
@@ -14,7 +39,8 @@ struct ExternalGeometryCoordinatorTests {
         var handoffs: [AXEvent] = []
         let coordinator = ExternalGeometryCoordinator(
             settleInterval: 0.120,
-            schedule: scheduler.schedule
+            schedule: scheduler.schedule,
+            pointerIsDown: { false }
         ) { event, _ in
             handoffs.append(event)
         }
@@ -47,7 +73,8 @@ struct ExternalGeometryCoordinatorTests {
         var handoffs: [AXEvent] = []
         let coordinator = ExternalGeometryCoordinator(
             settleInterval: 0.120,
-            schedule: scheduler.schedule
+            schedule: scheduler.schedule,
+            pointerIsDown: { false }
         ) { event, _ in
             await gate.perform {
                 handoffs.append(event)

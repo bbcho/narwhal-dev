@@ -295,22 +295,131 @@ enum ProductionManualResizeVerification {
                 context: "production 2-by-2 manual resize"
             )
 
+            // Moving the right tile's left edge changes its origin as well as its size.
+            let rightBefore = try requiredFrame(bottomRightID, in: after)
+            let rightRequested = CGRect(
+                x: rightBefore.minX - growth,
+                y: rightBefore.minY,
+                width: rightBefore.width + growth,
+                height: rightBefore.height
+            )
+            _ = try await activeRuntime.waitUntilIdle()
+            try activeRuntime.send(.focus(windowID: bottomRightID))
+            let rightEvidence = try activeRuntime.captureEvidenceBaseline()
+            let rightManualFrame = try await RealAppLaunchSupport.setFrame(
+                windows[3],
+                to: rightRequested,
+                using: axClient,
+                context: "production 2-by-2 rightmost left-edge resize"
+            )
+            _ = try await activeRuntime.waitForManualResize(from: rightEvidence, deadline: 1.2)
+            var rightExpected = after
+            let leftBefore = try requiredFrame(bottomLeft.metadata.id, in: after)
+            rightExpected[bottomRightID] = rightManualFrame
+            rightExpected[bottomLeft.metadata.id] = CGRect(
+                x: leftBefore.minX,
+                y: leftBefore.minY,
+                width: rightManualFrame.minX - CGFloat(config.gaps.inner) - leftBefore.minX,
+                height: leftBefore.height
+            )
+            let rightAfter = try await waitForFrames(
+                windows,
+                expected: rightExpected,
+                using: axClient,
+                context: "production 2-by-2 rightmost left-edge resize"
+            )
+            try RealFrameAssertions.requireAXAndWindowServerFrames(
+                rightAfter,
+                expected: rightExpected,
+                context: "production 2-by-2 rightmost left-edge resize"
+            )
+            try RealFrameAssertions.requireNoForbiddenRuntimeOutcomes(
+                activeRuntime.logText,
+                context: "production 2-by-2 rightmost left-edge resize"
+            )
+
+            _ = try await activeRuntime.waitUntilIdle()
+            let dragEvidence = try activeRuntime.captureEvidenceBaseline()
+            let dragStartFrame = try requiredFrame(bottomRightID, in: rightAfter)
+            let dragStart = CGPoint(x: dragStartFrame.minX + 1, y: dragStartFrame.minY + 40)
+            let dragEnd = CGPoint(x: dragStart.x - 72, y: dragStart.y)
+            let originalCursor = CGEvent(source: nil)?.location
+            defer { if let originalCursor { _ = CGWarpMouseCursorPosition(originalCursor) } }
+            _ = CGWarpMouseCursorPosition(dragStart)
+            CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                    mouseCursorPosition: dragStart, mouseButton: .left)?.post(tap: .cghidEventTap)
+            await settleLiveVerifier(for: 0.15)
+            guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
+                                     mouseCursorPosition: dragStart, mouseButton: .left),
+                  let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp,
+                                   mouseCursorPosition: dragEnd, mouseButton: .left)
+            else { throw RealAppWindowVerifierFailure("could not create native resize drag events") }
+            var released = false
+            defer { if !released { up.post(tap: .cghidEventTap) } }
+            down.post(tap: .cghidEventTap)
+            await settleLiveVerifier(for: 0.1)
+            for offset in [CGFloat(3), 12, 24, 48, 72] {
+                let point = CGPoint(x: dragStart.x - offset, y: dragStart.y)
+                guard let drag = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged,
+                                         mouseCursorPosition: point, mouseButton: .left)
+                else { throw RealAppWindowVerifierFailure("could not create native drag step") }
+                drag.post(tap: .cghidEventTap)
+                await settleLiveVerifier(for: 0.05)
+            }
+            await settleLiveVerifier(for: 0.35)
+            let heldFrame = try RealAppLaunchSupport.currentMetadata(for: windows[3], using: axClient).frame
+            guard heldFrame.minX < dragStartFrame.minX - 24 else {
+                let underPointer = (CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []).compactMap { row -> String? in
+                    guard let bounds = row[kCGWindowBounds as String] as? [String: Any],
+                          let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary), frame.contains(dragStart)
+                    else { return nil }
+                    return "id=\(row[kCGWindowNumber as String] ?? "?") layer=\(row[kCGWindowLayer as String] ?? "?") frame=\(frame)"
+                }
+                throw RealAppWindowVerifierFailure("native left-edge drag did not resize the real Terminal window: before=\(dragStartFrame) held=\(heldFrame) buttons=\(NSEvent.pressedMouseButtons) front=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil") underPointer=\(underPointer)")
+            }
+            let heldNeighbor = try RealAppLaunchSupport.currentMetadata(for: bottomLeft, using: axClient).frame
+            try RealFrameAssertions.requireExactFrames(
+                [bottomLeft.metadata.id: heldNeighbor],
+                expected: [bottomLeft.metadata.id: try requiredFrame(bottomLeft.metadata.id, in: rightAfter)],
+                context: "native resize pause must not hand off while the button is held"
+            )
+            up.post(tap: .cghidEventTap)
+            released = true
+            _ = try await activeRuntime.waitForManualResize(from: dragEvidence, deadline: 1.2)
+            var dragExpected = rightAfter
+            dragExpected[bottomRightID] = heldFrame
+            dragExpected[bottomLeft.metadata.id] = CGRect(
+                x: heldNeighbor.minX, y: heldNeighbor.minY,
+                width: heldFrame.minX - CGFloat(config.gaps.inner) - heldNeighbor.minX,
+                height: heldNeighbor.height
+            )
+            let dragAfter = try await waitForFrames(
+                windows, expected: dragExpected, using: axClient, context: "native rightmost resize after release"
+            )
+            try RealFrameAssertions.requireAXAndWindowServerFrames(
+                dragAfter, expected: dragExpected, context: "native rightmost resize after release"
+            )
+            try RealFrameAssertions.requireNoForbiddenRuntimeOutcomes(
+                activeRuntime.logText, context: "native rightmost resize after release"
+            )
+
             try activeRuntime.stop()
             runtime = nil
             try await RealAppLaunchSupport.cleanup(windows, using: axClient)
             windows.removeAll()
             return (
                 true,
-                "production 2-by-2 manual resize preserved both top windows and moved only the bottom seam in \(handoffDuration)s"
+                "production 2-by-2 manual resize preserved both top windows from both sides of the bottom seam; left handoff \(handoffDuration)s"
             )
         } catch {
+            let runtimeLog = runtime?.logText ?? "runtime not started"
             runtime?.stopBestEffort()
             await RealAppLaunchSupport.cleanupBestEffort(
                 windows,
                 using: axClient,
                 context: "PRODUCTION 2-BY-2 VERIFY"
             )
-            return (false, String(describing: error))
+            return (false, "\(error); runtime log:\n\(runtimeLog)")
         }
     }
 
