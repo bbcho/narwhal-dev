@@ -41,8 +41,9 @@ public func externalGeometryEventSelection(
     switch event {
     case .windowMoved(_, let frame):
         matchesLiveFrame = live.frame.narwhalApproximatelyEquals(frame, tolerance: tolerance)
-    case .windowResized(_, let size):
-        matchesLiveFrame = live.frame.size.narwhalApproximatelyEquals(size, tolerance: tolerance)
+    case .windowResized:
+        // Size alone cannot identify a left/top-edge drag: its origin moves too.
+        matchesLiveFrame = false
     case .windowOpened, .windowClosed, .windowFocused:
         matchesLiveFrame = true
     }

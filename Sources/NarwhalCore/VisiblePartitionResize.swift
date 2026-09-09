@@ -161,13 +161,18 @@ private func renderPartition(_ node: Node, in frame: CGRect) -> RenderedPartitio
 }
 
 private func changedEdges(from oldFrame: CGRect, to newFrame: CGRect) -> [EdgeChange] {
-    let tolerance = GeometryTolerances.externalResizeDirection
-    return [
+    let edges = [
         (Direction.left, oldFrame.minX, newFrame.minX),
         (.right, oldFrame.maxX, newFrame.maxX),
         (.up, oldFrame.minY, newFrame.minY),
         (.down, oldFrame.maxY, newFrame.maxY)
-    ].compactMap { direction, oldValue, newValue in
+    ]
+    // A single deliberate edge drag can also produce small app-size rounding.
+    let significantEdges = edges.filter { abs($0.1 - $0.2) > frameWriteSettleTolerance }
+    let tolerance = significantEdges.count == 1
+        ? frameWriteSettleTolerance
+        : GeometryTolerances.externalResizeDirection
+    return edges.compactMap { direction, oldValue, newValue in
         abs(oldValue - newValue) > tolerance ? EdgeChange(direction: direction) : nil
     }
 }

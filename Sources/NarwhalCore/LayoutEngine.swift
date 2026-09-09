@@ -361,7 +361,9 @@ private func componentFitsPlannedBounds(
     else {
         return false
     }
-    return actualMin >= plannedMin - tolerance && actualMax <= plannedMax + tolerance
+    // An anchored live source can round its outer edge; interior seams stay strict.
+    let boundsTolerance = max(tolerance, frameWriteSettleTolerance)
+    return actualMin >= plannedMin - boundsTolerance && actualMax <= plannedMax + boundsTolerance
 }
 
 private func overlap(_ firstMin: CGFloat, _ firstMax: CGFloat, _ secondMin: CGFloat, _ secondMax: CGFloat) -> CGFloat {

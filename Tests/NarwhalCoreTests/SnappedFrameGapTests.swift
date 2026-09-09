@@ -163,6 +163,34 @@ struct SnappedFrameGapTests {
         #expect(reflowed[left]?.maxX == reflowed[right]?.minX)
     }
 
+    @Test("A preserved source may round its outer edge without changing the interior gap")
+    func manualAnchorWithRoundedOuterEdge() throws {
+        let left = WindowID(raw: 1)
+        let right = WindowID(raw: 2)
+        let planned = [
+            left: CGRect(x: 0, y: 0, width: 500, height: 800),
+            right: CGRect(x: 508, y: 0, width: 492, height: 800),
+        ]
+        let actual = [
+            left: CGRect(x: 0, y: 0, width: 500, height: 800),
+            right: CGRect(x: 508, y: 0, width: 494, height: 800),
+        ]
+        let reflowed = try reflowSnappedFrames(
+            planned: planned, actual: actual, innerGap: 8, anchoredWindowIDs: [right]
+        ).get()
+        #expect(reflowed == actual)
+        #expect(innerGapViolations(planned: planned, actual: reflowed, innerGap: 8).isEmpty)
+        let oversized = actual.merging([
+            right: CGRect(x: 508, y: 0, width: 502, height: 800)
+        ]) { _, new in new }
+        guard case .failure = reflowSnappedFrames(
+            planned: planned, actual: oversized, innerGap: 8, anchoredWindowIDs: [right]
+        ) else {
+            Issue.record("Outer overflow beyond frame settling tolerance must still fail")
+            return
+        }
+    }
+
     @Test("Incompatible application widths are an explicit conflict")
     func inconsistentDiamond() {
         let left = WindowID(raw: 1)

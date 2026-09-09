@@ -5,6 +5,50 @@ import NarwhalCore
 
 @Suite("External geometry event model")
 struct ExternalGeometryEventModelTests {
+    @Test("Matching resize size retains the moved left edge of a rightmost tile")
+    func matchingResizeSizeRetainsLiveOrigin() throws {
+        let window = WindowID(raw: 10)
+        let neighbor = WindowID(raw: 11)
+        let oldFrame = CGRect(x: 1600, y: 30, width: 1600, height: 1670)
+        let liveFrame = CGRect(x: 1232, y: 30, width: 1968, height: 1670)
+        let selection = externalGeometryEventSelection(
+            for: .windowResized(window, liveFrame.size),
+            liveSnapshot: AXWindowSnapshot(
+                windows: [metadata(window, frame: liveFrame)],
+                quality: .complete
+            ),
+            tolerance: 4
+        )
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let rootFrame = CGRect(x: 0, y: 30, width: 3200, height: 1670)
+        let tree = Node.split(try Split.create(axis: .horizontal, cells: [
+            Cell.create(weight: 1, node: .leaf(neighbor)).get(),
+            Cell.create(weight: 1, node: .leaf(window)).get(),
+        ]).get())
+        let world = World(
+            displays: [display: DisplayInfo(
+                id: display, slot: 0, fingerprint: "main",
+                frame: rootFrame, visibleFrame: rootFrame
+            )],
+            activeSpace: space,
+            spaces: [space: SpaceState(id: space, displays: [
+                display: DisplaySpaceState(displayID: display, tree: tree, floating: [])
+            ], focused: window)],
+            windows: [
+                window: metadata(window, frame: oldFrame),
+                neighbor: metadata(neighbor, frame: CGRect(x: 0, y: 30, width: 1600, height: 1670)),
+            ],
+            windowDisplay: [window: display, neighbor: display],
+            windowConstraints: [:], pendingRules: [:], config: .default
+        )
+
+        let next = try apply(selection.event.toCommand(), to: world).get()
+        #expect(next.windows[window]?.frame == liveFrame)
+        #expect(next.spaces[space]?.displays[display]?.floating.isEmpty == true)
+        #expect(selection.event == .windowMoved(window, liveFrame))
+    }
+
     @Test("Matching live geometry keeps the original event")
     func matchingLiveGeometryKeepsOriginalEvent() {
         let window = WindowID(raw: 10)

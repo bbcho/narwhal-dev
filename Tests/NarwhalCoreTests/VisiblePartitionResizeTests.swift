@@ -295,6 +295,27 @@ struct VisiblePartitionResizeTests {
         #expect(renderedFrames(resized)[bottomLeft] == requestedSource)
     }
 
+    @Test("A left-edge resize tolerates application rounding at the fixed right edge")
+    func leftEdgeResizeWithRoundedWidth() throws {
+        let tree = try columnRootTree()
+        let before = renderedFrames(tree)
+        let source = try #require(before[bottomRight])
+        let resized = try resizeVisibleSeamInTree(
+            bottomRight,
+            from: source,
+            to: CGRect(x: source.minX - 96, y: source.minY,
+                       width: source.width + 98, height: source.height),
+            rootFrame: rootFrame,
+            innerGap: innerGap,
+            tree
+        ).get()
+        let after = renderedFrames(resized)
+        #expect(after[topLeft] == before[topLeft])
+        #expect(after[topRight] == before[topRight])
+        #expect(after[bottomLeft] == CGRect(x: 4, y: 404, width: 496, height: 392))
+        #expect(after[bottomRight] == CGRect(x: 508, y: 404, width: 688, height: 392))
+    }
+
     @Test("Multi-edge changes are rejected instead of guessing a tree seam")
     func multiEdgeChangeIsAmbiguous() throws {
         let tree = try columnRootTree()
