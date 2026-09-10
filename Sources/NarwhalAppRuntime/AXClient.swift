@@ -413,16 +413,6 @@ struct AXClient {
         return parts.joined(separator: " ")
     }
 
-    private func elementAttribute(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
-        var value: CFTypeRef?
-        let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
-        guard error == .success,
-              let value,
-              CFGetTypeID(value) == AXUIElementGetTypeID()
-        else { return nil }
-        return Self.bounded(value as! AXUIElement)
-    }
-
     private func arrayAttribute(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
         var value: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
@@ -438,6 +428,16 @@ struct AXClient {
         "\(stringAttribute(element, kAXRoleAttribute))/\(stringAttribute(element, kAXSubroleAttribute))/\(stringAttribute(element, kAXTitleAttribute))"
     }
 #endif
+
+    private func elementAttribute(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
+        var value: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard error == .success,
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID()
+        else { return nil }
+        return Self.bounded(value as! AXUIElement)
+    }
 
     @MainActor
     func setFocusedWindowFrame(_ frame: CGRect) async -> AXFrameWriteOutcome {
