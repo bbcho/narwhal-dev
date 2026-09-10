@@ -37,7 +37,21 @@ struct RealAppWindowVerificationTests {
     func chromeAcceptsResolvedTitleBarDragPoint() async throws {
         _ = NSApplication.shared
         VerifierAppDelegate.installIfNeeded()
-        try expectPassed(await RealAppWindowVerification.verifyChromeTitleBarDragPoint())
+        try expectPassed(await RealAppWindowVerification.verifyTitleBarDragPoint(spec: chromeSpec()))
+    }
+
+    @Test("Firefox accepts the resolved title-bar drag point")
+    func firefoxAcceptsResolvedTitleBarDragPoint() async throws {
+        _ = NSApplication.shared
+        VerifierAppDelegate.installIfNeeded()
+        try expectPassed(await RealAppWindowVerification.verifyTitleBarDragPoint(spec: firefoxSpec()))
+    }
+
+    @Test("Firefox repeatedly moves between Spaces using the resolved title bar")
+    func firefoxMovesBetweenSpaces() async throws {
+        _ = NSApplication.shared
+        VerifierAppDelegate.installIfNeeded()
+        try expectPassed(await RealAppWindowVerification.verifyFirefoxSpaceMoves())
     }
 
     @Test("System Settings accepts real AX frame writes")
@@ -534,9 +548,9 @@ enum RealAppWindowVerification {
         up.post(tap: .cghidEventTap)
     }
 
-    static func verifyChromeTitleBarDragPoint() async -> (passed: Bool, message: String) {
+    static func verifyTitleBarDragPoint(spec: RealAppSpec) async -> (passed: Bool, message: String) {
         let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
-        var chrome: RealAppOriginal?
+        var app: RealAppOriginal?
         let originalCursor = CGEvent(source: nil)?.location
         defer {
             if let originalCursor {
@@ -547,17 +561,28 @@ enum RealAppWindowVerification {
         do {
             try waitForUnlockedSession()
             let tracked = try await launchTrackedWindow(
-                spec: chromeSpec(),
+                spec: spec,
                 using: axClient,
                 requiringNewWindow: true,
                 token: "title-bar-drag"
             )
-            chrome = tracked
+            app = tracked
             try await focusIfPossible(
                 tracked.metadata,
-                appName: "Google Chrome title-bar drag",
+                appName: "\(spec.name) title-bar drag",
                 using: axClient
             )
+
+            guard try axClient.focusedWindowSnapshot().get().id == tracked.metadata.id else {
+                throw RealAppWindowVerifierFailure("Tab test did not focus the new verification window")
+            }
+            try postBrowserShortcut(keyCode: 17)
+            await settleLiveVerifier(for: 0.3)
+            let tabsBefore = try browserTabState(for: tracked.metadata, using: axClient)
+            guard tabsBefore.count == 2 else {
+                throw RealAppWindowVerifierFailure("Expected two verification tabs, found \(tabsBefore.count)")
+            }
+            let windowsBefore = Set(axClient.windowSnapshot().windows.filter { $0.pid == tracked.metadata.pid }.map(\.id))
 
             let originalFrame = try axClient.windowServerFrame(of: tracked.metadata).get()
             let titleBarOffset = try await axClient.draggableTitleBarOffset(of: tracked.metadata).get()
@@ -565,7 +590,11 @@ enum RealAppWindowVerification {
                 x: originalFrame.minX + titleBarOffset.dx,
                 y: originalFrame.minY + titleBarOffset.dy
             )
-            let draggedPoint = CGPoint(x: titleBarPoint.x + 24, y: titleBarPoint.y)
+            guard let display = DisplayClient().currentDisplays().values.first(where: {
+                $0.frame.contains(CGPoint(x: originalFrame.midX, y: originalFrame.midY))
+            }) else { throw RealAppWindowVerifierFailure("Drag test display unavailable") }
+            let vector = desktopWindowDragVector(windowFrame: originalFrame, visibleFrame: display.visibleFrame)
+            let draggedPoint = CGPoint(x: titleBarPoint.x + vector.dx, y: titleBarPoint.y + vector.dy)
             guard let mouseDown = CGEvent(
                 mouseEventSource: nil,
                 mouseType: .leftMouseDown,
@@ -584,14 +613,18 @@ enum RealAppWindowVerification {
                 mouseCursorPosition: draggedPoint,
                 mouseButton: .left
             ) else {
-                throw RealAppWindowVerifierFailure("Could not create Chrome title-bar drag events")
+                throw RealAppWindowVerifierFailure("Could not create \(spec.name) title-bar drag events")
             }
 
             _ = CGWarpMouseCursorPosition(titleBarPoint)
             await settleLiveVerifier(for: 0.08)
             mouseDown.post(tap: .cghidEventTap)
             await settleLiveVerifier(for: 0.15)
-            mouseDragged.post(tap: .cghidEventTap)
+            for fraction: CGFloat in [0.25, 0.6, 1] {
+                mouseDragged.location = CGPoint(x: titleBarPoint.x + vector.dx * fraction, y: titleBarPoint.y + vector.dy * fraction)
+                mouseDragged.post(tap: .cghidEventTap)
+                await settleLiveVerifier(for: 0.05)
+            }
             await settleLiveVerifier(for: 0.15)
             mouseUp.post(tap: .cghidEventTap)
             await settleLiveVerifier(for: 0.3)
@@ -599,7 +632,7 @@ enum RealAppWindowVerification {
             let draggedServerFrame = try axClient.windowServerFrame(of: tracked.metadata).get()
             guard abs(draggedServerFrame.minX - originalFrame.minX) >= 8 else {
                 throw RealAppWindowVerifierFailure(
-                    "Resolved Chrome title-bar point did not engage the window; "
+                    "Resolved \(spec.name) title-bar point did not engage the window; "
                         + "point=\(titleBarPoint.debugDescription) "
                         + "before=\(originalFrame.debugDescription) after=\(draggedServerFrame.debugDescription)"
                 )
@@ -611,34 +644,149 @@ enum RealAppWindowVerification {
                   )
             else {
                 throw RealAppWindowVerifierFailure(
-                    "Chrome AX and WindowServer frames disagreed after the resolved title-bar drag"
+                    "\(spec.name) AX and WindowServer frames disagreed after the resolved title-bar drag"
                 )
             }
+
+            guard try browserTabState(for: tracked.metadata, using: axClient) == tabsBefore,
+                  Set(axClient.windowSnapshot().windows.filter { $0.pid == tracked.metadata.pid }.map(\.id)) == windowsBefore
+            else { throw RealAppWindowVerifierFailure("Title-bar drag selected, closed, reordered, or detached a tab") }
+            try postBrowserShortcut(keyCode: 13)
+            await settleLiveVerifier(for: 0.2)
 
             _ = try await verifyFrameWrite(
                 originalFrame,
                 metadata: tracked.metadata,
-                appName: "Google Chrome title-bar drag restore",
+                appName: "\(spec.name) title-bar drag restore",
                 step: 1,
                 using: axClient
             )
             try await cleanupApp(tracked, using: axClient)
-            chrome = nil
+            app = nil
             return (
                 true,
-                "real Chrome moved from \(originalFrame.shortDescription) to "
+                "real \(spec.name) moved from \(originalFrame.shortDescription) to "
                     + "\(draggedServerFrame.shortDescription) using AX-resolved title-bar point"
             )
         } catch let error as RealAppWindowVerifierFailure {
-            if let chrome {
-                await cleanupAppsBestEffort([chrome], using: axClient, context: "CHROME TITLE-BAR DRAG")
+            if let app {
+                await cleanupAppsBestEffort([app], using: axClient, context: "TITLE-BAR DRAG")
             }
             return (false, error.message)
         } catch {
-            if let chrome {
-                await cleanupAppsBestEffort([chrome], using: axClient, context: "CHROME TITLE-BAR DRAG")
+            if let app {
+                await cleanupAppsBestEffort([app], using: axClient, context: "TITLE-BAR DRAG")
             }
-            return (false, "Chrome title-bar drag failed: \(String(describing: error))")
+            return (false, "\(spec.name) title-bar drag failed: \(String(describing: error))")
+        }
+    }
+
+    private static func postBrowserShortcut(keyCode: CGKeyCode) throws {
+        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false)
+        else { throw RealAppWindowVerifierFailure("Could not create browser shortcut") }
+        down.flags = .maskCommand
+        up.flags = .maskCommand
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+    }
+
+    private static func browserTabState(for window: WindowMetadata, using axClient: AXClient) throws -> [BrowserTabState] {
+        guard try axClient.focusedWindowSnapshot().get().id == window.id else {
+            throw RealAppWindowVerifierFailure("Browser focus changed away from the verification window")
+        }
+        func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+            var value: CFTypeRef?
+            _ = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+            return value
+        }
+        let application = AXUIElementCreateApplication(window.pid)
+        guard let focused = attribute(application, kAXFocusedWindowAttribute),
+              CFGetTypeID(focused) == AXUIElementGetTypeID()
+        else { throw RealAppWindowVerifierFailure("Browser AX window unavailable") }
+        var pending = [focused as! AXUIElement]
+        var tabs: [BrowserTabState] = []
+        var visited = 0
+        while !pending.isEmpty && visited < 500 {
+            let element = pending.removeLast()
+            visited += 1
+            let role = attribute(element, kAXRoleAttribute) as? String
+            if role == "AXWebArea" { continue }
+            if role == kAXRadioButtonRole || attribute(element, kAXSubroleAttribute) as? String == "AXTabButton" {
+                guard let title = attribute(element, kAXTitleAttribute) as? String,
+                      let selected = (attribute(element, kAXValueAttribute) as? NSNumber)
+                        ?? (attribute(element, kAXSelectedAttribute) as? NSNumber)
+                else { throw RealAppWindowVerifierFailure("Browser tab state unavailable") }
+                tabs.append(BrowserTabState(title: title, selected: selected.boolValue))
+            }
+            pending.append(contentsOf: attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [])
+        }
+        guard pending.isEmpty else { throw RealAppWindowVerifierFailure("Browser chrome AX traversal exceeded its limit") }
+        return tabs
+    }
+
+    static func verifyFirefoxSpaceMoves() async -> (passed: Bool, message: String) {
+        let axClient = AXClient(processID: -1, settleStrategy: .servicingRunLoop)
+        let spaceClient = SpaceClient()
+        let mover = DesktopWindowMover(axClient: axClient, spaceClient: spaceClient)
+        var app: RealAppOriginal?
+        var source: (DisplayInfo, SpaceID)?
+        do {
+            try waitForUnlockedSession()
+            let tracked = try await launchTrackedWindow(
+                spec: firefoxSpec(), using: axClient, requiringNewWindow: true, token: "firefox-space-move"
+            )
+            app = tracked
+            let displays = DisplayClient().currentDisplays()
+            guard let display = displays.values.first(where: {
+                $0.frame.contains(CGPoint(x: tracked.metadata.frame.midX, y: tracked.metadata.frame.midY))
+            }), let row = spaceClient.managedDisplaySpaceRows(displays: displays)[display.id],
+            let active = row.activeSpace else {
+                throw RealAppWindowVerifierFailure("Firefox source display or Space unavailable")
+            }
+            source = (display, active)
+            let visible = display.visibleFrame
+            let rightEdgeFrame = CGRect(
+                x: visible.maxX - tracked.metadata.frame.width,
+                y: max(visible.minY + 40, tracked.metadata.frame.minY),
+                width: tracked.metadata.frame.width,
+                height: tracked.metadata.frame.height
+            )
+            _ = try await verifyFrameWrite(
+                rightEdgeFrame, metadata: tracked.metadata, appName: "Firefox right-edge Space move", step: 1, using: axClient
+            )
+
+            let spaces = try spaceClient.userSpaceIDs(in: row.spaces.map(\.id)).get()
+            let direction: DesktopMoveDirection = spaces.last == active ? .left : .right
+            let destination = try adjacentDesktopSpace(in: spaces, active: active, direction: direction).get()
+            for attempt in 0..<30 {
+                try await focusIfPossible(tracked.metadata, appName: "Firefox Space move", using: axClient)
+                let moveDirection = attempt.isMultiple(of: 2) ? direction : (direction == .left ? .right : .left)
+                let expectedSpace = attempt.isMultiple(of: 2) ? destination : active
+                let plan = try await mover.plan(
+                    window: tracked.metadata, direction: moveDirection, display: display, displays: displays
+                ).get()
+                try await mover.execute(plan).get()
+                try await RealTerminalSpaceMoveVerification.requireWindow(
+                    tracked.metadata.id, on: expectedSpace, using: spaceClient
+                )
+                let serverFrame = try axClient.windowServerFrame(of: tracked.metadata).get()
+                let axFrame = try await axClient.frame(of: tracked.metadata).get()
+                guard axFrame.narwhalApproximatelyEquals(serverFrame, tolerance: frameWriteSettleTolerance) else {
+                    throw RealAppWindowVerifierFailure("Firefox AX and WindowServer frames disagree after Space move \(attempt + 1)")
+                }
+                print("FIREFOX SPACE MOVE: \(attempt + 1)/30 window=\(tracked.metadata.id) space=\(expectedSpace.raw) AX=\(axFrame) WindowServer=\(serverFrame)")
+            }
+            try await cleanupApp(tracked, using: axClient)
+            app = nil
+            return (true, "Firefox completed fifteen Space round trips with matching AX and WindowServer frames")
+        } catch {
+            if let app { await cleanupAppsBestEffort([app], using: axClient, context: "FIREFOX SPACE MOVE") }
+            if let source {
+                _ = spaceClient.switchActiveSpace(display: source.0, to: source.1)
+                await settleLiveVerifier(for: 0.5)
+            }
+            return (false, String(describing: error))
         }
     }
 
@@ -4306,6 +4454,11 @@ enum RealAppWindowVerification {
         guard let displayID = displayContainingFrame(frame, displays: displays) else { return nil }
         return displays[displayID]
     }
+}
+
+private struct BrowserTabState: Equatable {
+    let title: String
+    let selected: Bool
 }
 
 struct RealAppSpec {

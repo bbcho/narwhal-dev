@@ -6,42 +6,45 @@ import Testing
 
 @Suite("Desktop window mover")
 struct DesktopWindowMoverTests {
-    @Test("Desktop drag point sits beside the rightmost window control")
-    func desktopDragPointSitsBesideRightmostWindowControl() {
-        let windowFrame = CGRect(x: 100, y: 90, width: 1_000, height: 800)
-        let controlFrames = [
-            CGRect(x: 112, y: 110, width: 14, height: 14),
-            CGRect(x: 132, y: 110, width: 14, height: 14),
-            CGRect(x: 152, y: 110, width: 14, height: 14),
-        ]
-
-        let point = desktopWindowDragPoint(
-            windowFrame: windowFrame,
-            controlFrames: controlFrames
-        )
-
-        #expect(point == CGPoint(x: 174, y: 117))
+    @Test("Desktop drag uses the measured gap between Close and Minimize")
+    func desktopDragUsesControlGap() {
+        #expect(desktopWindowDragPoint(
+            windowFrame: CGRect(x: 100, y: 90, width: 1_000, height: 800),
+            closeButtonFrame: CGRect(x: 111, y: 104, width: 16, height: 16),
+            minimizeButtonFrame: CGRect(x: 134, y: 104, width: 16, height: 16)
+        ) == CGPoint(x: 130.5, y: 112))
     }
 
-    @Test("Window controls outside the title bar cannot produce a desktop drag point")
-    func controlsOutsideTitleBarAreRejected() {
-        let point = desktopWindowDragPoint(
+    @Test("Missing safe gaps and controls outside the title bar are rejected",
+          arguments: [CGRect(x: 100, y: 104, width: 16, height: 16),
+                      CGRect(x: 126, y: 104, width: 16, height: 16),
+                      CGRect(x: 129, y: 104, width: 16, height: 16),
+                      CGRect(x: 134, y: 130, width: 16, height: 16),
+                      CGRect(x: 134, y: 304, width: 16, height: 16),
+                      CGRect.zero])
+    func unsafeControlGapsAreRejected(minimize: CGRect) {
+        #expect(desktopWindowDragPoint(
             windowFrame: CGRect(x: 100, y: 90, width: 1_000, height: 800),
-            controlFrames: [CGRect(x: 112, y: 300, width: 14, height: 14)]
-        )
-
-        #expect(point == nil)
+            closeButtonFrame: CGRect(x: 111, y: 104, width: 16, height: 16),
+            minimizeButtonFrame: minimize
+        ) == nil)
     }
 
-    @Test("Desktop drag offset remains valid when the window moves after preflight")
-    func desktopDragOffsetSurvivesWindowMovement() {
-        let offset = desktopWindowDragOffset(
-            windowFrame: CGRect(x: 100, y: 90, width: 1_000, height: 800),
-            controlFrames: [CGRect(x: 152, y: 110, width: 14, height: 14)]
-        )
+    @Test("The control gap translates across displays", arguments: [-2_000.0, 0, 1_500])
+    func desktopDragPointTranslates(dx: CGFloat) {
+        #expect(desktopWindowDragPoint(
+            windowFrame: CGRect(x: dx, y: -500, width: 1_000, height: 800),
+            closeButtonFrame: CGRect(x: dx + 11, y: -486, width: 16, height: 16),
+            minimizeButtonFrame: CGRect(x: dx + 34, y: -486, width: 16, height: 16)
+        ) == CGPoint(x: dx + 30.5, y: -478))
+    }
 
-        #expect(offset == CGVector(dx: 74, dy: 27))
-        #expect(offset.map { CGPoint(x: 1_200 + $0.dx, y: 400 + $0.dy) } == CGPoint(x: 1_274, y: 427))
+    @Test("Desktop drag uses room on either side and retains a drag for full-width windows")
+    func desktopDragRespectsHorizontalConstraints() {
+        let visible = CGRect(x: 0, y: 30, width: 1_000, height: 800)
+        #expect(desktopWindowDragVector(windowFrame: CGRect(x: 0, y: 30, width: 500, height: 500), visibleFrame: visible) == CGVector(dx: 18, dy: 0))
+        #expect(desktopWindowDragVector(windowFrame: CGRect(x: 500, y: 30, width: 500, height: 500), visibleFrame: visible) == CGVector(dx: -18, dy: 0))
+        #expect(desktopWindowDragVector(windowFrame: CGRect(x: 0, y: 30, width: 1_000, height: 500), visibleFrame: visible) == CGVector(dx: 18, dy: 0))
     }
 
     @Test("Configured desktop shortcut preserves command and Fn modifiers")

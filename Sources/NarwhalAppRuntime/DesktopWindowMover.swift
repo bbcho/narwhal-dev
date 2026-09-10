@@ -9,28 +9,26 @@ struct DesktopSwitchShortcut: Equatable {
 
 func desktopWindowDragPoint(
     windowFrame: CGRect,
-    controlFrames: [CGRect]
+    closeButtonFrame: CGRect,
+    minimizeButtonFrame: CGRect
 ) -> CGPoint? {
-    let titleBarBottom = min(windowFrame.maxY, windowFrame.minY + 80)
-    let titleBarControls = controlFrames.filter { frame in
-        !frame.isEmpty
-            && windowFrame.contains(CGPoint(x: frame.midX, y: frame.midY))
-            && frame.midY <= titleBarBottom
-    }
-    guard let rightmostControl = titleBarControls.max(by: { $0.maxX < $1.maxX }) else {
-        return nil
-    }
-    let point = CGPoint(x: rightmostControl.maxX + 8, y: rightmostControl.midY)
-    return windowFrame.contains(point) ? point : nil
+    guard windowFrame.contains(closeButtonFrame), windowFrame.contains(minimizeButtonFrame),
+          !closeButtonFrame.isEmpty, !minimizeButtonFrame.isEmpty
+    else { return nil }
+    let gapLeft = closeButtonFrame.maxX
+    let gapRight = minimizeButtonFrame.minX
+    let gapTop = max(closeButtonFrame.minY, minimizeButtonFrame.minY)
+    let gapBottom = min(closeButtonFrame.maxY, minimizeButtonFrame.maxY)
+    guard gapRight - gapLeft >= 4, gapBottom - gapTop >= 4,
+          (gapTop + gapBottom) / 2 <= windowFrame.minY + 80
+    else { return nil }
+    return CGPoint(x: (gapLeft + gapRight) / 2, y: (gapTop + gapBottom) / 2)
 }
 
-func desktopWindowDragOffset(
-    windowFrame: CGRect,
-    controlFrames: [CGRect]
-) -> CGVector? {
-    desktopWindowDragPoint(windowFrame: windowFrame, controlFrames: controlFrames).map {
-        CGVector(dx: $0.x - windowFrame.minX, dy: $0.y - windowFrame.minY)
-    }
+func desktopWindowDragVector(windowFrame: CGRect, visibleFrame: CGRect) -> CGVector {
+    if windowFrame.maxX + 18 <= visibleFrame.maxX { return CGVector(dx: 18, dy: 0) }
+    if windowFrame.minX - 18 >= visibleFrame.minX { return CGVector(dx: -18, dy: 0) }
+    return CGVector(dx: 18, dy: 0)
 }
 
 struct DesktopWindowMovePlan {
@@ -40,7 +38,6 @@ struct DesktopWindowMovePlan {
     let display: DisplayInfo
     let displays: [DisplayID: DisplayInfo]
     let shortcut: DesktopSwitchShortcut
-    let titleBarOffset: CGVector
 }
 
 enum DesktopWindowMoveError: Error, Equatable, CustomStringConvertible {
@@ -162,11 +159,7 @@ struct DesktopWindowMover {
             return .failure(error)
         }
 
-        let titleBarOffset: CGVector
-        switch await axClient.draggableTitleBarOffset(of: window) {
-        case .success(let value):
-            titleBarOffset = value
-        case .failure:
+        guard case .success = await axClient.draggableTitleBarOffset(of: window) else {
             return .failure(.draggableTitleBarPointUnavailable(window.id))
         }
 
@@ -177,8 +170,7 @@ struct DesktopWindowMover {
                 destinationSpace: destinationSpace,
                 display: display,
                 displays: displays,
-                shortcut: shortcut,
-                titleBarOffset: titleBarOffset
+                shortcut: shortcut
             )
         )
     }
@@ -192,15 +184,24 @@ struct DesktopWindowMover {
             return .failure(.windowServerFrameUnavailable(plan.window.id))
         }
 
+        let titleBarOffset: CGVector
+        switch await axClient.draggableTitleBarOffset(of: plan.window) {
+        case .success(let offset):
+            titleBarOffset = offset
+        case .failure:
+            return .failure(.draggableTitleBarPointUnavailable(plan.window.id))
+        }
+
         let originalCursor = CGEvent(source: nil)?.location
         defer {
             if let originalCursor { _ = CGWarpMouseCursorPosition(originalCursor) }
         }
         let titleBarPoint = CGPoint(
-            x: originalFrame.minX + plan.titleBarOffset.dx,
-            y: originalFrame.minY + plan.titleBarOffset.dy
+            x: originalFrame.minX + titleBarOffset.dx,
+            y: originalFrame.minY + titleBarOffset.dy
         )
-        let dragPoint = CGPoint(x: titleBarPoint.x + 18, y: titleBarPoint.y)
+        let dragVector = desktopWindowDragVector(windowFrame: originalFrame, visibleFrame: plan.display.visibleFrame)
+        let dragPoint = CGPoint(x: titleBarPoint.x + dragVector.dx, y: titleBarPoint.y + dragVector.dy)
         _ = CGWarpMouseCursorPosition(titleBarPoint)
         guard await pause(for: 0.08) else { return .failure(.cancelled) }
 
@@ -219,7 +220,7 @@ struct DesktopWindowMover {
         let mouseUp = CGEvent(
             mouseEventSource: nil,
             mouseType: .leftMouseUp,
-            mouseCursorPosition: dragPoint,
+            mouseCursorPosition: titleBarPoint,
             mouseButton: .left
         ),
         let keyDown = CGEvent(
@@ -247,11 +248,19 @@ struct DesktopWindowMover {
         mouseDown.post(tap: .cghidEventTap)
         mouseIsDown = true
         guard await pause(for: 0.15) else { return .failure(.cancelled) }
-        mouseDragged.post(tap: .cghidEventTap)
+        for fraction: CGFloat in [0.25, 0.6, 1] {
+            mouseDragged.location = CGPoint(
+                x: titleBarPoint.x + dragVector.dx * fraction,
+                y: titleBarPoint.y + dragVector.dy * fraction
+            )
+            mouseUp.location = mouseDragged.location
+            mouseDragged.post(tap: .cghidEventTap)
+            guard await pause(for: 0.05) else { return .failure(.cancelled) }
+        }
         guard await pause(for: 0.15) else { return .failure(.cancelled) }
 
         guard case .success(let draggedFrame) = axClient.windowServerFrame(of: plan.window),
-              abs(draggedFrame.minX - originalFrame.minX) >= 8
+              max(abs(draggedFrame.minX - originalFrame.minX), abs(draggedFrame.minY - originalFrame.minY)) >= 8
         else {
             return .failure(.dragDidNotEngage(plan.window.id))
         }

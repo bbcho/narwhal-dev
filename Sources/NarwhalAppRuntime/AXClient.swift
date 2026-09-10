@@ -486,12 +486,7 @@ struct AXClient {
             return .failure(error)
         }
 
-        let controlAttributes = [
-            kAXCloseButtonAttribute,
-            kAXMinimizeButtonAttribute,
-            kAXZoomButtonAttribute,
-            kAXFullScreenButtonAttribute,
-        ]
+        let controlAttributes = [kAXCloseButtonAttribute, kAXMinimizeButtonAttribute]
         let controlFrames = controlAttributes.compactMap { attribute -> CGRect? in
             var value: CFTypeRef?
             guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
@@ -506,15 +501,36 @@ struct AXClient {
             return CGRect(origin: position, size: size)
         }
 
-        guard case .success(let windowFrame) = windowServerFrame(of: window),
-              let offset = desktopWindowDragOffset(
+        guard controlFrames.count == 2,
+              case .success(let windowFrame) = windowServerFrame(of: window),
+              let point = desktopWindowDragPoint(
                 windowFrame: windowFrame,
-                controlFrames: controlFrames
+                closeButtonFrame: controlFrames[0],
+                minimizeButtonFrame: controlFrames[1]
               )
-        else {
+        else { return .failure(.draggableTitleBarPointUnavailable(window.id)) }
+
+        var hit: AXUIElement?
+        let application = Self.applicationElement(processID: window.pid)
+        guard AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &hit) == .success,
+              let hit
+        else { return .failure(.draggableTitleBarPointUnavailable(window.id)) }
+        let surface = Self.bounded(hit)
+        let role = stringAttribute(surface, kAXRoleAttribute)
+        guard role == kAXWindowRole || role == kAXToolbarRole || role == kAXGroupRole else {
             return .failure(.draggableTitleBarPointUnavailable(window.id))
         }
-        return .success(offset)
+        if role == kAXGroupRole {
+            var actions: CFArray?
+            guard AXUIElementCopyActionNames(surface, &actions) == .success,
+                  let actions, CFArrayGetCount(actions) == 0
+            else { return .failure(.draggableTitleBarPointUnavailable(window.id)) }
+        }
+        let hitWindow = role == kAXWindowRole ? surface : elementAttribute(surface, kAXWindowAttribute)
+        guard let hitWindow, CFEqual(hitWindow, element) else {
+            return .failure(.draggableTitleBarPointUnavailable(window.id))
+        }
+        return .success(CGVector(dx: point.x - windowFrame.minX, dy: point.y - windowFrame.minY))
     }
 
     @MainActor
