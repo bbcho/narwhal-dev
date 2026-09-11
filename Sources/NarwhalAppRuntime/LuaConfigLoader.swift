@@ -202,7 +202,13 @@ private final class LuaConfigDecoder {
             remainingValues: &remainingValues,
             activeTables: &activeTables
         )
-        guard case .table(let root) = value else {
+        let root: [String: LuaValue]
+        switch value {
+        case .table(let values):
+            root = values
+        case .array(let values) where values.isEmpty:
+            root = [:]
+        default:
             throw StartupConfigError.luaDecodeFailed(path: url.path, message: "config must return a table")
         }
         return LuaConfigData(root: root)

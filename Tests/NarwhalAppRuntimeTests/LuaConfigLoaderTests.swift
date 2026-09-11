@@ -1,9 +1,41 @@
 import Foundation
+import NarwhalCore
 import Testing
 @testable import NarwhalAppRuntime
 
 @Suite("Lua config loader")
 struct LuaConfigLoaderTests {
+    @Test("Empty Lua table loads the complete default config")
+    func emptyLuaTableLoadsDefaultConfig() throws {
+        let loaded = try loadUserConfig("return {}")
+
+        #expect(loaded.config == Config.default)
+    }
+
+    @Test("Empty nested object inherits its default members")
+    func emptyNestedObjectInheritsDefaultMembers() throws {
+        let loaded = try loadUserConfig("return { border = {} }")
+
+        #expect(loaded.config == Config.default)
+    }
+
+    @Test("Real Lua partial config overrides fields and clears explicit collections")
+    func realLuaPartialConfigOverridesAndClears() throws {
+        let loaded = try loadUserConfig("""
+        return {
+          keymap = {},
+          border = { width = 4 },
+        }
+        """)
+
+        #expect(loaded.config.keymap.isEmpty)
+        #expect(loaded.config.border == BorderConfig(
+            width: 4,
+            colorHex: Config.default.border.colorHex
+        ))
+        #expect(loaded.config.zones == Config.default.zones)
+    }
+
     @Test("Lua source stops at its byte budget")
     func luaSourceStopsAtByteBudget() throws {
         let url = try writeTemporaryConfig("return { value = '\(String(repeating: "x", count: 128))' }")
@@ -111,6 +143,17 @@ struct LuaConfigLoaderTests {
         default:
             #expect(Bool(false), "Expected sparse Lua table decode failure, got \(String(describing: result))")
         }
+    }
+
+    private func loadUserConfig(_ contents: String) throws -> StartupConfigLoad {
+        let url = try writeTemporaryConfig(contents)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let loaded = try StartupConfigLoader(
+            configURL: url,
+            missingFilePolicy: .fail
+        ).load().get()
+        #expect(loaded.source == .userFile(url))
+        return loaded
     }
 
     private func writeTemporaryConfig(_ contents: String) throws -> URL {
