@@ -4,6 +4,121 @@ import Testing
 
 @Suite("Default config")
 struct ConfigTests {
+    @Test("Empty Lua config inherits the complete default")
+    func emptyLuaConfigInheritsDefault() throws {
+        let config = try parseConfig(LuaConfigData(root: [:])).get()
+
+        #expect(config == Config.default)
+    }
+
+    @Test("A supplied top-level collection replaces while omitted fields inherit")
+    func suppliedTopLevelCollectionReplacesWhileOmittedFieldsInherit() throws {
+        let data = LuaConfigData(root: ["keymap": .array([])])
+
+        let config = try parseConfig(data).get()
+
+        #expect(config.keymap.isEmpty)
+        #expect(config.rules == Config.default.rules)
+        #expect(config.zones == Config.default.zones)
+        #expect(config.gaps == Config.default.gaps)
+        #expect(config.border == Config.default.border)
+        #expect(config.hud == Config.default.hud)
+        #expect(config.dragModifier == Config.default.dragModifier)
+    }
+
+    @Test("Nested config tables inherit omitted members")
+    func nestedConfigTablesInheritOmittedMembers() throws {
+        let data = LuaConfigData(root: [
+            "gaps": .table([
+                "inner": .number(8),
+                "outer": .table(["left": .number(6)])
+            ]),
+            "border": .table(["width": .number(4)]),
+            "hud": .table(["enabled": .bool(false)])
+        ])
+
+        let config = try parseConfig(data).get()
+
+        #expect(config.gaps == Gaps(
+            inner: 8,
+            outer: Insets(top: 0, left: 6, bottom: 0, right: 0)
+        ))
+        #expect(config.border == BorderConfig(width: 4, colorHex: Config.default.border.colorHex))
+        #expect(config.hud == HUDConfig(
+            enabled: false,
+            durationMillis: Config.default.hud.durationMillis
+        ))
+    }
+
+    @Test("Empty object tables inherit all nested members")
+    func emptyObjectTablesInheritAllNestedMembers() throws {
+        let data = LuaConfigData(root: [
+            "gaps": .array([]),
+            "border": .array([]),
+            "hud": .array([])
+        ])
+
+        let config = try parseConfig(data).get()
+
+        #expect(config.gaps == Config.default.gaps)
+        #expect(config.border == Config.default.border)
+        #expect(config.hud == Config.default.hud)
+    }
+
+    @Test("All explicit empty collections replace inherited values")
+    func allExplicitEmptyCollectionsReplaceInheritedValues() throws {
+        let data = LuaConfigData(root: [
+            "keymap": .array([]),
+            "zones": .array([]),
+            "rules": .array([]),
+            "drag_modifier": .array([])
+        ])
+
+        let config = try parseConfig(data).get()
+
+        #expect(config.keymap.isEmpty)
+        #expect(config.zones.isEmpty)
+        #expect(config.rules.isEmpty)
+        #expect(config.dragModifier.isEmpty)
+    }
+
+    @Test("Partial parsing inherits from the explicit base config")
+    func partialParsingInheritsFromExplicitBaseConfig() throws {
+        let base = Config(
+            keymap: [],
+            rules: [],
+            zones: [],
+            gaps: Gaps(inner: 9, outer: Insets(top: 1, left: 2, bottom: 3, right: 4)),
+            border: BorderConfig(width: 5, colorHex: "#112233"),
+            hud: HUDConfig(enabled: false, durationMillis: 900),
+            dragModifier: [.control]
+        )
+        let data = LuaConfigData(root: [
+            "hud": .table(["duration_millis": .number(250)])
+        ])
+
+        let config = try parseConfig(data, base: base).get()
+
+        #expect(config.keymap == base.keymap)
+        #expect(config.rules == base.rules)
+        #expect(config.zones == base.zones)
+        #expect(config.gaps == base.gaps)
+        #expect(config.border == base.border)
+        #expect(config.hud == HUDConfig(enabled: false, durationMillis: 250))
+        #expect(config.dragModifier == base.dragModifier)
+    }
+
+    @Test("Invalid supplied nested member preserves its exact error path")
+    func invalidSuppliedNestedMemberPreservesExactErrorPath() {
+        let data = LuaConfigData(root: [
+            "border": .table(["width": .string("wide")])
+        ])
+
+        #expect(parseConfig(data) == .failure(
+            .wrongType(key: "border.width", expected: "number")
+        ))
+    }
+
     @Test("Default keymap contains implemented hotkeys")
     func defaultKeymapContainsOnlyMvpHotkeys() {
         #expect(Config.default.keymap == [

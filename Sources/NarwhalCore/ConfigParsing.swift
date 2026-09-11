@@ -1,6 +1,9 @@
-public func parseConfig(_ data: LuaConfigData) -> Result<Config, ConfigError> {
+public func parseConfig(
+    _ data: LuaConfigData,
+    base: Config = .default
+) -> Result<Config, ConfigError> {
     do {
-        return .success(try ConfigParser(root: data.root).parse())
+        return .success(try ConfigParser(root: data.root, base: base).parse())
     } catch let error as ConfigError {
         return .failure(error)
     } catch {
@@ -10,28 +13,36 @@ public func parseConfig(_ data: LuaConfigData) -> Result<Config, ConfigError> {
 
 private struct ConfigParser {
     let root: [String: LuaValue]
+    let base: Config
 
     func parse() throws -> Config {
-        let keymap = try parseKeymap(required("keymap"))
-        let zones = try parseZones(required("zones"))
-        let rules = try parseRules(required("rules"))
+        let keymap = try override(root["keymap"], inheriting: base.keymap, parse: parseKeymap)
+        let zones = try override(root["zones"], inheriting: base.zones, parse: parseZones)
+        let rules = try override(root["rules"], inheriting: base.rules, parse: parseRules)
         let config = Config(
             keymap: keymap,
             rules: rules,
             zones: zones,
-            gaps: try parseGaps(required("gaps")),
-            border: try parseBorder(required("border")),
-            hud: try parseHUD(required("hud")),
-            dragModifier: try parseModifiers(required("drag_modifier"), key: "drag_modifier")
+            gaps: try parseGaps(root["gaps"], base: base.gaps),
+            border: try parseBorder(root["border"], base: base.border),
+            hud: try parseHUD(root["hud"], base: base.hud),
+            dragModifier: try override(root["drag_modifier"], inheriting: base.dragModifier) {
+                try parseModifiers($0, key: "drag_modifier")
+            },
+            managedRules: base.managedRules
         )
         try validateNoDuplicateHotkeys(config.keymap)
         try validateRuleActions(config.rules, zones: config.zones)
         return config
     }
 
-    private func required(_ key: String) throws -> LuaValue {
-        guard let value = root[key] else { throw ConfigError.missingKey(key) }
-        return value
+    private func override<Value>(
+        _ value: LuaValue?,
+        inheriting fallback: Value,
+        parse: (LuaValue) throws -> Value
+    ) throws -> Value {
+        guard let value else { return fallback }
+        return try parse(value)
     }
 
     private func parseKeymap(_ value: LuaValue) throws -> [HotkeyBinding] {
@@ -246,52 +257,46 @@ private struct ConfigParser {
         }
     }
 
-    private func parseGaps(_ value: LuaValue) throws -> Gaps {
+    private func parseGaps(_ value: LuaValue?, base: Gaps) throws -> Gaps {
+        guard let value else { return base }
         let gapTable = try table(value, key: "gaps")
-        let outer = try table(required("outer", in: gapTable, path: "gaps"), key: "gaps.outer")
+        let outer = try gapTable["outer"].map { try table($0, key: "gaps.outer") } ?? [:]
         return Gaps(
-            inner: try boundedNumber(
-                required("inner", in: gapTable, path: "gaps"),
-                key: "gaps.inner",
-                min: 0,
-                max: Gaps.maximumLength
-            ),
+            inner: try override(gapTable["inner"], inheriting: base.inner) {
+                try boundedNumber($0, key: "gaps.inner", min: 0, max: Gaps.maximumLength)
+            },
             outer: Insets(
-                top: try gapLength(required("top", in: outer, path: "gaps.outer"), key: "gaps.outer.top"),
-                left: try gapLength(required("left", in: outer, path: "gaps.outer"), key: "gaps.outer.left"),
-                bottom: try gapLength(required("bottom", in: outer, path: "gaps.outer"), key: "gaps.outer.bottom"),
-                right: try gapLength(required("right", in: outer, path: "gaps.outer"), key: "gaps.outer.right")
+                top: try override(outer["top"], inheriting: base.outer.top) { try gapLength($0, key: "gaps.outer.top") },
+                left: try override(outer["left"], inheriting: base.outer.left) { try gapLength($0, key: "gaps.outer.left") },
+                bottom: try override(outer["bottom"], inheriting: base.outer.bottom) { try gapLength($0, key: "gaps.outer.bottom") },
+                right: try override(outer["right"], inheriting: base.outer.right) { try gapLength($0, key: "gaps.outer.right") }
             )
         )
     }
 
-    private func parseBorder(_ value: LuaValue) throws -> BorderConfig {
+    private func parseBorder(_ value: LuaValue?, base: BorderConfig) throws -> BorderConfig {
+        guard let value else { return base }
         let table = try table(value, key: "border")
-        let color = try string(required("color", in: table, path: "border"), key: "border.color")
+        let color = try override(table["color"], inheriting: base.colorHex) { try string($0, key: "border.color") }
         guard isHexRGB(color) else {
             throw ConfigError.invalidValue(key: "border.color", reason: "expected #RRGGBB")
         }
         return BorderConfig(
-            width: try boundedNumber(
-                required("width", in: table, path: "border"),
-                key: "border.width",
-                min: 0,
-                max: BorderConfig.maximumWidth
-            ),
+            width: try override(table["width"], inheriting: base.width) {
+                try boundedNumber($0, key: "border.width", min: 0, max: BorderConfig.maximumWidth)
+            },
             colorHex: color
         )
     }
 
-    private func parseHUD(_ value: LuaValue) throws -> HUDConfig {
+    private func parseHUD(_ value: LuaValue?, base: HUDConfig) throws -> HUDConfig {
+        guard let value else { return base }
         let table = try table(value, key: "hud")
         return HUDConfig(
-            enabled: try bool(required("enabled", in: table, path: "hud"), key: "hud.enabled"),
-            durationMillis: try boundedInt(
-                required("duration_millis", in: table, path: "hud"),
-                key: "hud.duration_millis",
-                min: 0,
-                max: HUDConfig.maximumDurationMillis
-            )
+            enabled: try override(table["enabled"], inheriting: base.enabled) { try bool($0, key: "hud.enabled") },
+            durationMillis: try override(table["duration_millis"], inheriting: base.durationMillis) {
+                try boundedInt($0, key: "hud.duration_millis", min: 0, max: HUDConfig.maximumDurationMillis)
+            }
         )
     }
 
@@ -373,10 +378,14 @@ private struct ConfigParser {
     }
 
     private func table(_ value: LuaValue, key: String) throws -> [String: LuaValue] {
-        guard case .table(let table) = value else {
+        switch value {
+        case .table(let table):
+            return table
+        case .array(let values) where values.isEmpty:
+            return [:]
+        default:
             throw ConfigError.wrongType(key: key, expected: "table")
         }
-        return table
     }
 
     private func array(_ value: LuaValue, key: String) throws -> [LuaValue] {
