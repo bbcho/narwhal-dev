@@ -229,8 +229,8 @@ public enum DefaultZones {
 public enum DefaultConfigLua {
     public static func render(_ config: Config = .default) -> String {
         """
-        -- Bundled default configuration.
-        -- Copy this file to ~/.config/narwhal/init.lua to customize startup config.
+        -- Bundled full configuration reference.
+        -- User configs may include only the fields they override.
         return {
           keymap = {
         \(renderKeymap(config.keymap))

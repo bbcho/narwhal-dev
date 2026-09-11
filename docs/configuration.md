@@ -17,7 +17,29 @@ DefaultConfig/init.lua
 If the user file is absent, Narwhal uses built-in defaults. If a hot reload fails,
 the previous valid config remains active.
 
-## Top-Level Shape
+## Partial Overrides
+
+All top-level fields are optional: missing means inherit, while present collections
+replace.
+
+```lua
+return {
+  gaps = { inner = 8 },
+  border = { width = 4 },
+}
+```
+
+This minimal config inherits the default outer gaps and border color.
+
+`gaps`, `gaps.outer`, `border`, and `hud` merge by named member. Omitted named
+members inherit their built-in values.
+
+`keymap`, `zones`, `rules`, and `drag_modifier` replace completely when present.
+Use an explicit `{}` to clear one of these collections.
+
+## Full Configuration Reference
+
+The bundled reference includes every supported field:
 
 ```lua
 return {
@@ -33,8 +55,6 @@ return {
   rules = {},
 }
 ```
-
-All top-level keys are required.
 
 ## Keymap
 
