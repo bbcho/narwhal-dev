@@ -1,4 +1,5 @@
 .build/
+.worktrees/
 .swiftpm/
 DerivedData/
 *.xcodeproj/
