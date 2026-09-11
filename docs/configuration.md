@@ -39,7 +39,8 @@ Use an explicit `{}` to clear one of these collections.
 
 ## Full Configuration Reference
 
-The bundled reference includes every supported field:
+Complete configurations remain supported; the full reference below can be used as-is.
+It includes every supported field:
 
 ```lua
 return {
