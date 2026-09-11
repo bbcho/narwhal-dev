@@ -259,8 +259,8 @@ private struct ConfigParser {
 
     private func parseGaps(_ value: LuaValue?, base: Gaps) throws -> Gaps {
         guard let value else { return base }
-        let gapTable = try table(value, key: "gaps")
-        let outer = try gapTable["outer"].map { try table($0, key: "gaps.outer") } ?? [:]
+        let gapTable = try partialObjectTable(value, key: "gaps")
+        let outer = try gapTable["outer"].map { try partialObjectTable($0, key: "gaps.outer") } ?? [:]
         return Gaps(
             inner: try override(gapTable["inner"], inheriting: base.inner) {
                 try boundedNumber($0, key: "gaps.inner", min: 0, max: Gaps.maximumLength)
@@ -276,7 +276,7 @@ private struct ConfigParser {
 
     private func parseBorder(_ value: LuaValue?, base: BorderConfig) throws -> BorderConfig {
         guard let value else { return base }
-        let table = try table(value, key: "border")
+        let table = try partialObjectTable(value, key: "border")
         let color = try override(table["color"], inheriting: base.colorHex) { try string($0, key: "border.color") }
         guard isHexRGB(color) else {
             throw ConfigError.invalidValue(key: "border.color", reason: "expected #RRGGBB")
@@ -291,7 +291,7 @@ private struct ConfigParser {
 
     private func parseHUD(_ value: LuaValue?, base: HUDConfig) throws -> HUDConfig {
         guard let value else { return base }
-        let table = try table(value, key: "hud")
+        let table = try partialObjectTable(value, key: "hud")
         return HUDConfig(
             enabled: try override(table["enabled"], inheriting: base.enabled) { try bool($0, key: "hud.enabled") },
             durationMillis: try override(table["duration_millis"], inheriting: base.durationMillis) {
@@ -378,14 +378,17 @@ private struct ConfigParser {
     }
 
     private func table(_ value: LuaValue, key: String) throws -> [String: LuaValue] {
-        switch value {
-        case .table(let table):
-            return table
-        case .array(let values) where values.isEmpty:
-            return [:]
-        default:
+        guard case .table(let table) = value else {
             throw ConfigError.wrongType(key: key, expected: "table")
         }
+        return table
+    }
+
+    private func partialObjectTable(_ value: LuaValue, key: String) throws -> [String: LuaValue] {
+        if case .array(let values) = value, values.isEmpty {
+            return [:]
+        }
+        return try table(value, key: key)
     }
 
     private func array(_ value: LuaValue, key: String) throws -> [LuaValue] {

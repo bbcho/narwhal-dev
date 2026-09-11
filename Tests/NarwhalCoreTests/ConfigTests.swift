@@ -84,6 +84,12 @@ struct ConfigTests {
 
     @Test("Partial parsing inherits from the explicit base config")
     func partialParsingInheritsFromExplicitBaseConfig() throws {
+        let managedRule = ManagedWindowRule(
+            id: ManagedRuleID(rawValue: "managed-editor"),
+            name: "Managed editor",
+            matcher: ManagedRuleMatcher(bundleID: "com.example.editor"),
+            policy: ManagedRulePolicy(placement: .forceFloat)
+        )
         let base = Config(
             keymap: [],
             rules: [],
@@ -91,7 +97,8 @@ struct ConfigTests {
             gaps: Gaps(inner: 9, outer: Insets(top: 1, left: 2, bottom: 3, right: 4)),
             border: BorderConfig(width: 5, colorHex: "#112233"),
             hud: HUDConfig(enabled: false, durationMillis: 900),
-            dragModifier: [.control]
+            dragModifier: [.control],
+            managedRules: [managedRule]
         )
         let data = LuaConfigData(root: [
             "hud": .table(["duration_millis": .number(250)])
@@ -106,6 +113,25 @@ struct ConfigTests {
         #expect(config.border == base.border)
         #expect(config.hud == HUDConfig(enabled: false, durationMillis: 250))
         #expect(config.dragModifier == base.dragModifier)
+        #expect(config.managedRules == base.managedRules)
+    }
+
+    @Test("Explicit empty rules replace non-empty base rules")
+    func explicitEmptyRulesReplaceNonEmptyBaseRules() throws {
+        let base = Config(
+            keymap: [],
+            rules: [WindowRule(predicate: .bundleID("com.example.editor"), action: .forceFloat)],
+            zones: [],
+            gaps: Config.default.gaps,
+            border: .default,
+            hud: .default,
+            dragModifier: [.shift]
+        )
+        let data = LuaConfigData(root: ["rules": .array([])])
+
+        let config = try parseConfig(data, base: base).get()
+
+        #expect(config.rules.isEmpty)
     }
 
     @Test("Invalid supplied nested member preserves its exact error path")
@@ -116,6 +142,17 @@ struct ConfigTests {
 
         #expect(parseConfig(data) == .failure(
             .wrongType(key: "border.width", expected: "number")
+        ))
+    }
+
+    @Test("Empty array keymap entry retains its atomic record type error")
+    func emptyArrayKeymapEntryRetainsAtomicRecordTypeError() {
+        let data = LuaConfigData(root: [
+            "keymap": .array([.array([])])
+        ])
+
+        #expect(parseConfig(data) == .failure(
+            .wrongType(key: "keymap[1]", expected: "table")
         ))
     }
 

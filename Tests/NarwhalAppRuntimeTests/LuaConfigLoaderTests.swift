@@ -36,6 +36,21 @@ struct LuaConfigLoaderTests {
         #expect(loaded.config.zones == Config.default.zones)
     }
 
+    @Test("Non-empty root array retains the root table decode error")
+    func nonEmptyRootArrayRetainsRootTableDecodeError() throws {
+        let url = try writeTemporaryConfig("return {1}")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let result = StartupConfigLoader(configURL: url, missingFilePolicy: .fail).load()
+
+        guard case .failure(.luaDecodeFailed(let path, let message)) = result else {
+            Issue.record("Expected root Lua table decode failure, got \(String(describing: result))")
+            return
+        }
+        #expect(path == url.path)
+        #expect(message == "config must return a table")
+    }
+
     @Test("Lua source stops at its byte budget")
     func luaSourceStopsAtByteBudget() throws {
         let url = try writeTemporaryConfig("return { value = '\(String(repeating: "x", count: 128))' }")
