@@ -1,42 +1,138 @@
 # Architecture
 
-Narwhal is split into a mostly pure core and a thin macOS shell. The main design
-goal is that layout decisions are replayable from value inputs, while AppKit,
-Accessibility, Carbon hotkeys, Lua, filesystem, and IPC effects stay at the
-edge.
+This is the spine of the codebase: the module boundaries, the one path every
+layout change travels, the single owner of each concern, and the invariants
+that hold across them. Read it before adding a command, an observer, or a new
+file. When code and this document disagree, fix one of them in the same change.
+
+Narwhal is a pure core wrapped by a thin macOS shell. Layout decisions are
+replayable from value inputs. AppKit, Accessibility (AX), Carbon hotkeys, the
+event tap, Lua, the filesystem, and IPC stay at the edge.
 
 ## Module Map
 
-| Target | Role |
-|---|---|
-| `NarwhalCore` | Pure domain types and functions: config parsing, rules, world reconciliation, tree operations, layout solving, focus navigation, drag-zone resolution, restore projection/remap, echo/coalescer state machines, IPC DTOs. |
-| `NarwhalApp` | macOS shell: AppKit lifecycle, AX reads/writes, hotkeys, event tap, display/Space reads, Lua loading, config watching, IPC command handling, overlays, menubar, logging. |
-| `NarwhalAppSupport` | Shell-support code that is testable without AppKit app startup: service lifecycle and restore persistence scheduler. |
-| `NarwhalIPC` | Unix socket client/server transport. |
-| `NarwhalCtl` | CLI wrapper around IPC DTOs. |
-| `CLua` | Minimal C shim around Lua 5.5 APIs used by the Swift loader. |
+| Target | Role | Depends on |
+|---|---|---|
+| `NarwhalCore` | Pure domain types and functions: commands, BSP tree operations, layout solving, seam resize, focus navigation, drag zones, world reconciliation, restore projection, config parsing, rules, named layouts, echo and coalescer state machines, IPC DTOs. | nothing |
+| `NarwhalAppSupport` | Pure shell decisions that need no AppKit: the `*Model.swift` policy functions, service lifecycle, restore save scheduling, and the JSON stores for restore state, managed rules, and named layouts. | Core |
+| `NarwhalIPC` | Unix socket transport and socket path resolution. | Core |
+| `NarwhalAppRuntime` | The macOS shell: `AppDelegate`, `WorldActor`, AX reads and writes, frame transactions, observers, hotkeys, event tap, Lua loading, config watching, overlays, menubar, workbench, logging. | Core, AppSupport, IPC, CLua |
+| `NarwhalApp` | Executable entry point; calls into `NarwhalAppRuntime`. | AppRuntime |
+| `NarwhalCtl` | `narwhalctl` command-line client. | Core, IPC |
+| `CLua` | C shim over Lua 5.5: allocator and instruction limits, sandboxed library set. | Homebrew Lua |
 
-## Boundary Diagram
+The dependency direction is enforced by `Package.swift`. Core imports only
+CoreGraphics and Foundation and touches no files, AX, or AppKit; if a Core change
+needs one of those, the logic belongs in the shell.
+
+## The Spine: How a Layout Change Happens
+
+Every change to tiled layout follows one path. A new command adds a step-4
+function and a step-2 handler; it does not add a new path.
 
 ```text
-Hotkeys / CLI / IPC / AX / Display / Space / Lua / Files
-                      |
-                      v
-                NarwhalApp shell
-     reads effects, validates boundaries, logs outcomes
-                      |
-                      v
-                 NarwhalCore
-   pure commands, layout, restore, rules, config, focus
-                      |
-                      v
-                NarwhalApp shell
-       AX writes, restore save, overlay, menubar status
+ 1. Input        hotkey (HotkeyManager) | IPC (IPCServer) | drag-drop (EventTapClient)
+                 | overlay or workbench | AX notification / inventory poll
+                        |
+ 2. Handler      AppDelegate.performX / handleSerializedIPCCommand / drop handler
+                        |
+ 3. Gate         WorkspaceMutationGate.perform        FIFO, one mutation at a time
+                        |
+ 4. Plan         WorldActor.planX  ->  NarwhalCore apply / tree ops / solveLayout
+                 returns CommandPlanResult (planned World + DesiredLayout); no effects
+                        |
+ 5. Apply        AppDelegate.applyPlannedLayout
+                   LayoutTransactionCoordinator.execute    retry once on min-size clamp
+                     LayoutFrameTransaction.execute        write, read back, roll back
+                       WindowFrameWriter.setFrame          AX path or Terminal path
+                         AXClient                          AX attribute writes
+                        |
+ 6. Commit       WorldActor.commit(plan, appliedFrames)   only if isCurrent(plan)
+                        |
+ 7. Persist      AppDelegate.persistRestore  ->  RestoreManager (debounced, atomic)
+                        |
+ 8. Present      LayoutPresentationCoordinator (borders), overlays, menubar status
 ```
 
-## Domain Data
+Rules of the spine:
 
-Key value types:
+- `World` changes only inside `WorldActor`, and only inside the gate.
+- Frames are written only by `LayoutFrameTransaction`. Nothing else calls
+  `WindowFrameWriter.setFrame` for a tiled window.
+- A plan is committed only when every write converged and the world has not
+  changed since planning (`WorldActor.isCurrent`). Otherwise the transaction
+  rolls windows back and the model stays at its previous state.
+- Before writing, the transaction registers each target frame with
+  `AXEchoSuppressor`, so the AX notifications caused by Narwhal's own writes are
+  not read back as user edits.
+
+### Side paths into the spine
+
+User geometry (the user drags or resizes a tiled window):
+
+```text
+AXObserverService -> AXEchoSuppressor (drop own echoes) -> ExternalGeometryCoordinator
+(settle debounce) -> gate -> WorldActor.planExternalGeometry
+-> Core spacesByApplyingExternalResize -> resizeVisibleSeamInTree
+   success: rebuilt tree, continue at step 5
+   failure: the window is detached to floating
+```
+
+Environment changes (window opened or closed, Space switch, display change):
+
+```text
+AXObserverService inventory poll / DisplayObserverService / SpaceClient
+-> scheduleEnvironmentRefresh (Core coalescer) -> gate
+-> WorldActor.refreshEnvironment -> Core reconcileEnvironment -> step 7
+```
+
+Config:
+
+```text
+init.lua -> StartupConfigLoader (CLua, limits) -> LuaConfigData
+-> Core parseConfig -> Config -> WorldActor.reloadConfig; HotkeyManager rebinds
+ConfigFileWatcherService triggers the same path on save.
+```
+
+Startup restore:
+
+```text
+RestoreManager.load -> StoredWorld -> WorldActor.restore (Core restoreWorld)
+-> AppDelegate.startServices (ServiceLifecycle, rolls back on any failure)
+```
+
+## Single Owners
+
+Each concern has exactly one owner. Extend the owner; do not add a second.
+
+| Concern | Owner |
+|---|---|
+| Mutable runtime state | `WorldActor` |
+| Serializing mutations | `WorkspaceMutationGate` |
+| Command semantics | `NarwhalCore/Apply.swift` (`apply`) and `Command.swift` |
+| Tree shape changes | `NarwhalCore/TreeOperations.swift` |
+| Frame computation and min-size solving | `NarwhalCore/LayoutSolver.swift` |
+| Mouse seam resize | `NarwhalCore/VisiblePartitionResize.swift` |
+| Reconciling live windows, Spaces, displays | `NarwhalCore/WorldReconciliation.swift` |
+| Restore projection and matching | `NarwhalCore/Restore.swift` |
+| Restore file I/O and save debounce | `NarwhalAppSupport/RestoreManager.swift` |
+| Config validation | `NarwhalCore/ConfigParsing.swift` |
+| Lua execution and sandbox | `LuaConfigLoader.swift` and `Sources/CLua/shim.h` |
+| Writing frames | `LayoutFrameTransaction` -> `WindowFrameWriter` -> `AXClient` |
+| Retry on minimum-size clamp and commit | `LayoutTransactionCoordinator` |
+| Distinguishing own writes from user edits | `AXEchoSuppressor` (state machine in `NarwhalCore/AXEcho.swift`) |
+| Window inventory and AX notifications | `AXObserverService` |
+| Hotkey registration and key mapping | `HotkeyManager` |
+| Drag-to-zone gesture | `EventTapClient` + `NarwhalAppSupport/DragGestureModel.swift` |
+| Service start and rollback | `NarwhalAppSupport/ServiceLifecycle.swift` |
+| IPC framing, auth, socket lifecycle | `NarwhalIPC/IPCTransport.swift` |
+| Log redaction | `NarwhalAppSupport/LogLineModel.swift` |
+
+`AppDelegate` (`App.swift`) wires these together. It should route, not decide:
+when a branch in `App.swift` makes a policy decision, that decision belongs in a
+Core function or an AppSupport model with its own tests.
+
+## Domain Data
 
 - `World`: displays, active Space, per-Space display layouts, live windows,
   window-display ownership, observed constraints, pending rules, and config.
@@ -45,200 +141,96 @@ Key value types:
 - `Node`: `.void`, `.leaf(WindowID)`, or `.split(Split)`.
 - `Split`: axis plus two or more weighted cells.
 - `Cell`: positive finite weight plus child node.
-- `WindowMetadata`: window identity, bundle/title/role/pid, frame, resizability,
+- `WindowMetadata`: identity, bundle, title, role, pid, frame, resizability,
   minimization.
-- `Command`: domain command or external event translated into domain form.
-- `DesiredLayout`: solved layout and delta that the shell should apply.
-- `StoredWorld`: stable restore projection independent of raw runtime window IDs.
+- `CommandPlanResult` / `DesiredLayout`: the planned world and the frames the
+  shell should apply.
+- `StoredWorld`: restore projection keyed by stable references, never raw window
+  IDs.
 
-Important invariants:
+## Invariants
 
-- `Split` has at least two cells.
-- `Cell.weight` is finite and positive.
-- Config numeric fields are finite and range-checked at parse boundaries.
-- Tree operations preserve `.void` leaves unless reset explicitly clears them.
-- Non-resizable windows are rejected or force-floated by the core.
-- Layout writes are committed to `World` only after AX application succeeds.
-
-## Pure Core
-
-The core is designed around value transformations:
-
-- `apply(_:to:) -> Result<World, CommandError>`
-- `pushIntoTree`, `centerIntoTree`, `quarterIntoTree`, `ejectFromTree`
-- `resizeSplitInTree`
-- `balanceTree`
-- `flattenedLayout(of:)`
-- `solveLayout(...)`
-- `reconcileEnvironment(_:in:)`
-- `storedWorld(from:)`
-- `restoreWorld(...)`
-- `parseConfig(_:)`
-- `focusTarget(...)`
-- `pollWindowInventory(...)`
-- `scheduleEnvironmentRefresh(...)`
-- `scheduleRestoreSave(...)`
-
-These functions read only parameters and return values. Local mutation is used
-inside some functions for efficient construction, but it does not escape.
-
-## Shell Effects
-
-Allowed shell effects:
-
-| Effect | Location |
-|---|---|
-| App lifecycle and run loop | `App.swift` |
-| Accessibility reads/writes | `AXClient.swift`, `AXObserverService.swift`, `LayoutApplier.swift` |
-| Carbon hotkeys | `HotkeyManager.swift` |
-| Event tap | `EventTapClient.swift` |
-| Display reads | `DisplayClient.swift` |
-| Private active Space read | `SpaceClient.swift` |
-| Lua execution and decoding | `LuaConfigLoader.swift` |
-| File watching | `ConfigFileWatcherService.swift` |
-| Restore file read/write | `RestoreManager.swift` |
-| IPC sockets | `IPCTransport.swift` |
-| Logging | `StartupReporter.swift` |
-| Overlay windows | `Overlay.swift` |
-
-Shell code should translate effects into value data before calling the core, and
-translate core results into effects after planning.
-
-## Command Flow
-
-For layout commands:
-
-1. Shell verifies Accessibility trust.
-2. Shell reads focused or explicit window metadata.
-3. Shell reads current displays and active Space.
-4. Shell refreshes environment into `WorldActor`.
-5. Shell reconciles live window IDs when available.
-6. Shell asks `WorldActor` to plan a command.
-7. Core returns `CommandPlanResult` with desired layout and planned world.
-8. `LayoutApplier` writes frames through AX.
-9. If all writes converge, `WorldActor.commit` records planned world plus actual
-   applied frames.
-10. Restore save is scheduled.
-
-If AX reports minimum-size clamping, the shell records observed constraints,
-replans once, and retries. If retry still clamps, the planned layout is not
-committed.
-
-## WorldActor
-
-`WorldActor` owns mutable runtime `World` state and layout generation numbers.
-It serializes access to the domain state while keeping planning work expressed
-as calls into pure core functions.
-
-`WorldActor` does not perform AX, filesystem, IPC, or Lua effects. Those remain
-in the shell.
-
-## Restore Architecture
-
-Restore uses two layers:
-
-- Pure projection/remap in `NarwhalCore/Restore.swift`.
-- File persistence and save debouncing in `NarwhalAppSupport/RestoreManager.swift`.
-
-Stored restore data uses:
-
-- bundle ID
-- title
-- role
-- duplicate occurrence index
-- last known frame
-- display slot and display fingerprint
-
-On restore, stored references are matched to live windows. Raw window IDs are not
-treated as stable across launches.
-
-## Config Architecture
-
-Config crosses two boundaries:
-
-1. `LuaConfigLoader` executes Lua and decodes it into `LuaConfigData`.
-2. `ConfigParsing` validates `LuaConfigData` into immutable `Config`.
-
-The Lua decoder rejects unsupported types, sparse arrays, mixed table/array
-keys, cyclic tables, and excessive table depth. The parser validates semantic
-rules such as duplicate hotkeys, finite numbers, valid regexes, and valid zone
-bounds.
-
-## IPC Architecture
-
-IPC uses a newline-delimited JSON protocol over a per-user Unix socket:
-
-```sh
-"$(getconf DARWIN_USER_TEMP_DIR)narwhal.sock"
-```
-
-The transport layer is intentionally small:
-
-- `IPCClient` connects and sends DTOs.
-- `IPCServer` accepts connections and decodes request lines.
-- `narwhal.lock` provides exclusive ownership beside the socket, and both
-  endpoints require the peer's effective UID to match the current user.
-- `IPCCommandDTO` and `IPCReplyDTO` live in the core because they are pure
-  protocol values shared by app, CLI, and tests.
-
-The server tracks active client sockets so `stop()` closes the listener and all
-active clients. This keeps shutdown ownership explicit.
-
-## Error Model
-
-Expected domain failures use `Result` and domain error enums:
-
-- `CommandError`
-- `ConfigError`
-- `RestoreError`
-- `TreeResizeError`
-
-Shell and infrastructure failures use throwing APIs or shell-specific error
-types:
-
-- `StartupConfigError`
-- `AXClientError`
-- `IPCTransportError`
-- `RestoreManagerError`
-- `ServiceStartupError`
-
-The shell converts errors to logs or IPC replies at the boundary.
+| Invariant | Enforced by | Tested by |
+|---|---|---|
+| A `Split` has at least two cells. | `Split.create` | `ADTTests` |
+| A `Cell` weight is finite and positive. | `Cell.create` | `ADTTests` |
+| Tiled frames are disjoint, inside the display, and cover it with configured gaps. | `solveLayout` | `SlotSequenceTests` (all insertion sequences up to six windows), `SnappedFrameGapTests` |
+| Tree operations preserve `.void` slots unless a reset clears them. | `TreeOperations.swift` | `MVPLayoutTests` |
+| Non-resizable windows never enter a tree. | Core `apply` | `MVPLayoutTests`, `RulesTests` |
+| The model commits only frames that AX confirmed. | `LayoutTransactionCoordinator` + `WorldActor.commit` | `LayoutTransactionCoordinatorTests` |
+| Config numbers are finite and in range; hotkeys are unique. | `parseConfig` | `ConfigTests` |
+| Lua cannot reach `os`, `io`, `require`, or files. | `shim.h` library set | `LuaConfigLoaderTests` (`os` only) |
+| IPC peers must share the server's effective UID; socket and lock are owner-only. | `IPCTransport.swift` | `IPCTransportTests` |
+| Restore never trusts raw window IDs across launches. | `Restore.swift` | `RestoreTests` |
 
 ## Concurrency Model
 
 - AppKit-facing code runs on `@MainActor`.
-- `WorldActor` serializes domain state mutation.
-- Hotkey, IPC, drag/drop, and manual-resize command workflows pass through one
-  FIFO main-actor gate, so AX settling can suspend without overlapping another
-  layout mutation.
-- AX focus and frame writes use async settling delays; production code does not
-  spin a nested run loop while an operation is in progress.
+- `WorldActor` serializes state; `WorkspaceMutationGate` serializes whole
+  workflows (plan, apply, commit), so AX settling can suspend without another
+  mutation interleaving.
+- AX frame writes settle with async delays; production code never spins a nested
+  run loop.
 - Timers schedule back onto `@MainActor`.
-- IPC uses detached tasks around blocking Unix socket calls, with explicit socket
-  cleanup on shutdown.
-- Restore-save scheduling is a pure state machine wrapped by a `@MainActor`
+- IPC runs blocking socket calls in detached tasks and closes every client socket
+  on shutdown.
+- Restore save scheduling is a pure state machine wrapped by a `@MainActor`
   scheduler.
 
-No retryable core update function performs irreversible I/O.
+Anything that waits on user input or external code inside the gate blocks every
+other workflow until it returns. Keep modal UI and config execution outside it.
+
+## Error Model
+
+Expected domain failures return `Result` with a domain enum: `CommandError`,
+`ConfigError`, `RestoreError`, `TreeResizeError`,
+`VisiblePartitionResizeError`. Shell failures throw shell types:
+`StartupConfigError`, `AXClientError`, `IPCTransportError`,
+`RestoreManagerError`, `ServiceStartupError`. The shell converts both to log
+lines, IPC replies, or menubar status at the boundary.
+
+## Restore
+
+A stored window reference holds bundle ID, title, role, duplicate occurrence
+index, last known frame, display slot, and display fingerprint. On restore,
+references are matched to live windows; raw window IDs are never treated as
+stable across launches.
+
+## Config
+
+Config crosses two boundaries. `StartupConfigLoader` runs Lua and decodes the
+returned table into `LuaConfigData`, rejecting unsupported types, sparse arrays,
+mixed table and array keys, cycles, and excessive depth. `parseConfig` then
+validates semantics (finite numbers, ranges, duplicate hotkeys, regexes, zone
+bounds) into an immutable `Config`. Keys a user omits inherit defaults; an
+explicit empty collection replaces the default collection.
+
+## IPC
+
+Newline-delimited JSON over a per-user Unix socket at
+`"$(getconf DARWIN_USER_TEMP_DIR)narwhal.sock"`, with `narwhal.lock` beside it
+for exclusive ownership. `IPCCommandDTO` and `IPCReplyDTO` live in Core because
+they are pure protocol values shared by the app, the CLI, and tests.
+
+## Where New Code Goes
+
+| You are adding | Put it in | Test it with |
+|---|---|---|
+| A layout rule or decision | Core function | Core unit test with exact frames |
+| A shell policy (when to retry, what to log, whether to act) | AppSupport `*Model.swift` function | AppSupport unit test |
+| A new command | `Command`, Core `apply`, `WorldActor.planX`, one `AppDelegate` handler that calls `applyPlannedLayout` | Core test for the plan; live verifier for the AX effect |
+| A new macOS effect | A client type in AppRuntime that returns values | Live verifier |
+| A config field | `Config`, `parseConfig`, `docs/configuration.md` | `ConfigTests` and a `LuaConfigLoaderTests` round trip |
+
+Do not add a second frame writer, a second mutation queue, or state outside
+`WorldActor` that decides layout.
 
 ## Testing Shape
 
-Most tests target the pure core:
-
-- BSP insertion and slot invariants.
-- Layout solver and minimum-size behavior.
-- Rules and config parsing.
-- Focus navigation.
-- Restore projection and remap.
-- Environment coalescing.
-- AX echo suppression.
-- IPC DTO shape.
-
-Shell-support tests cover:
-
-- Restore persistence boundary.
-- Service lifecycle rollback.
-- IPC transport behavior.
-
-Manual and script smoke tests cover AppKit, AX, `SMAppService`, staged install
-replacement, real process lifecycle, and real application windows.
+- Core and AppSupport: unit tests, about 92% line coverage. These run in CI.
+- AppRuntime: about 23% line coverage from unit tests; `App.swift`, `Overlay.swift`,
+  `HotkeyManager`, `AXObserverService`, and `ConfigFileWatcherService` have none.
+- Live verifiers (`Tests/NarwhalLiveVerifierTests`) drive real AppKit and real
+  app windows. They compile only with `-DNARWHAL_ENABLE_VERIFIERS` and run only
+  through `scripts/live_verify_all.sh` on an Accessibility-trusted machine; CI
+  does not run them.
