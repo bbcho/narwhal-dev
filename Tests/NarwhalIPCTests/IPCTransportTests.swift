@@ -505,6 +505,67 @@ struct IPCTransportTests {
         #expect(try client.send(.resetLayout) == .ok(commandID: CommandID(raw: "recovered")))
     }
 
+    @Test("Server answers while all but one cooperative thread are blocked")
+    func serverAnswersWhileCooperativePoolIsNearlySaturated() async throws {
+        let endpoint = try temporaryEndpoint()
+        defer { endpoint.cleanup() }
+        let path = endpoint.socketPath
+        let server = IPCServer(socketPath: path, ioTimeout: 3) { _ in
+            .ok(commandID: CommandID(raw: "served"))
+        }
+        try server.start()
+        defer { server.stop() }
+        let blockerCount = max(0, ProcessInfo.processInfo.activeProcessorCount - 1)
+        let release = DispatchSemaphore(value: 0)
+        let releaseBlockers = { for _ in 0..<blockerCount { release.signal() } }
+        defer { releaseBlockers() }
+        // Without this watchdog a regression deadlocks the whole test process
+        // instead of failing: the test itself needs a pool thread to resume.
+        Thread.detachNewThread {
+            sleep(5)
+            releaseBlockers()
+        }
+        for _ in 0..<blockerCount {
+            Task.detached { blockCooperativeThread(on: release) }
+        }
+
+        let reply = try await sendOnDedicatedThread(.resetLayout, path: path, ioTimeout: 3)
+
+        #expect(reply == .ok(commandID: CommandID(raw: "served")))
+    }
+
+    @Test("A client trickling bytes cannot hold a server slot past the I/O deadline")
+    func tricklingClientReleasesSlotAtDeadline() async throws {
+        let endpoint = try temporaryEndpoint()
+        defer { endpoint.cleanup() }
+        let path = endpoint.socketPath
+        let server = IPCServer(socketPath: path, maxConnections: 1, ioTimeout: 0.3) { _ in
+            .ok(commandID: CommandID(raw: "after-trickle"))
+        }
+        try server.start()
+        defer { server.stop() }
+        let trickler = try connectRawSocket(path: path, nonBlocking: false)
+        defer { Darwin.close(trickler) }
+        try configureNoSIGPIPE(trickler)
+        let stopTrickling = LockedCounter()
+        defer { stopTrickling.increment() }
+        Thread.detachNewThread {
+            var byte = UInt8(ascii: "{")
+            while stopTrickling.value == 0, Darwin.write(trickler, &byte, 1) == 1 {
+                usleep(100_000)
+            }
+        }
+
+        let reply = try await sendOnDedicatedThread(
+            .resetLayout,
+            path: path,
+            ioTimeout: 1,
+            retryingUntil: Date().addingTimeInterval(2.5)
+        )
+
+        #expect(reply == .ok(commandID: CommandID(raw: "after-trickle")))
+    }
+
     @Test("Client abandons a connection when its reply deadline expires")
     func clientAbandonsConnectionAfterReplyTimeout() async throws {
         let endpoint = try temporaryEndpoint()
@@ -596,6 +657,33 @@ struct IPCTransportTests {
             lock.lock()
             storedValue += 1
             lock.unlock()
+        }
+    }
+
+    /// Runs the blocking client off the cooperative pool so the test never
+    /// competes with the server for pool threads.
+    private func sendOnDedicatedThread(
+        _ command: IPCCommandDTO,
+        path: String,
+        ioTimeout: TimeInterval,
+        retryingUntil deadline: Date? = nil
+    ) async throws -> IPCReplyDTO {
+        try await withCheckedThrowingContinuation { continuation in
+            Thread.detachNewThread {
+                while true {
+                    do {
+                        let reply = try IPCClient(socketPath: path, ioTimeout: ioTimeout).send(command)
+                        continuation.resume(returning: reply)
+                        return
+                    } catch {
+                        guard let deadline, Date() < deadline else {
+                            continuation.resume(throwing: error)
+                            return
+                        }
+                        usleep(50_000)
+                    }
+                }
+            }
         }
     }
 
@@ -746,4 +834,9 @@ struct IPCTransportTests {
         }
         return try condition()
     }
+}
+
+/// Deliberately occupies the calling cooperative pool thread until `semaphore` signals.
+private func blockCooperativeThread(on semaphore: DispatchSemaphore) {
+    semaphore.wait()
 }

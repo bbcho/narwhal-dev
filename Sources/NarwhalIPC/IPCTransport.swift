@@ -323,11 +323,12 @@ public final class IPCServer: @unchecked Sendable {
                 lockFD: lockFD
             ))
             transferred = true
-            Task.detached { [self] in
-                await acceptLoop(createdSocketFD)
+            // Blocking socket calls run on dedicated threads, never on Swift's
+            // cooperative pool: blocking pool threads starves every other task
+            // in the process, including this server's own handler.
+            Thread.detachNewThread { [self] in
+                acceptLoop(createdSocketFD)
             }
-        } catch {
-            throw error
         }
     }
 
@@ -345,8 +346,8 @@ public final class IPCServer: @unchecked Sendable {
         Darwin.close(stopped.resources.lockFD)
     }
 
-    private func acceptLoop(_ socketFD: Int32) async {
-        while !Task.isCancelled && state.isRunning {
+    private func acceptLoop(_ socketFD: Int32) {
+        while state.isRunning {
             let clientFD = Darwin.accept(socketFD, nil, nil)
             if clientFD < 0 {
                 let currentErrno = errno
@@ -357,10 +358,9 @@ public final class IPCServer: @unchecked Sendable {
                     if state.isRunning {
                         log("IPC accept transient errno=\(currentErrno) (\(String(cString: strerror(currentErrno)))); continuing")
                     }
-                    // Back off while file descriptors are exhausted. Cancellation
-                    // interrupts the sleep, and the next iteration exits.
+                    // Back off while file descriptors are exhausted.
                     if currentErrno == EMFILE || currentErrno == ENFILE {
-                        try? await Task.sleep(nanoseconds: 50_000_000)
+                        usleep(50_000)
                     }
                     continue
                 }
@@ -384,8 +384,8 @@ public final class IPCServer: @unchecked Sendable {
                 continue
             }
 
-            Task.detached { [self] in
-                await processConnection(clientFD)
+            Thread.detachNewThread { [self] in
+                processConnection(clientFD)
             }
         }
     }
@@ -413,7 +413,7 @@ public final class IPCServer: @unchecked Sendable {
         }
     }
 
-    private func processConnection(_ clientFD: Int32) async {
+    private func processConnection(_ clientFD: Int32) {
         defer {
             if state.closeConnection(clientFD) {
                 closeSocket(clientFD)
@@ -422,8 +422,12 @@ public final class IPCServer: @unchecked Sendable {
 
         while state.isRunning {
             do {
-                guard let requestData = try readLine(from: clientFD, maxBytes: maxLineBytes) else { return }
-                let reply = await reply(for: requestData)
+                guard let requestData = try readLine(
+                    from: clientFD,
+                    maxBytes: maxLineBytes,
+                    deadline: Date().addingTimeInterval(ioTimeout)
+                ) else { return }
+                let reply = reply(for: requestData)
                 let encoded = try encodeReplyLine(reply)
                 try writeAll(encoded, to: clientFD)
             } catch IPCTransportError.lineTooLong {
@@ -446,17 +450,27 @@ public final class IPCServer: @unchecked Sendable {
         }
     }
 
-    private func reply(for requestData: Data) async -> IPCReplyDTO {
-        do {
-            let command = try JSONDecoder().decode(IPCCommandDTO.self, from: requestData)
-            return await handle(command)
-        } catch {
+    private func reply(for requestData: Data) -> IPCReplyDTO {
+        guard let command = try? JSONDecoder().decode(IPCCommandDTO.self, from: requestData) else {
             return .error(
                 commandID: CommandID(raw: "decode-error"),
                 code: "invalid_json",
                 message: "Invalid IPC command JSON"
             )
         }
+        // Waiting here is safe: this is a dedicated connection thread.
+        let reply = IPCReplySlot()
+        let replied = DispatchSemaphore(value: 0)
+        Task { [handle] in
+            reply.value = await handle(command)
+            replied.signal()
+        }
+        replied.wait()
+        return reply.value ?? .error(
+            commandID: CommandID(raw: "handler-error"),
+            code: "handler_failed",
+            message: "IPC handler produced no reply"
+        )
     }
 }
 
@@ -478,6 +492,12 @@ private func requireCurrentPeerUID(
     guard actual == expected else {
         throw IPCTransportError.peerUIDMismatch(expected: expected, actual: actual)
     }
+}
+
+/// Hands one reply from the handler task to the waiting connection thread;
+/// the semaphore in `reply(for:)` orders the write before the read.
+private final class IPCReplySlot: @unchecked Sendable {
+    var value: IPCReplyDTO?
 }
 
 private struct IPCServerResources {
@@ -599,7 +619,9 @@ private func encodeReplyLine(_ reply: IPCReplyDTO) throws -> Data {
     return data
 }
 
-private func readLine(from fd: Int32, maxBytes: Int) throws -> Data? {
+/// Reads one newline-terminated line. `deadline` bounds the whole line, so a
+/// peer trickling bytes cannot outlast the per-read socket timeout forever.
+private func readLine(from fd: Int32, maxBytes: Int, deadline: Date? = nil) throws -> Data? {
     var bytes: [UInt8] = []
     bytes.reserveCapacity(min(1024, maxBytes))
 
@@ -618,6 +640,9 @@ private func readLine(from fd: Int32, maxBytes: Int) throws -> Data? {
         }
         if byte == 0x0A {
             return Data(bytes)
+        }
+        if let deadline, Date() >= deadline {
+            throw IPCTransportError.timedOut(operation: "read")
         }
         guard bytes.count < maxBytes else {
             throw IPCTransportError.lineTooLong(maxBytes: maxBytes)
