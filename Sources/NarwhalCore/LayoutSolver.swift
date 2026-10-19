@@ -235,9 +235,9 @@ private func solvedFrames(
             return .failure(unsatisfiable)
         }
 
-        guard let lengths = constrainedLengths(
-            total: frame.length(on: split.axis),
-            weights: split.cells.map(\.weight),
+        guard let childFrames = constrainedSplitFrames(
+            split,
+            in: frame,
             minimums: minimums.map { $0.length(on: split.axis) }
         ) else {
             let required = minimums.map { $0.length(on: split.axis) }.reduce(0, +)
@@ -250,7 +250,7 @@ private func solvedFrames(
             ))
         }
 
-        return zip(split.cells, splitFrames(frame, axis: split.axis, lengths: lengths)).reduce(
+        return zip(split.cells, childFrames).reduce(
             Result<[WindowID: CGRect], UnsatisfiableLayout>.success([:])
         ) { result, entry in
             result.flatMap { tiled in
@@ -266,6 +266,29 @@ private func solvedFrames(
             }
         }
     }
+}
+
+/// The child frames `solveLayout` gives a split, honoring minimum sizes.
+/// Falls back to plain weights when the minimums cannot fit.
+func constrainedSplitFrames(
+    _ split: Split,
+    in frame: CGRect,
+    innerGap: Double,
+    constraints: [WindowID: WindowConstraints]
+) -> [CGRect] {
+    let minimums = split.cells.map {
+        minimumSize(of: $0.node, innerGap: innerGap, constraints: constraints).length(on: split.axis)
+    }
+    return constrainedSplitFrames(split, in: frame, minimums: minimums)
+        ?? splitFrames(frame, axis: split.axis, weights: split.cells.map(\.weight))
+}
+
+private func constrainedSplitFrames(_ split: Split, in frame: CGRect, minimums: [Double]) -> [CGRect]? {
+    constrainedLengths(
+        total: frame.length(on: split.axis),
+        weights: split.cells.map(\.weight),
+        minimums: minimums
+    ).map { splitFrames(frame, axis: split.axis, lengths: $0) }
 }
 
 private func minimumSize(

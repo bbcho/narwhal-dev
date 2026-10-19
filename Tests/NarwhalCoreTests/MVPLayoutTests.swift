@@ -992,8 +992,8 @@ struct MVPLayoutTests {
         #expect(cycle == [chromeA, terminal, firefoxB])
     }
 
-    @Test("External move updates frame and display ownership without changing layout state")
-    func externalMoveUpdatesFrameAndDisplayOwnershipOnly() throws {
+    @Test("External move onto another display updates ownership and floats the window there")
+    func externalMoveOntoAnotherDisplayFloatsWindowThere() throws {
         let leftDisplay = DisplayID(raw: 1)
         let rightDisplay = DisplayID(raw: 2)
         let space = SpaceID(raw: 1)
@@ -1032,7 +1032,10 @@ struct MVPLayoutTests {
         #expect(next.windows[window]?.frame == movedFrame)
         #expect(next.windows[other] == world.windows[other])
         #expect(next.windowDisplay[window] == rightDisplay)
-        #expect(next.spaces == world.spaces)
+        #expect(next.spaces[space]?.displays == [
+            leftDisplay: DisplaySpaceState(displayID: leftDisplay, tree: ejectFromTree(window, tree), floating: [other]),
+            rightDisplay: DisplaySpaceState(displayID: rightDisplay, tree: .void, floating: [window])
+        ])
         #expect(next.displays == world.displays)
         #expect(next.windowConstraints == world.windowConstraints)
         #expect(next.pendingRules == world.pendingRules)

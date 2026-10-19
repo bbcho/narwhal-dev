@@ -15,6 +15,7 @@ public func resizeVisibleSeamInTree(
     to newFrame: CGRect,
     rootFrame: CGRect,
     innerGap: Double,
+    constraints: [WindowID: WindowConstraints] = [:],
     _ tree: Node
 ) -> Result<Node, VisiblePartitionResizeError> {
     guard oldFrame.narwhalIsFinitePositive,
@@ -25,50 +26,90 @@ public func resizeVisibleSeamInTree(
     else {
         return .failure(.invalidPartition)
     }
+    let geometry = SeamGeometry(rootFrame: rootFrame, innerGap: innerGap, constraints: constraints)
 
-    let rendered = renderPartition(tree, in: rootFrame)
+    let changes = changedEdges(from: oldFrame, to: newFrame)
+    switch changes.count {
+    case 0:
+        return occupiedSlotIndex(of: windowID, in: renderPartition(tree, geometry)).map { _ in tree }
+    case 1:
+        return resizeSingleSeam(windowID, change: changes[0], to: newFrame, geometry, tree)
+    case 2 where changes[0].direction.layoutAxisForPush != changes[1].direction.layoutAxisForPush:
+        // A corner drag is two independent seam moves, one per axis.
+        return resizeSingleSeam(windowID, change: changes[0], to: newFrame, geometry, tree)
+            .flatMap { resizeSingleSeam(windowID, change: changes[1], to: newFrame, geometry, $0) }
+    default:
+        return .failure(.ambiguousChangedEdges)
+    }
+}
+
+private struct SeamGeometry {
+    let rootFrame: CGRect
+    let innerGap: Double
+    let constraints: [WindowID: WindowConstraints]
+
+    var gapInset: CGFloat { CGFloat(innerGap) / 2 }
+}
+
+private func occupiedSlotIndex(
+    of windowID: WindowID,
+    in rendered: RenderedPartition
+) -> Result<Int, VisiblePartitionResizeError> {
     let sources = rendered.slots.indices.filter {
         rendered.slots[$0].occupancy == .occupied(windowID)
     }
     guard sources.count == 1, let sourceIndex = sources.first else {
         return sources.isEmpty ? .failure(.windowNotFound(windowID)) : .failure(.invalidPartition)
     }
+    return .success(sourceIndex)
+}
 
-    let changes = changedEdges(from: oldFrame, to: newFrame)
-    guard changes.count == 1, let change = changes.first else {
-        return changes.isEmpty ? .success(tree) : .failure(.ambiguousChangedEdges)
+private func resizeSingleSeam(
+    _ windowID: WindowID,
+    change: EdgeChange,
+    to newFrame: CGRect,
+    _ geometry: SeamGeometry,
+    _ tree: Node
+) -> Result<Node, VisiblePartitionResizeError> {
+    let rendered = renderPartition(tree, geometry)
+    let sourceIndex: Int
+    switch occupiedSlotIndex(of: windowID, in: rendered) {
+    case .success(let index):
+        sourceIndex = index
+    case .failure(let error):
+        return .failure(error)
     }
 
-    let gapInset = CGFloat(innerGap) / 2
+    let gapInset = geometry.gapInset
+    let rootFrame = geometry.rootFrame
     let newBoundary = quantizedSplitBoundary(
         partitionBoundary(for: change, frame: newFrame, gapInset: gapInset)
     )
     var adjusted = rendered.slots
-    let sourceFrame = adjusted[sourceIndex].frame
-    let neighborIndices = adjusted.indices.filter { index in
-        index != sourceIndex && isVisibleNeighbor(
-            adjusted[index].frame,
-            of: sourceFrame,
-            across: change.direction
-        )
-    }
-    guard !neighborIndices.isEmpty else {
+    let seam = seamSides(of: sourceIndex, in: adjusted, direction: change.direction)
+    guard !seam.opposite.isEmpty else {
         return .failure(.noVisibleNeighbor(change.direction))
     }
-    guard neighborsCoverSourceEdge(
-        neighborIndices.map { adjusted[$0].frame },
-        source: sourceFrame,
-        direction: change.direction
-    ) else {
+    let oppositeFrames = seam.opposite.map { adjusted[$0].frame }
+    guard seam.moving.allSatisfy({ index in
+        let movingFrame = adjusted[index].frame
+        return neighborsCoverSourceEdge(
+            oppositeFrames.filter { sharesSeam($0, movingFrame, change.direction) },
+            source: movingFrame,
+            direction: change.direction
+        )
+    }) else {
         return .failure(.invalidPartition)
     }
 
-    adjusted[sourceIndex].frame = frameByMovingBoundary(
-        of: sourceFrame,
-        direction: change.direction,
-        to: newBoundary
-    )
-    for index in neighborIndices {
+    for index in seam.moving {
+        adjusted[index].frame = frameByMovingBoundary(
+            of: adjusted[index].frame,
+            direction: change.direction,
+            to: newBoundary
+        )
+    }
+    for index in seam.opposite {
         adjusted[index].frame = frameByMovingOppositeBoundary(
             of: adjusted[index].frame,
             direction: change.direction,
@@ -96,7 +137,7 @@ public func resizeVisibleSeamInTree(
         return .failure(error)
     }
 
-    let rebuiltSlots = renderPartition(rebuilt, in: rootFrame).slots
+    let rebuiltSlots = renderPartition(rebuilt, geometry).slots
     guard partitionsMatch(adjusted, rebuiltSlots),
           let rebuiltSource = rebuiltSlots.first(where: { $0.occupancy == .occupied(windowID) }),
           rebuiltSource.frame.insetBy(dx: gapInset, dy: gapInset).standardized
@@ -132,7 +173,11 @@ private struct EdgeChange {
     let direction: Direction
 }
 
-private func renderPartition(_ node: Node, in frame: CGRect) -> RenderedPartition {
+private func renderPartition(_ node: Node, _ geometry: SeamGeometry) -> RenderedPartition {
+    renderPartition(node, in: geometry.rootFrame, geometry)
+}
+
+private func renderPartition(_ node: Node, in frame: CGRect, _ geometry: SeamGeometry) -> RenderedPartition {
     switch node {
     case .void:
         return RenderedPartition(
@@ -145,9 +190,14 @@ private func renderPartition(_ node: Node, in frame: CGRect) -> RenderedPartitio
             splitRegions: []
         )
     case .split(let split):
-        let childFrames = splitFrames(frame, axis: split.axis, weights: split.cells.map(\.weight))
+        let childFrames = constrainedSplitFrames(
+            split,
+            in: frame,
+            innerGap: geometry.innerGap,
+            constraints: geometry.constraints
+        )
         let children = zip(split.cells, childFrames).map { cell, childFrame in
-            renderPartition(cell.node, in: childFrame)
+            renderPartition(cell.node, in: childFrame, geometry)
         }
         let boundaries = Array(childFrames.dropLast()).map {
             split.axis == .horizontal ? $0.maxX : $0.maxY
@@ -190,21 +240,72 @@ private func partitionBoundary(for change: EdgeChange, frame: CGRect, gapInset: 
     }
 }
 
-private func isVisibleNeighbor(_ candidate: CGRect, of source: CGRect, across direction: Direction) -> Bool {
-    let tolerance = configuredGapTolerance
+private struct SeamSides {
+    let moving: [Int]
+    let opposite: [Int]
+}
+
+/// Collects every slot on both sides of the source's dragged edge that shares
+/// one continuous seam with it. Moving only the source's direct neighbors
+/// would leave a slot that also borders those neighbors behind, breaking the
+/// partition (a short window beside a tall one).
+private func seamSides(of sourceIndex: Int, in slots: [PartitionSlot], direction: Direction) -> SeamSides {
+    let coordinate = edgeCoordinate(of: slots[sourceIndex].frame, direction)
+    var moving: Set<Int> = [sourceIndex]
+    var opposite: Set<Int> = []
+    var grew = true
+    while grew {
+        grew = false
+        for index in slots.indices where !moving.contains(index) && !opposite.contains(index) {
+            let frame = slots[index].frame
+            if approximatelyEqual(edgeCoordinate(of: frame, direction), coordinate),
+               opposite.contains(where: { sharesSeam(frame, slots[$0].frame, direction) }) {
+                moving.insert(index)
+                grew = true
+            } else if approximatelyEqual(edgeCoordinate(of: frame, direction.opposite), coordinate),
+                      moving.contains(where: { sharesSeam(frame, slots[$0].frame, direction) }) {
+                opposite.insert(index)
+                grew = true
+            }
+        }
+    }
+    return SeamSides(moving: moving.sorted(), opposite: opposite.sorted())
+}
+
+private extension Direction {
+    var opposite: Direction {
+        switch self {
+        case .left:
+            return .right
+        case .right:
+            return .left
+        case .up:
+            return .down
+        case .down:
+            return .up
+        }
+    }
+}
+
+private func edgeCoordinate(of frame: CGRect, _ direction: Direction) -> CGFloat {
     switch direction {
     case .left:
-        return abs(candidate.maxX - source.minX) <= tolerance
-            && overlap(candidate.minY, candidate.maxY, source.minY, source.maxY) > tolerance
+        return frame.minX
     case .right:
-        return abs(candidate.minX - source.maxX) <= tolerance
-            && overlap(candidate.minY, candidate.maxY, source.minY, source.maxY) > tolerance
+        return frame.maxX
     case .up:
-        return abs(candidate.maxY - source.minY) <= tolerance
-            && overlap(candidate.minX, candidate.maxX, source.minX, source.maxX) > tolerance
+        return frame.minY
     case .down:
-        return abs(candidate.minY - source.maxY) <= tolerance
-            && overlap(candidate.minX, candidate.maxX, source.minX, source.maxX) > tolerance
+        return frame.maxY
+    }
+}
+
+private func sharesSeam(_ first: CGRect, _ second: CGRect, _ direction: Direction) -> Bool {
+    switch direction {
+    case .left, .right:
+        return overlap(first.minY, first.maxY, second.minY, second.maxY) > configuredGapTolerance
+    case .up, .down:
+        return overlap(first.minX, first.maxX, second.minX, second.maxX) > configuredGapTolerance
     }
 }
 

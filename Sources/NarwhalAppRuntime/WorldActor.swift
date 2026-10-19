@@ -110,7 +110,7 @@ actor WorldActor {
             guard newWorld.spaces != oldWorld.spaces else {
                 world = newWorld
                 pruneRuntimeState()
-                return .success(nil)
+                return externalGeometryWindowID(for: event).map(planSnapBack) ?? .success(nil)
             }
             return recordingHistory(
                 makePlan(
@@ -486,6 +486,26 @@ actor WorldActor {
                 undoWorld: undoWorld,
                 generation: LayoutGeneration(raw: nextGeneration)
             ))
+        }
+    }
+
+    /// After a manual geometry change could not be applied, records where the
+    /// window actually is without touching the tree, then plans writing it back
+    /// to its tile.
+    func planSnapBack(_ windowID: WindowID, observedFrame: CGRect?) -> Result<CommandPlanResult?, CommandError> {
+        if let observedFrame {
+            recordAppliedFrames([windowID: observedFrame])
+        }
+        return planSnapBack(windowID)
+    }
+
+    private func planSnapBack(_ windowID: WindowID) -> Result<CommandPlanResult?, CommandError> {
+        measureLayoutPlan {
+            let result = snapBackCommandPlan(for: windowID, in: world, generation: LayoutGeneration(raw: nextGeneration))
+            if case .success(.some) = result {
+                nextGeneration += 1
+            }
+            return result
         }
     }
 

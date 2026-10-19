@@ -65,5 +65,11 @@ public func preservedExternalGeometryFrames(
     guard let windowID = externalGeometryWindowID(for: selection.event),
           let frame = selection.liveFrame ?? plan.plannedWorld.windows[windowID]?.frame
     else { return [:] }
+    // Only leave the dragged window alone when the plan already agrees with where
+    // the user put it; a snap-back plan must write it.
+    if let planned = plan.desiredLayout.layout.tiled[windowID],
+       !planned.narwhalApproximatelyEquals(frame, tolerance: frameWriteSettleTolerance) {
+        return [:]
+    }
     return [windowID: frame]
 }

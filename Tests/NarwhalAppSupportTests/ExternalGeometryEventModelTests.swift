@@ -212,6 +212,32 @@ struct ExternalGeometryEventModelTests {
         #expect(preservedExternalGeometryFrames(selection: selection, plan: plan) == [window: liveFrame])
     }
 
+    @Test("A snap-back plan writes the dragged window instead of preserving where the user left it")
+    func snapBackPlanDoesNotPreserveDraggedWindow() {
+        let window = WindowID(raw: 56)
+        let liveFrame = CGRect(x: 20, y: 0, width: 580, height: 800)
+        let tileFrame = CGRect(x: 0, y: 0, width: 600, height: 800)
+        let selection = ExternalGeometryEventSelection(
+            event: .windowMoved(window, liveFrame),
+            usedLiveFrame: false,
+            liveFrame: liveFrame
+        )
+        let plan = CommandPlanResult(
+            focusedWindowID: nil,
+            desiredLayout: DesiredLayout(
+                generation: LayoutGeneration(raw: 1),
+                layout: Layout(tiled: [window: tileFrame], floatingZOrder: [], hidden: []),
+                delta: LayoutDelta(moves: [window: tileFrame], raises: [], hides: [], shows: [])
+            ),
+            windows: [window: metadata(window, frame: liveFrame)],
+            sourceWorld: .empty,
+            plannedWorld: .empty,
+            undoWorld: nil
+        )
+
+        #expect(preservedExternalGeometryFrames(selection: selection, plan: plan) == [:])
+    }
+
     private func metadata(_ id: WindowID, frame: CGRect) -> WindowMetadata {
         WindowMetadata(
             id: id,

@@ -177,6 +177,36 @@ public func currentLayoutCommandPlan(
         .mapError(CommandError.layoutUnsatisfiable)
 }
 
+/// Writes a tiled window back to its tile after a manual resize that the tiling
+/// could not absorb. Returns nil when the window is floating or already settled.
+public func snapBackCommandPlan(
+    for windowID: WindowID,
+    in world: World,
+    generation: LayoutGeneration
+) -> Result<CommandPlanResult?, CommandError> {
+    flattenedLayout(of: world)
+        .map { layout -> CommandPlanResult? in
+            guard let tile = layout.tiled[windowID],
+                  let observed = world.windows[windowID]?.frame,
+                  !observed.narwhalApproximatelyEquals(tile, tolerance: frameWriteSettleTolerance)
+            else {
+                return nil
+            }
+            return commandPlanResult(
+                sourceWorld: world,
+                newWorld: world,
+                focusedWindowID: nil,
+                undoWorld: nil,
+                desiredLayout: DesiredLayout(
+                    generation: generation,
+                    layout: layout,
+                    delta: LayoutDelta(moves: [windowID: tile], raises: [], hides: [], shows: [])
+                )
+            )
+        }
+        .mapError(CommandError.layoutUnsatisfiable)
+}
+
 public func focusDirectionPlan(
     in world: World,
     from focusedWindowID: WindowID,

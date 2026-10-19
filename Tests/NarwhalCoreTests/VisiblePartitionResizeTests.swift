@@ -269,6 +269,111 @@ struct VisiblePartitionResizeTests {
         ) == .failure(.noVisibleNeighbor(.left)))
     }
 
+    @Test("A short source moves the whole seam it shares with a taller neighbor")
+    func shortSourceMovesWholeSharedSeam() throws {
+        let tall = WindowID(raw: 30)
+        let upper = WindowID(raw: 31)
+        let lower = WindowID(raw: 32)
+        let tree = Node.split(try split(.horizontal, [
+            try cell(.leaf(tall)),
+            try cell(.split(try split(.vertical, [
+                try cell(.leaf(upper)),
+                try cell(.leaf(lower))
+            ])))
+        ]))
+        let before = renderedFrames(tree)
+        let requestedUpper = CGRect(x: 504, y: 4, width: 692, height: 392)
+
+        let resized = try resizeVisibleSeamInTree(
+            upper,
+            from: try #require(before[upper]),
+            to: requestedUpper,
+            rootFrame: rootFrame,
+            innerGap: innerGap,
+            tree
+        ).get()
+        let after = renderedFrames(resized)
+
+        #expect(after[upper] == requestedUpper)
+        #expect(after[lower] == CGRect(x: 504, y: 404, width: 692, height: 392))
+        #expect(after[tall] == CGRect(x: 4, y: 4, width: 492, height: 792))
+    }
+
+    @Test("A corner drag moves both seams that meet at the corner")
+    func cornerDragMovesBothSeams() throws {
+        let tree = try columnRootTree()
+        let before = renderedFrames(tree)
+        let requestedSource = CGRect(x: 4, y: 4, width: 692, height: 442)
+
+        let resized = try resizeVisibleSeamInTree(
+            topLeft,
+            from: try #require(before[topLeft]),
+            to: requestedSource,
+            rootFrame: rootFrame,
+            innerGap: innerGap,
+            tree
+        ).get()
+        let after = renderedFrames(resized)
+
+        #expect(after[topLeft] == requestedSource)
+        #expect(after[topRight] == CGRect(x: 704, y: 4, width: 492, height: 442))
+        #expect(after[bottomLeft] == CGRect(x: 4, y: 454, width: 592, height: 342))
+        #expect(after[bottomRight] == CGRect(x: 604, y: 454, width: 592, height: 342))
+    }
+
+    @Test("Dragging an edge past the neighbor's far edge is rejected")
+    func edgeDraggedPastNeighborIsRejected() throws {
+        let left = WindowID(raw: 40)
+        let right = WindowID(raw: 41)
+        let tree = Node.split(try split(.horizontal, [
+            try cell(.leaf(left)),
+            try cell(.leaf(right))
+        ]))
+        let before = renderedFrames(tree)
+
+        let result = resizeVisibleSeamInTree(
+            left,
+            from: try #require(before[left]),
+            to: CGRect(x: 4, y: 4, width: 1_240, height: 792),
+            rootFrame: rootFrame,
+            innerGap: innerGap,
+            tree
+        )
+
+        #expect(result == .failure(.invalidPartition))
+    }
+
+    @Test("A seam drag starts from the constraint-solved frames, not the raw weights")
+    func seamDragUsesConstraintSolvedFrames() throws {
+        let first = WindowID(raw: 50)
+        let middle = WindowID(raw: 51)
+        let last = WindowID(raw: 52)
+        let tree = Node.split(try split(.horizontal, [
+            try cell(.leaf(first)),
+            try cell(.leaf(middle)),
+            try cell(.leaf(last))
+        ]))
+        let constraints = [middle: WindowConstraints(minWidth: 600)]
+        let before = try solvedFrames(tree, innerGap: 0, constraints: constraints)
+        #expect(before[first] == CGRect(x: 0, y: 0, width: 300, height: 800))
+        let requestedFirst = CGRect(x: 0, y: 0, width: 260, height: 800)
+
+        let resized = try resizeVisibleSeamInTree(
+            first,
+            from: try #require(before[first]),
+            to: requestedFirst,
+            rootFrame: rootFrame,
+            innerGap: 0,
+            constraints: constraints,
+            tree
+        ).get()
+        let after = try solvedFrames(resized, innerGap: 0, constraints: constraints)
+
+        #expect(after[first] == requestedFirst)
+        #expect(after[middle] == CGRect(x: 260, y: 0, width: 640, height: 800))
+        #expect(after[last] == CGRect(x: 900, y: 0, width: 300, height: 800))
+    }
+
     @Test("Empty slots survive partition reconstruction")
     func emptySlotsRemainFirstClass() throws {
         let tree = try rowRootTree(bottomRightNode: .void)
@@ -353,6 +458,33 @@ struct VisiblePartitionResizeTests {
                 outer: Insets(top: 0, left: 0, bottom: 0, right: 0)
             )
         ).tiled
+    }
+
+    private func solvedFrames(
+        _ tree: Node,
+        innerGap: Double,
+        constraints: [WindowID: WindowConstraints]
+    ) throws -> [WindowID: CGRect] {
+        let displayID = DisplayID(raw: 1)
+        let result = solveLayout(
+            spaceState: SpaceState(
+                id: SpaceID(raw: 1),
+                displays: [displayID: DisplaySpaceState(displayID: displayID, tree: tree, floating: [])],
+                focused: nil
+            ),
+            displayID: displayID,
+            frame: rootFrame,
+            gaps: Gaps(inner: innerGap, outer: Insets(top: 0, left: 0, bottom: 0, right: 0)),
+            constraints: constraints
+        )
+        guard case .solved(let layout, _) = result else {
+            throw UnsolvedLayout(result: result)
+        }
+        return layout.tiled
+    }
+
+    private struct UnsolvedLayout: Error {
+        let result: LayoutSolveResult
     }
 
     private func columnRootTree() throws -> Node {

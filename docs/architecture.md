@@ -74,8 +74,10 @@ User geometry (the user drags or resizes a tiled window):
 AXObserverService -> AXEchoSuppressor (drop own echoes) -> ExternalGeometryCoordinator
 (settle debounce) -> gate -> WorldActor.planExternalGeometry
 -> Core spacesByApplyingExternalResize -> resizeVisibleSeamInTree
-   success: rebuilt tree, continue at step 5
-   failure: the window is detached to floating
+   edge or corner drag: the whole shared seam moves; continue at step 5
+   title-bar move, or move onto another display: the window floats
+   resize the tiling cannot absorb: tree unchanged, snapBackCommandPlan
+     writes the window back to its tile
 ```
 
 Environment changes (window opened or closed, Space switch, display change):

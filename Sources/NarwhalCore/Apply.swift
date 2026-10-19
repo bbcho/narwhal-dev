@@ -808,7 +808,12 @@ private func spacesByApplyingExternalResize(
     guard display.visibleFrame.intersection(newFrame).narwhalArea > 0,
           displayContainingFrame(newFrame, displays: world.displays) == displayID
     else {
-        return nil
+        return spacesByDetachingExternallyAdjustedWindow(
+            windowID,
+            from: key,
+            to: destinationKey(for: newFrame, in: world) ?? key,
+            in: world
+        )
     }
 
     let rootFrame = applyOuterGaps(world.config.gaps.outer, to: display.visibleFrame)
@@ -819,19 +824,19 @@ private func spacesByApplyingExternalResize(
         to: newFrame,
         rootFrame: rootFrame,
         innerGap: world.config.gaps.inner,
+        constraints: world.windowConstraints,
         displayState.tree
     ) {
     case .success(let resized):
         guard resized != displayState.tree else { return nil }
         tree = resized
+    case .failure(.ambiguousChangedEdges):
+        // Opposite edges changed together: a title-bar move pulls the window out of tiling.
+        return spacesByDetachingExternallyAdjustedWindow(windowID, from: key, to: key, in: world)
     case .failure:
-        return spacesByDetachingExternallyAdjustedWindow(
-            windowID,
-            displayID: displayID,
-            key: key,
-            space: space,
-            in: world
-        )
+        // A resize the tiling cannot absorb leaves the tree unchanged; the runtime
+        // writes the window back to its tile (snapBackCommandPlan).
+        return nil
     }
 
     let displayStates = space.displays.setting(displayID, to: DisplaySpaceState(
@@ -845,31 +850,48 @@ private func spacesByApplyingExternalResize(
     )
 }
 
+private func destinationKey(for frame: CGRect, in world: World) -> WorkspaceKey? {
+    guard let displayID = displayContainingFrame(frame, displays: world.displays),
+          let spaceID = activeSpaceID(for: displayID, in: world)
+    else {
+        return nil
+    }
+    return WorkspaceKey(displayID: displayID, spaceID: spaceID)
+}
+
 private func spacesByDetachingExternallyAdjustedWindow(
     _ windowID: WindowID,
-    displayID: DisplayID,
-    key: WorkspaceKey,
-    space: SpaceState,
+    from source: WorkspaceKey,
+    to destination: WorkspaceKey,
     in world: World
 ) -> [SpaceID: SpaceState] {
-    let cleared = space.displays.mapValues { displayState in
-        DisplaySpaceState(
-            displayID: displayState.displayID,
-            tree: ejectFromTree(windowID, displayState.tree),
-            floating: displayState.floating.filter { $0 != windowID }
+    let cleared = world.spaces.mapValues { space in
+        guard space.id == source.spaceID else { return space }
+        return SpaceState(
+            id: space.id,
+            displays: space.displays.mapValues { displayState in
+                DisplaySpaceState(
+                    displayID: displayState.displayID,
+                    tree: ejectFromTree(windowID, displayState.tree),
+                    floating: displayState.floating.filter { $0 != windowID }
+                )
+            },
+            focused: space.focused
         )
     }
-    let target = cleared[displayID]
-        ?? DisplaySpaceState(displayID: displayID, tree: .void, floating: [])
-    let displayStates = cleared.setting(displayID, to: DisplaySpaceState(
-        displayID: displayID,
-        tree: target.tree,
-        floating: target.floating + [windowID]
+    let destinationSpace = cleared[destination.spaceID]
+        ?? SpaceState(id: destination.spaceID, displays: [:], focused: nil)
+    let target = destinationSpace.displays[destination.displayID]
+        ?? DisplaySpaceState(displayID: destination.displayID, tree: .void, floating: [])
+    return cleared.setting(destination.spaceID, to: SpaceState(
+        id: destinationSpace.id,
+        displays: destinationSpace.displays.setting(destination.displayID, to: DisplaySpaceState(
+            displayID: destination.displayID,
+            tree: target.tree,
+            floating: target.floating + [windowID]
+        )),
+        focused: destinationSpace.focused
     ))
-    return world.spaces.setting(
-        key.spaceID,
-        to: SpaceState(id: space.id, displays: displayStates, focused: space.focused)
-    )
 }
 
 private func worldBySettingConfig(_ config: Config, in world: World) -> World {

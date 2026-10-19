@@ -35,6 +35,55 @@ struct CommandPlanningModelTests {
         #expect(oldWorld.spaces[spaceID]?.displays[displayID]?.floating == [right.id])
     }
 
+    @Test("A tiled window dragged off its tile snaps back to exactly its tile frame")
+    func draggedTiledWindowSnapsBackToItsTile() throws {
+        let left = windowFixture(1, frame: CGRect(x: 20, y: 0, width: 480, height: 800))
+        let right = windowFixture(2, frame: CGRect(x: 500, y: 0, width: 500, height: 800))
+        let world = worldFixture(
+            windows: [left, right],
+            tree: try horizontalSplit(left.id, right.id),
+            floating: []
+        )
+
+        let plan = try #require(try snapBackCommandPlan(
+            for: left.id,
+            in: world,
+            generation: LayoutGeneration(raw: 7)
+        ).get())
+
+        #expect(plan.desiredLayout.generation.raw == 7)
+        #expect(plan.desiredLayout.delta.moves == [left.id: CGRect(x: 0, y: 0, width: 500, height: 800)])
+        #expect(plan.sourceWorld == world)
+        #expect(plan.plannedWorld == world)
+        #expect(plan.undoWorld == nil)
+        #expect(plan.historyAction == .none)
+    }
+
+    @Test("A tiled window within settle tolerance of its tile needs no snap back")
+    func windowWithinSettleToleranceNeedsNoSnapBack() throws {
+        let left = windowFixture(1, frame: CGRect(x: 2, y: 0, width: 498, height: 800))
+        let right = windowFixture(2, frame: CGRect(x: 500, y: 0, width: 500, height: 800))
+        let world = worldFixture(
+            windows: [left, right],
+            tree: try horizontalSplit(left.id, right.id),
+            floating: []
+        )
+
+        let plan = try snapBackCommandPlan(for: left.id, in: world, generation: LayoutGeneration(raw: 7)).get()
+
+        #expect(plan == nil)
+    }
+
+    @Test("A floating window never snaps back")
+    func floatingWindowNeverSnapsBack() throws {
+        let floating = windowFixture(1, frame: CGRect(x: 20, y: 0, width: 480, height: 800))
+        let world = worldFixture(windows: [floating], tree: .void, floating: [floating.id])
+
+        let plan = try snapBackCommandPlan(for: floating.id, in: world, generation: LayoutGeneration(raw: 7)).get()
+
+        #expect(plan == nil)
+    }
+
     @Test("Focused command plans are scoped to the focused display workspace")
     func focusedCommandPlansAreScopedToFocusedDisplayWorkspace() throws {
         let leftTiled = windowFixture(1, frame: CGRect(x: 0, y: 0, width: 400, height: 800))

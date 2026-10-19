@@ -2948,9 +2948,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await updateFocusBorderFromWorld(windowID: snapshot.id)
             }
             if !completed {
-                await worldActor.recordExternalGeometry(selectedEvent.event)
+                let snappedBack = await snapBackAfterRejectedManualGeometry(selectedEvent)
                 await updateTiledBordersFromWorld()
-                return .temporarilyDetached(.applicationConstraint)
+                return snappedBack ? nil : .temporarilyDetached(.applicationConstraint)
             }
             return nil
         case .success(nil):
@@ -2967,6 +2967,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             await updateTiledBordersFromWorld()
             return .temporarilyDetached(.userMoved)
+        }
+    }
+
+    /// A rejected manual resize leaves the tree as it was; write the dragged
+    /// window back to its tile instead of recording a seam its neighbors never took.
+    @MainActor
+    private func snapBackAfterRejectedManualGeometry(_ selection: ExternalGeometryEventSelection) async -> Bool {
+        guard let windowID = externalGeometryWindowID(for: selection.event) else { return false }
+        switch await worldActor.planSnapBack(windowID, observedFrame: selection.liveFrame) {
+        case .success(let plan?):
+            return await applyPlannedLayout(
+                plan,
+                operation: "Snap back",
+                persistReason: "snap back",
+                retryOnClamp: false
+            ) {
+                .success(plan)
+            }
+        case .success(nil):
+            return true
+        case .failure(let error):
+            reporter.error("Snap back rejected by core: \(error.message)")
+            return false
         }
     }
 
