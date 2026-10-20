@@ -24,8 +24,13 @@ jobs:
         run: bash -n scripts/*.sh
       - name: Resolve dependencies
         run: swift package resolve
-      - name: Run unit and integration tests
-        run: swift test --disable-sandbox --scratch-path .build/ci-tests
+      # Socket integration tests run in their own process: their async handler
+      # needs a cooperative-pool thread, which CPU-bound unit suites can hold
+      # for seconds on a 3-core runner.
+      - name: Run unit tests
+        run: swift test --disable-sandbox --scratch-path .build/ci-tests --skip IPCTransportTests
+      - name: Run IPC integration tests
+        run: swift test --disable-sandbox --scratch-path .build/ci-tests --filter IPCTransportTests
 
   sanitizer:
     runs-on: macos-26
@@ -44,6 +49,14 @@ jobs:
           --disable-sandbox
           --sanitize=${{ matrix.sanitizer }}
           --scratch-path .build/${{ matrix.sanitizer }}-sanitizer
+          --skip IPCTransportTests
+      - name: Run ${{ matrix.sanitizer }} sanitizer on IPC integration tests
+        run: >-
+          swift test
+          --disable-sandbox
+          --sanitize=${{ matrix.sanitizer }}
+          --scratch-path .build/${{ matrix.sanitizer }}-sanitizer
+          --filter IPCTransportTests
 
   package:
     runs-on: macos-26
