@@ -171,7 +171,6 @@ private func vacatingWindow(_ window: WindowID, from node: Node, preservingRoot:
 }
 
 private func compactedVacatedBranch(axis: Axis, cells: [Cell]) -> Node {
-
     let occupied = cells.filter { !isUnoccupiedSubtree($0.node) }
     switch occupied.count {
     case 0:

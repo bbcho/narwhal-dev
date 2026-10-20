@@ -216,7 +216,7 @@ private func solvedFrames(
     case .leaf(let id):
         // A cell no wider than the gap insets to CGRect.null (an infinite frame);
         // a window needs at least one point of its own.
-        if let axis = [Axis.horizontal, .vertical].first(where: { frame.length(on: $0) <= innerGap }) {
+        if let axis = [Axis.horizontal, .vertical].first(where: { frame.length(on: $0) < innerGap + 1 }) {
             return .failure(UnsatisfiableLayout(
                 displayID: displayID,
                 axis: axis,
@@ -315,8 +315,8 @@ private func minimumSize(
         // Split boundaries land on whole points, so a fractional minimum is
         // only met by its whole-point ceiling.
         return MinimumSize(
-            width: constraint.minWidth.map { $0.rounded(.up) + innerGap } ?? 0,
-            height: constraint.minHeight.map { $0.rounded(.up) + innerGap } ?? 0,
+            width: constraint.minWidth.map { wholePointMinimum($0) + innerGap } ?? 0,
+            height: constraint.minHeight.map { wholePointMinimum($0) + innerGap } ?? 0,
             windows: [id]
         )
     case .split(let split):
@@ -629,6 +629,12 @@ private func maxOptional(_ lhs: Double?, _ rhs: Double?) -> Double? {
 }
 
 private let layoutTolerance = 0.0001
+
+/// The whole-point ceiling of a minimum, ignoring floating-point noise so
+/// 500.000000001 stays 500 while 500.5 becomes 501.
+private func wholePointMinimum(_ value: Double) -> Double {
+    (value - layoutTolerance).rounded(.up)
+}
 
 private extension CGRect {
     func length(on axis: Axis) -> Double {

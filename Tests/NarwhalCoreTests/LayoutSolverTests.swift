@@ -220,6 +220,55 @@ struct LayoutSolverTests {
         ])
     }
 
+    @Test("Floating-point noise in a minimum does not cost a whole extra point")
+    func minimumNoiseDoesNotRoundUpAWholePoint() {
+        let display = DisplayID(raw: 1)
+        let a = WindowID(raw: 1)
+        let b = WindowID(raw: 2)
+        let tree = pushIntoTree(b, .right, pushIntoTree(a, .left, .void))
+
+        let result = solveLayout(
+            spaceState: spaceState(display: display, tree: tree),
+            displayID: display,
+            frame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+            gaps: noGaps,
+            constraints: [a: WindowConstraints(minWidth: 500), b: WindowConstraints(minWidth: 500.000000001)]
+        )
+
+        guard case .solved(let layout, _) = result else {
+            Issue.record("Expected a solved layout, got \(result)")
+            return
+        }
+        #expect(layout.tiled == [
+            a: CGRect(x: 0, y: 0, width: 500, height: 800),
+            b: CGRect(x: 500, y: 0, width: 500, height: 800)
+        ])
+    }
+
+    @Test("A cell with room for the gap but not a whole point of window is unsatisfiable")
+    func cellWithoutAWholePointIsUnsatisfiable() {
+        let display = DisplayID(raw: 1)
+        let a = WindowID(raw: 1)
+        let b = WindowID(raw: 2)
+        let tree = pushIntoTree(a, .right, pushIntoTree(b, .left, .void))
+
+        let result = solveLayout(
+            spaceState: spaceState(display: display, tree: tree),
+            displayID: display,
+            frame: CGRect(x: 0, y: 0, width: 1000.5, height: 800),
+            gaps: Gaps(inner: 8, outer: Insets(top: 0, left: 0, bottom: 0, right: 0)),
+            constraints: [b: WindowConstraints(minWidth: 984)]
+        )
+
+        #expect(result == .unsatisfiable(UnsatisfiableLayout(
+            displayID: display,
+            axis: .horizontal,
+            available: 8.5,
+            required: 9,
+            windows: [a]
+        )))
+    }
+
     @Test("Finder-width clamp is inferred as a width minimum only")
     func inferFinderWidthClamp() {
         let target = CGRect(x: 12, y: 45, width: 490.666_666_666_7, height: 420.5)
