@@ -12,7 +12,7 @@ struct RulesTests {
             WindowRule(predicate: .titleMatches(regex: "Recents"), action: .ignore)
         ]
 
-        #expect(matchRule(finder, rules: rules) == .forceFloat)
+        #expect(windowOpenDecision(finder, rules: rules) == .forceFloat(finder))
     }
 
     @Test("Predicates match exact fields, regex fields, composite branches, and negation")
@@ -73,5 +73,13 @@ struct RulesTests {
             isResizable: isResizable,
             isMinimized: false
         )
+    }
+
+    private func matchRule(_ metadata: WindowMetadata, rules: [WindowRule]) -> RuleAction? {
+        rules.first { matches($0.predicate, metadata: metadata) }?.action
+    }
+
+    private func windowOpenDecision(_ metadata: WindowMetadata, rules: [WindowRule]) -> WindowOpenDecision {
+        resolveWindowOpen(metadata, managedRules: [], luaRules: rules).decision
     }
 }

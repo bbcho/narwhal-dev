@@ -151,7 +151,8 @@ private func intervalGap(_ lhs: ClosedRange<CGFloat>, _ rhs: ClosedRange<CGFloat
     return lhs.lowerBound - rhs.upperBound
 }
 
-private func focusCycleSort(_ lhs: WindowMetadata, _ rhs: WindowMetadata) -> Bool {
+/// Focus-cycle order: top to bottom, then left to right, then stable identity.
+func focusCycleSort(_ lhs: WindowMetadata, _ rhs: WindowMetadata) -> Bool {
     if lhs.frame.minY != rhs.frame.minY { return lhs.frame.minY < rhs.frame.minY }
     if lhs.frame.minX != rhs.frame.minX { return lhs.frame.minX < rhs.frame.minX }
     if lhs.bundleID.raw != rhs.bundleID.raw { return lhs.bundleID.raw < rhs.bundleID.raw }

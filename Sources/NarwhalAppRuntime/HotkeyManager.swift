@@ -130,7 +130,7 @@ final class HotkeyManager {
 
     private func fire(id: UInt32) {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard let action = hotkeyAction(for: id, in: actionsByID) else {
+        guard let action = actionsByID[id] else {
             reporter.error("Unknown hotkey id \(id)")
             return
         }
@@ -265,73 +265,21 @@ private func carbonModifiers(for modifiers: ModifierSet) -> UInt32 {
 }
 
 private func describe(_ binding: HotkeyBinding) -> String {
-    "\(describe(binding.key)) -> \(describe(binding.action))"
+    "\(describe(binding.key)) -> \(AppDelegateText.describe(binding.action))"
 }
 
 private func describe(_ key: KeySpec) -> String {
-    let modifiers = [
-        key.modifiers.contains(.control) ? "control" : nil,
-        key.modifiers.contains(.option) ? "option" : nil,
-        key.modifiers.contains(.shift) ? "shift" : nil,
-        key.modifiers.contains(.command) ? "command" : nil
+    (modifierNames(key.modifiers) + [key.key.uppercased()]).joined(separator: "-")
+}
+
+/// Modifier names in display order, for log text.
+func modifierNames(_ modifiers: ModifierSet) -> [String] {
+    [
+        modifiers.contains(.control) ? "control" : nil,
+        modifiers.contains(.option) ? "option" : nil,
+        modifiers.contains(.shift) ? "shift" : nil,
+        modifiers.contains(.command) ? "command" : nil
     ].compactMap { $0 }
-    return (modifiers + [key.key.uppercased()]).joined(separator: "-")
-}
-
-private func describe(_ action: HotkeyAction) -> String {
-    switch action {
-    case .command(let template):
-        return describe(template)
-    case .openFinderWindow:
-        return "open Finder window"
-    case .reloadConfig:
-        return "reloadConfig"
-    case .showCommands:
-        return "show commands"
-    }
-}
-
-private func describe(_ template: CommandTemplate) -> String {
-    switch template {
-    case .push(let direction):
-        return "push \(direction.rawValue)"
-    case .center:
-        return "center"
-    case .eject:
-        return "eject"
-    case .swap(let direction):
-        return "swap \(direction.rawValue)"
-    case .resizeSplit(let direction, let delta):
-        return "resize \(direction.rawValue) \(delta)"
-    case .focusDirection(let direction):
-        return "focus \(direction.rawValue)"
-    case .focusCycle(let direction):
-        return "focus cycle \(direction.rawValue)"
-    case .focusPrevious:
-        return "focus previous"
-    case .toggleFloat:
-        return "toggleFloat"
-    case .balance:
-        return "balance"
-    case .shuffle:
-        return "shuffle"
-    case .cascade:
-        return "cascade"
-    case .maximizeReset:
-        return "max reset"
-    case .undoLayout:
-        return "undo layout"
-    case .redoLayout:
-        return "redo layout"
-    case .moveToNextDisplay:
-        return "move display"
-    case .moveToDesktop(let direction):
-        return "move desktop \(direction.rawValue)"
-    case .togglePause:
-        return "toggle pause"
-    case .resetLayout:
-        return "resetLayout"
-    }
 }
 
 private func fourCharacterCode(_ value: String) -> OSType {

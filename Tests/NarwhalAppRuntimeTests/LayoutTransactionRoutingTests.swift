@@ -8,8 +8,6 @@ struct LayoutTransactionRoutingTests {
         let source = try appDelegateSource()
 
         #expect(source.occurrences(of: "layoutTransactionCoordinator.execute(") == 1)
-        #expect(!source.contains("LayoutApplier("))
-        #expect(!source.contains("plannedLayoutApplyDecision("))
         #expect(!source.contains("worldActor.commit("))
     }
 

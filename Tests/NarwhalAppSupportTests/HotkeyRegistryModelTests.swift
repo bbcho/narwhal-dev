@@ -23,8 +23,8 @@ struct HotkeyRegistryModelTests {
         ])
     }
 
-    @Test("Hotkey action registry resolves known IDs and rejects unknown IDs")
-    func hotkeyActionRegistryResolvesKnownIDsAndRejectsUnknownIDs() {
+    @Test("Hotkey action registry maps each registration ID to its action")
+    func hotkeyActionRegistryMapsEachRegistrationID() {
         let finder = HotkeyBinding(
             key: KeySpec(key: "f", modifiers: [.control, .option, .command]),
             action: .openFinderWindow
@@ -35,9 +35,7 @@ struct HotkeyRegistryModelTests {
         )
         let registry = hotkeyActionRegistry(for: hotkeyRegistrations(for: [finder, reload]))
 
-        #expect(hotkeyAction(for: 1, in: registry) == .openFinderWindow)
-        #expect(hotkeyAction(for: 2, in: registry) == .reloadConfig)
-        #expect(hotkeyAction(for: 3, in: registry) == nil)
+        #expect(registry == [1: .openFinderWindow, 2: .reloadConfig])
     }
 
     @Test("Empty hotkey registrations produce an empty action registry")

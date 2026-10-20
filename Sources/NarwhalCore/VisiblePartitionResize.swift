@@ -597,7 +597,3 @@ private func uniqueSorted(_ values: [CGFloat]) -> [CGFloat] {
 private func approximatelyEqual(_ lhs: CGFloat, _ rhs: CGFloat) -> Bool {
     abs(lhs - rhs) <= configuredGapTolerance
 }
-
-private func overlap(_ firstMin: CGFloat, _ firstMax: CGFloat, _ secondMin: CGFloat, _ secondMax: CGFloat) -> CGFloat {
-    max(0, min(firstMax, secondMax) - max(firstMin, secondMin))
-}

@@ -185,11 +185,6 @@ private func modifiers(from flagsRaw: UInt64) -> ModifierSet {
 }
 
 private func describe(_ modifiers: ModifierSet) -> String {
-    let values = [
-        modifiers.contains(.control) ? "control" : nil,
-        modifiers.contains(.option) ? "option" : nil,
-        modifiers.contains(.shift) ? "shift" : nil,
-        modifiers.contains(.command) ? "command" : nil
-    ].compactMap { $0 }
-    return values.isEmpty ? "none" : values.joined(separator: "-")
+    let names = modifierNames(modifiers)
+    return names.isEmpty ? "none" : names.joined(separator: "-")
 }

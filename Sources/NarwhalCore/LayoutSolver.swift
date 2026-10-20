@@ -646,14 +646,3 @@ private extension CGRect {
         }
     }
 }
-
-private extension Axis {
-    var toggled: Axis {
-        switch self {
-        case .horizontal:
-            return .vertical
-        case .vertical:
-            return .horizontal
-        }
-    }
-}

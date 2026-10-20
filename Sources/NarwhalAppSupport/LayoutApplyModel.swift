@@ -65,16 +65,6 @@ public enum PlannedLayoutFocusUpdate: Equatable, Sendable {
     case clear
 }
 
-public enum PlannedLayoutApplyDecision: Equatable, Sendable {
-    case commit(appliedFrames: [WindowID: CGRect], focusUpdate: PlannedLayoutFocusUpdate?)
-    case fail(failureCount: Int, summary: String)
-    case clamp(
-        observedConstraints: [WindowID: WindowConstraints],
-        shouldRetry: Bool,
-        summary: String
-    )
-}
-
 public struct LayoutClampRetryState: Equatable, Sendable {
     public let remainingAttempts: Int
     public let observedConstraints: [WindowID: WindowConstraints]
@@ -105,94 +95,4 @@ public struct LayoutClampRetryState: Equatable, Sendable {
             observedConstraints: merged
         )
     }
-}
-
-public func plannedLayoutApplyDecision(
-    plan: CommandPlanResult,
-    applyResult: LayoutApplyResult,
-    retryOnClamp: Bool
-) -> PlannedLayoutApplyDecision {
-    if applyResult.succeeded {
-        return .commit(
-            appliedFrames: applyResult.applied,
-            focusUpdate: plannedLayoutFocusUpdate(plan: plan, appliedFrames: applyResult.applied)
-        )
-    }
-
-    if !applyResult.failures.isEmpty {
-        return .fail(
-            failureCount: applyResult.failures.count,
-            summary: layoutApplyFailureSummary(applyResult.failures)
-        )
-    }
-
-    return .clamp(
-        observedConstraints: applyResult.observedConstraints,
-        shouldRetry: retryOnClamp,
-        summary: layoutApplyClampSummary(applyResult.clamps)
-    )
-}
-
-public enum LayoutFrameWriteIntent: Equatable, Sendable {
-    case write(windowID: WindowID, metadata: WindowMetadata, targetFrame: CGRect)
-    case missingMetadata(windowID: WindowID, targetFrame: CGRect)
-}
-
-public func layoutFrameWriteIntents(
-    for plan: CommandPlanResult,
-    excluding excludedWindowIDs: Set<WindowID> = []
-) -> [LayoutFrameWriteIntent] {
-    layoutFrameWriteOrder(for: plan)
-        .filter { !excludedWindowIDs.contains($0) }
-        .compactMap { windowID in
-            guard let frame = plan.desiredLayout.delta.moves[windowID] else { return nil }
-            guard let metadata = plan.windows[windowID] else {
-                return .missingMetadata(windowID: windowID, targetFrame: frame)
-            }
-            return .write(windowID: windowID, metadata: metadata, targetFrame: frame)
-        }
-}
-
-private func layoutFrameWriteOrder(for plan: CommandPlanResult) -> [WindowID] {
-    leadingFrameWriteOrder(
-        planned: plan.desiredLayout.layout.tiled,
-        candidates: Set(plan.desiredLayout.delta.moves.keys),
-        innerGap: plan.plannedWorld.config.gaps.inner
-    )
-}
-
-private func plannedLayoutFocusUpdate(
-    plan: CommandPlanResult,
-    appliedFrames: [WindowID: CGRect]
-) -> PlannedLayoutFocusUpdate? {
-    guard let focusedWindowID = plan.focusedWindowID else { return nil }
-    guard let frame = appliedFrames[focusedWindowID] ?? plan.desiredLayout.layout.tiled[focusedWindowID] else {
-        return .clear
-    }
-    return .target(windowID: focusedWindowID, frame: frame)
-}
-
-private func layoutApplyFailureSummary(_ failures: [LayoutApplyFailure]) -> String {
-    failures
-        .map { "\($0.windowID.description) target=\($0.targetFrame.debugDescription) error=\($0.message)" }
-        .joined(separator: "; ")
-}
-
-private func layoutApplyClampSummary(_ clamps: [LayoutApplyClamp]) -> String {
-    clamps
-        .map {
-            "\($0.windowID.description) target=\($0.targetFrame.debugDescription) actual=\($0.actualFrame.debugDescription) observed=\(windowConstraintsDebugDescription($0.observed))"
-        }
-        .joined(separator: "; ")
-}
-
-private func windowConstraintsDebugDescription(_ constraints: WindowConstraints) -> String {
-    [
-        "minWidth=\(constraints.minWidth.map { String($0) } ?? "nil")",
-        "minHeight=\(constraints.minHeight.map { String($0) } ?? "nil")",
-        "maxWidth=\(constraints.maxWidth.map { String($0) } ?? "nil")",
-        "maxHeight=\(constraints.maxHeight.map { String($0) } ?? "nil")",
-        "widthAnchor=\(constraints.widthAnchor?.rawValue ?? "nil")",
-        "heightAnchor=\(constraints.heightAnchor?.rawValue ?? "nil")"
-    ].joined(separator: " ")
 }

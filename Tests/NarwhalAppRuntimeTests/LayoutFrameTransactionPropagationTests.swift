@@ -6,8 +6,8 @@ import Testing
 @testable import NarwhalAppRuntime
 
 @MainActor
-@Suite("Deterministic layout applier")
-struct LayoutApplierTests {
+@Suite("Layout frame transaction write propagation")
+struct LayoutFrameTransactionPropagationTests {
     @Test("A constrained leading frame moves only unwritten followers")
     func constrainedFramePropagatesForwardOnce() async throws {
         let left = WindowID(raw: 30)
@@ -52,11 +52,20 @@ struct LayoutApplierTests {
         let reporter = StartupReporter(
             logPath: "/tmp/narwhal-layout-applier-\(UUID().uuidString).log"
         )
-        let applier = LayoutApplier(frameWriter: writer, reporter: reporter)
+        let transaction = LayoutFrameTransaction(frameWriter: writer, reporter: reporter)
 
-        let result = await applier.apply(plan(planned: planned, originals: originals, innerGap: 8))
+        let outcome = await transaction.execute(
+            plan(planned: planned, originals: originals, innerGap: 8)
+        ) { true }
 
-        #expect(result.succeeded)
+        #expect(outcome == .applied(
+            originalFrames: originals,
+            appliedFrames: [
+                left: CGRect(x: 0, y: 0, width: 490, height: 800),
+                middle: CGRect(x: 498, y: 0, width: 500, height: 800),
+                right: CGRect(x: 1_006, y: 0, width: 500, height: 800),
+            ]
+        ))
         #expect(writes.map(\.0) == [left, middle, right])
         #expect(writes.filter { $0.0 == left }.count == 1)
         #expect(writes.filter { $0.0 == middle }.count == 1)
@@ -67,15 +76,6 @@ struct LayoutApplierTests {
         #expect(firstWrite.1 == planned[left])
         #expect(middleWrite.1.minX == 498)
         #expect(lastWrite.1.minX == 1_006)
-        #expect(result.applied[left]?.maxX == 490)
-        #expect(result.applied[middle]?.minX == 498)
-        #expect(result.applied[middle]?.maxX == 998)
-        #expect(result.applied[right]?.minX == 1_006)
-        #expect(innerGapViolations(
-            planned: planned,
-            actual: result.applied,
-            innerGap: 8
-        ).isEmpty)
     }
 
     private func plan(

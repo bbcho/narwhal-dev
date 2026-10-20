@@ -283,10 +283,6 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
         observedWindowIDs.intersection(windowSpace.keys).count
     }
 
-    public var unmappedWindowIDs: Set<WindowID> {
-        observedWindowIDs.subtracting(windowSpace.keys)
-    }
-
     public var topologyCoverageRatio: Double {
         guard observedWindowCount > 0 else { return 1 }
         return Double(mappedWindowCount) / Double(observedWindowCount)
@@ -298,8 +294,4 @@ public struct EnvironmentSnapshot: Equatable, Sendable {
             && mappedWindowCount < observedWindowCount
             && topologyCoverageRatio < 0.80
     }
-}
-
-public enum StartupError: Error, Equatable, Sendable {
-    case axSnapshotUnavailable(AXSnapshotQuality)
 }

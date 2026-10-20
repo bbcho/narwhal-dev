@@ -131,10 +131,7 @@ enum ObservationReplayVerification {
             floatingZOrder: [],
             hidden: []
         )
-        guard let leftMetadata = next.windows[spaceThreeLeft],
-              let rightMetadata = next.windows[spaceThreeRight],
-              let leftFrame = replayLayout.tiled[spaceThreeLeft],
-              let rightFrame = replayLayout.tiled[spaceThreeRight] else {
+        guard next.windows[spaceThreeLeft] != nil, next.windows[spaceThreeRight] != nil else {
             return (false, "observation replay missing tiled window metadata for production write-order check")
         }
         let replayPlan = CommandPlanResult(
@@ -149,18 +146,11 @@ enum ObservationReplayVerification {
             plannedWorld: next,
             undoWorld: nil
         )
-        guard layoutFrameWriteIntents(for: replayPlan) == [
-            .write(
-                windowID: spaceThreeLeft,
-                metadata: leftMetadata,
-                targetFrame: leftFrame
-            ),
-            .write(
-                windowID: spaceThreeRight,
-                metadata: rightMetadata,
-                targetFrame: rightFrame
-            )
-        ] else {
+        guard leadingFrameWriteOrder(
+            planned: replayPlan.desiredLayout.layout.tiled,
+            candidates: Set(replayPlan.desiredLayout.delta.moves.keys),
+            innerGap: replayPlan.plannedWorld.config.gaps.inner
+        ) == [spaceThreeLeft, spaceThreeRight] else {
             return (false, "production layout write order no longer follows leading-to-trailing seam dependencies")
         }
         return (

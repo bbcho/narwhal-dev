@@ -477,16 +477,6 @@ struct AXClient {
     }
 
     @MainActor
-    func setFocusedWindowFrame(_ frame: CGRect) async -> AXFrameWriteOutcome {
-        switch focusedWindowElement() {
-        case .success(let window):
-            return await setFrame(window, matching: nil, to: frame)
-        case .failure(let error):
-            return .failed(error)
-        }
-    }
-
-    @MainActor
     func setFrame(_ window: WindowMetadata, to frame: CGRect) async -> AXFrameWriteOutcome {
         switch await windowElement(matching: window) {
         case .success(let element):

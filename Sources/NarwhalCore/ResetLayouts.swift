@@ -77,7 +77,7 @@ public func maximizeResetLayout(windowID: WindowID, in world: World) -> Result<L
         return .failure(.displayNotFound(displayID))
     }
 
-    let frame = applyingOuterGaps(world.config.gaps.outer, to: display.visibleFrame)
+    let frame = applyOuterGaps(world.config.gaps.outer, to: display.visibleFrame)
     return .success(Layout(tiled: [windowID: frame], floatingZOrder: [], hidden: []))
 }
 
@@ -157,7 +157,7 @@ private func resetLayoutTiledFrames(
               !windows.isEmpty
         else { return tiled }
 
-        let frame = applyingOuterGaps(world.config.gaps.outer, to: display.visibleFrame)
+        let frame = applyOuterGaps(world.config.gaps.outer, to: display.visibleFrame)
         let assignments = assignmentsForDisplay(windows, frame, world.config.gaps.inner)
         return tiled.merging(
             Dictionary(assignments, uniquingKeysWith: { _, replacement in replacement }),
@@ -241,13 +241,4 @@ private func cascadedQuarterFrames(count: Int, in frame: CGRect, innerGap: Doubl
         .insetBy(dx: innerGap / 2, dy: innerGap / 2)
         .standardized
     }
-}
-
-private func applyingOuterGaps(_ gaps: Insets, to frame: CGRect) -> CGRect {
-    CGRect(
-        x: frame.minX + gaps.left,
-        y: frame.minY + gaps.top,
-        width: max(0, frame.width - gaps.left - gaps.right),
-        height: max(0, frame.height - gaps.top - gaps.bottom)
-    )
 }

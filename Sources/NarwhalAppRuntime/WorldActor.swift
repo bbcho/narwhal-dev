@@ -152,11 +152,6 @@ actor WorldActor {
         world = next
     }
 
-    func reconcileLiveWindows(_ liveWindowIDs: Set<WindowID>) {
-        world = pruneActiveSpace(world, keepingLiveWindows: liveWindowIDs)
-        pruneRuntimeState()
-    }
-
     func focusedWindowFallback() -> WindowMetadata? {
         runtimeFocusedWindowFallback(in: world, runtime: runtimeState)
     }
@@ -543,10 +538,6 @@ actor WorldActor {
 
     func planFocusDirection(from focusedWindowID: WindowID, direction: Direction) -> Result<FocusPlanResult, CommandError> {
         focusDirectionPlan(in: world, from: focusedWindowID, direction: direction)
-    }
-
-    func planFocusCycle(from focusedWindowID: WindowID?, direction: FocusCycleDirection) -> Result<FocusPlanResult, CommandError> {
-        focusCyclePlan(in: world, from: focusedWindowID, direction: direction)
     }
 
     func planFocusCycleCandidates(

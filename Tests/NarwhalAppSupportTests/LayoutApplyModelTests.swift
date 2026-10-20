@@ -33,187 +33,20 @@ struct LayoutApplyModelTests {
         ])
     }
 
-    @Test("Planned layout apply decision commits with focused applied frame")
-    func plannedLayoutApplyDecisionCommitsWithFocusedAppliedFrame() {
-        let focused = WindowID(raw: 50)
-        let desiredFrame = CGRect(x: 0, y: 0, width: 300, height: 200)
-        let appliedFrame = CGRect(x: 0, y: 0, width: 300, height: 199)
-        let plan = commandPlanFixture(focused: focused, tiled: [focused: desiredFrame])
-        let applyResult = LayoutApplyResult(applied: [focused: appliedFrame], clamps: [], failures: [])
-
-        let decision = plannedLayoutApplyDecision(plan: plan, applyResult: applyResult, retryOnClamp: true)
-
-        #expect(decision == .commit(
-            appliedFrames: [focused: appliedFrame],
-            focusUpdate: .target(windowID: focused, frame: appliedFrame)
-        ))
-    }
-
-    @Test("Frame write intents are pure ordered metadata projections")
-    func frameWriteIntentsArePureOrderedMetadataProjections() {
-        let focused = WindowID(raw: 50)
-        let other = WindowID(raw: 51)
-        let missing = WindowID(raw: 52)
-        let focusedFrame = CGRect(x: 0, y: 0, width: 300, height: 200)
-        let otherFrame = CGRect(x: 300, y: 0, width: 300, height: 200)
-        let missingFrame = CGRect(x: 600, y: 0, width: 300, height: 200)
-        let focusedMetadata = windowMetadata(id: focused, frame: focusedFrame)
-        let otherMetadata = windowMetadata(id: other, frame: otherFrame)
-        let plan = commandPlanFixture(
-            focused: focused,
-            tiled: [
-                focused: focusedFrame,
-                other: otherFrame,
-                missing: missingFrame
-            ],
-            shows: [],
-            windows: [
-                focused: focusedMetadata,
-                other: otherMetadata
-            ]
-        )
-
-        let intents = layoutFrameWriteIntents(for: plan)
-
-        #expect(intents == [
-            .write(windowID: focused, metadata: focusedMetadata, targetFrame: focusedFrame),
-            .write(windowID: other, metadata: otherMetadata, targetFrame: otherFrame),
-            .missingMetadata(windowID: missing, targetFrame: missingFrame)
-        ])
-    }
-
     @Test("Frame writes follow seam dependencies from leading to trailing")
     func frameWritesFollowSeamDependencies() {
         let right = WindowID(raw: 100)
         let topLeft = WindowID(raw: 101)
         let focusedBottomLeft = WindowID(raw: 102)
-        let rightFrame = CGRect(x: 756, y: 33, width: 756, height: 871)
-        let topLeftFrame = CGRect(x: 0, y: 33, width: 756, height: 435.5)
-        let focusedFrame = CGRect(x: 0, y: 468.5, width: 756, height: 435.5)
-        let rightMetadata = windowMetadata(id: right, frame: rightFrame)
-        let topLeftMetadata = windowMetadata(id: topLeft, frame: topLeftFrame)
-        let focusedMetadata = windowMetadata(id: focusedBottomLeft, frame: focusedFrame)
-        let plan = commandPlanFixture(
-            focused: focusedBottomLeft,
-            tiled: [
-                right: rightFrame,
-                topLeft: topLeftFrame,
-                focusedBottomLeft: focusedFrame
-            ],
-            shows: [focusedBottomLeft],
-            windows: [
-                right: rightMetadata,
-                topLeft: topLeftMetadata,
-                focusedBottomLeft: focusedMetadata
-            ]
-        )
+        let planned = [
+            right: CGRect(x: 756, y: 33, width: 756, height: 871),
+            topLeft: CGRect(x: 0, y: 33, width: 756, height: 435.5),
+            focusedBottomLeft: CGRect(x: 0, y: 468.5, width: 756, height: 435.5)
+        ]
 
-        let intents = layoutFrameWriteIntents(for: plan)
+        let order = leadingFrameWriteOrder(planned: planned, candidates: Set(planned.keys), innerGap: 0)
 
-        #expect(intents == [
-            .write(windowID: topLeft, metadata: topLeftMetadata, targetFrame: topLeftFrame),
-            .write(windowID: focusedBottomLeft, metadata: focusedMetadata, targetFrame: focusedFrame),
-            .write(windowID: right, metadata: rightMetadata, targetFrame: rightFrame)
-        ])
-    }
-
-    @Test("Frame writes include only changed windows")
-    func frameWritesIncludeOnlyChangedWindows() {
-        let changed = WindowID(raw: 110)
-        let unchanged = WindowID(raw: 111)
-        let changedFrame = CGRect(x: 0, y: 0, width: 420, height: 600)
-        let unchangedFrame = CGRect(x: 420, y: 0, width: 380, height: 600)
-        let changedMetadata = windowMetadata(id: changed, frame: changedFrame)
-        let unchangedMetadata = windowMetadata(id: unchanged, frame: unchangedFrame)
-        let plan = commandPlanFixture(
-            focused: changed,
-            tiled: [changed: changedFrame, unchanged: unchangedFrame],
-            moves: [changed: changedFrame],
-            windows: [changed: changedMetadata, unchanged: unchangedMetadata]
-        )
-
-        #expect(layoutFrameWriteIntents(for: plan) == [
-            .write(windowID: changed, metadata: changedMetadata, targetFrame: changedFrame)
-        ])
-    }
-
-    @Test("Preserved manual source window is excluded from frame writes")
-    func preservedManualSourceIsExcludedFromFrameWrites() {
-        let source = WindowID(raw: 120)
-        let sibling = WindowID(raw: 121)
-        let sourceFrame = CGRect(x: 0, y: 0, width: 500, height: 600)
-        let siblingFrame = CGRect(x: 500, y: 0, width: 300, height: 600)
-        let sourceMetadata = windowMetadata(id: source, frame: sourceFrame)
-        let siblingMetadata = windowMetadata(id: sibling, frame: siblingFrame)
-        let plan = commandPlanFixture(
-            focused: source,
-            tiled: [source: sourceFrame, sibling: siblingFrame],
-            windows: [source: sourceMetadata, sibling: siblingMetadata]
-        )
-
-        #expect(layoutFrameWriteIntents(for: plan, excluding: [source]) == [
-            .write(windowID: sibling, metadata: siblingMetadata, targetFrame: siblingFrame)
-        ])
-    }
-
-    @Test("Planned layout apply decision clears missing focused frame")
-    func plannedLayoutApplyDecisionClearsMissingFocusedFrame() {
-        let focused = WindowID(raw: 60)
-        let plan = commandPlanFixture(focused: focused, tiled: [:])
-        let applyResult = LayoutApplyResult(applied: [:], clamps: [], failures: [])
-
-        let decision = plannedLayoutApplyDecision(plan: plan, applyResult: applyResult, retryOnClamp: true)
-
-        #expect(decision == .commit(appliedFrames: [:], focusUpdate: .clear))
-    }
-
-    @Test("Planned layout apply decision reports failures without retry")
-    func plannedLayoutApplyDecisionReportsFailuresWithoutRetry() {
-        let failed = WindowID(raw: 70)
-        let target = CGRect(x: 10, y: 20, width: 300, height: 200)
-        let plan = commandPlanFixture(focused: nil, tiled: [failed: target])
-        let applyResult = LayoutApplyResult(
-            applied: [:],
-            clamps: [],
-            failures: [LayoutApplyFailure(windowID: failed, targetFrame: target, message: "AX failed")]
-        )
-
-        let decision = plannedLayoutApplyDecision(plan: plan, applyResult: applyResult, retryOnClamp: true)
-
-        switch decision {
-        case .fail(let failureCount, let summary):
-            #expect(failureCount == 1)
-            #expect(summary.contains(failed.description))
-            #expect(summary.contains("AX failed"))
-        default:
-            #expect(Bool(false), "Expected failure decision")
-        }
-    }
-
-    @Test("Planned layout apply decision carries clamp retry data")
-    func plannedLayoutApplyDecisionCarriesClampRetryData() {
-        let clamped = WindowID(raw: 80)
-        let target = CGRect(x: 10, y: 20, width: 300, height: 200)
-        let actual = CGRect(x: 10, y: 20, width: 180, height: 200)
-        let observed = WindowConstraints(minWidth: 180)
-        let plan = commandPlanFixture(focused: nil, tiled: [clamped: target])
-        let applyResult = LayoutApplyResult(
-            applied: [WindowID(raw: 79): CGRect(x: 0, y: 0, width: 100, height: 100)],
-            clamps: [LayoutApplyClamp(windowID: clamped, targetFrame: target, actualFrame: actual, observed: observed)],
-            failures: []
-        )
-
-        let decision = plannedLayoutApplyDecision(plan: plan, applyResult: applyResult, retryOnClamp: false)
-
-        switch decision {
-        case .clamp(let observedConstraints, let shouldRetry, let summary):
-            #expect(observedConstraints == [clamped: observed])
-            #expect(!shouldRetry)
-            #expect(summary.contains(clamped.description))
-            #expect(summary.contains("minWidth=180.0"))
-        default:
-            #expect(Bool(false), "Expected clamp decision")
-        }
+        #expect(order == [topLeft, focusedBottomLeft, right])
     }
 
     @Test("Clamp retries continue only for new observations within the attempt bound")
@@ -241,39 +74,5 @@ struct LayoutApplyModelTests {
         #expect(afterSecond.recording([
             WindowID(raw: 82): WindowConstraints(minHeight: 119)
         ]) == nil)
-    }
-
-    private func commandPlanFixture(
-        focused: WindowID?,
-        tiled: [WindowID: CGRect],
-        moves: [WindowID: CGRect]? = nil,
-        shows: Set<WindowID> = [],
-        windows: [WindowID: WindowMetadata] = [:]
-    ) -> CommandPlanResult {
-        CommandPlanResult(
-            focusedWindowID: focused,
-            desiredLayout: DesiredLayout(
-                generation: LayoutGeneration(raw: 1),
-                layout: Layout(tiled: tiled, floatingZOrder: [], hidden: []),
-                delta: LayoutDelta(moves: moves ?? tiled, raises: [], hides: [], shows: shows)
-            ),
-            windows: windows,
-            sourceWorld: .empty,
-            plannedWorld: .empty,
-            undoWorld: nil
-        )
-    }
-
-    private func windowMetadata(id: WindowID, frame: CGRect) -> WindowMetadata {
-        WindowMetadata(
-            id: id,
-            bundleID: BundleID(raw: "com.example"),
-            title: "Window \(id.raw)",
-            role: "AXWindow",
-            pid: ProcessID(42),
-            frame: frame,
-            isResizable: true,
-            isMinimized: false
-        )
     }
 }

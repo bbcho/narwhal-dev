@@ -237,24 +237,6 @@ public func focusDirectionPlan(
     }
 }
 
-public func focusCyclePlan(
-    in world: World,
-    from focusedWindowID: WindowID?,
-    direction: FocusCycleDirection
-) -> Result<FocusPlanResult, CommandError> {
-    guard let targetWindowID = focusCycleTarget(
-        windows: focusCycleWindows(in: world, focusedWindowID: focusedWindowID),
-        from: focusedWindowID,
-        direction: direction
-    ) else {
-        guard let focusedWindowID else {
-            return .failure(.noFocusedWindow)
-        }
-        return .failure(.windowNotFound(focusedWindowID))
-    }
-    return focusPlan(in: world, windowID: targetWindowID)
-}
-
 public func focusCycleCandidatePlans(
     in world: World,
     from focusedWindowID: WindowID?,

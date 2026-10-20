@@ -2628,7 +2628,7 @@ struct MVPLayoutTests {
         #expect(next.pendingRules == [firstSpaceWindow: .forceFloat])
     }
 
-    @Test("Active Space live pruning preserves inactive Space memory")
+    @Test("Removing a closed window from the active Space preserves inactive Space memory")
     func activeSpaceLivePruningPreservesInactiveSpaceMemory() throws {
         let displayID = DisplayID(raw: 1)
         let firstSpace = SpaceID(raw: 1)
@@ -2680,7 +2680,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        let next = pruneActiveSpace(world, keepingLiveWindows: [activeLive])
+        let next = removeWindowsFromActiveSpace([activeClosed], in: world)
 
         #expect(next.windows[firstSpaceWindow] == metadata(for: firstSpaceWindow))
         #expect(next.windows[activeLive] == metadata(for: activeLive))
@@ -2853,7 +2853,7 @@ struct MVPLayoutTests {
         #expect(Set(borderTargets.map { $0.windowID }) == [live])
     }
 
-    @Test("Active Space pruning keeps metadata for windows still tracked in inactive Spaces")
+    @Test("Removing windows from the active Space keeps metadata for windows still tracked in inactive Spaces")
     func activeSpacePruningKeepsMetadataForWindowsStillTrackedInInactiveSpaces() throws {
         let displayID = DisplayID(raw: 1)
         let inactiveSpace = SpaceID(raw: 1)
@@ -2901,7 +2901,7 @@ struct MVPLayoutTests {
             config: .default
         )
 
-        let next = pruneActiveSpace(world, keepingLiveWindows: [])
+        let next = removeWindowsFromActiveSpace([sharedWindow, activeClosed], in: world)
 
         #expect(next.windows[sharedWindow] == metadata(for: sharedWindow))
         #expect(next.windows[activeClosed] == nil)

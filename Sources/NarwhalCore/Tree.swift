@@ -87,6 +87,17 @@ public enum Axis: String, Codable, CaseIterable, Sendable {
     case vertical
 }
 
+extension Axis {
+    var toggled: Axis {
+        switch self {
+        case .horizontal:
+            return .vertical
+        case .vertical:
+            return .horizontal
+        }
+    }
+}
+
 public enum Direction: String, Codable, CaseIterable, Sendable {
     case left
     case right

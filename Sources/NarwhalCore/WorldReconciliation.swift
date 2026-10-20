@@ -34,11 +34,6 @@ public func pruneWorld(_ world: World, keepingLiveWindows liveWindowIDs: Set<Win
     )
 }
 
-public func pruneActiveSpace(_ world: World, keepingLiveWindows liveWindowIDs: Set<WindowID>) -> World {
-    let removedActiveSpaceWindowIDs = activeSpaceWindowIDs(in: world).subtracting(liveWindowIDs)
-    return removeWindowsFromActiveSpace(removedActiveSpaceWindowIDs, in: world)
-}
-
 public func removeWindowsFromActiveSpace(_ windowIDs: Set<WindowID>, in world: World) -> World {
     guard !windowIDs.isEmpty else { return world }
 
@@ -632,16 +627,4 @@ private func resolvedDisplayID(
         return preferredDisplay.id
     }
     return displayContainingFrame(metadata.frame, displays: displays)
-}
-
-private func displayOwnership(
-    for windows: Dictionary<WindowID, WindowMetadata>.Values,
-    displays: [DisplayID: DisplayInfo]
-) -> [WindowID: DisplayID] {
-    Dictionary(
-        windows.compactMap { metadata in
-            displayContainingFrame(metadata.frame, displays: displays).map { (metadata.id, $0) }
-        },
-        uniquingKeysWith: { _, replacement in replacement }
-    )
 }

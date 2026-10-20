@@ -110,7 +110,7 @@ public func focusCycleWindows(
         return rememberedFloating.contains(metadata.id)
     }
     return appCycleRepresentatives(
-        eligible.sorted(by: focusCycleWindowSort),
+        eligible.sorted(by: focusCycleSort),
         focusedWindowID: focusedWindowID
     )
 }
@@ -149,14 +149,6 @@ private func appCycleKey(for window: WindowMetadata) -> String {
     return "window:\(window.id.raw)"
 }
 
-private func focusCycleWindowSort(_ lhs: WindowMetadata, _ rhs: WindowMetadata) -> Bool {
-    if lhs.frame.minY != rhs.frame.minY { return lhs.frame.minY < rhs.frame.minY }
-    if lhs.frame.minX != rhs.frame.minX { return lhs.frame.minX < rhs.frame.minX }
-    if lhs.bundleID.raw != rhs.bundleID.raw { return lhs.bundleID.raw < rhs.bundleID.raw }
-    if lhs.title != rhs.title { return lhs.title < rhs.title }
-    return lhs.id.raw < rhs.id.raw
-}
-
 public func activeFocusedWindow(in world: World) -> WindowMetadata? {
     let activeKeys = activeWorkspaceKeys(in: world)
     for key in activeKeys {
@@ -170,14 +162,6 @@ public func activeFocusedWindow(in world: World) -> WindowMetadata? {
         }
     }
     return nil
-}
-
-public func isWindowTiled(_ windowID: WindowID, in world: World) -> Bool {
-    world.spaces.values.contains { space in
-        space.displays.values.contains { displayState in
-            occupiedWindows(in: displayState.tree).contains(windowID)
-        }
-    }
 }
 
 public func windowIDs(in displayState: DisplaySpaceState) -> Set<WindowID> {

@@ -366,10 +366,6 @@ private func componentFitsPlannedBounds(
     return actualMin >= plannedMin - boundsTolerance && actualMax <= plannedMax + boundsTolerance
 }
 
-private func overlap(_ firstMin: CGFloat, _ firstMax: CGFloat, _ secondMin: CGFloat, _ secondMax: CGFloat) -> CGFloat {
-    max(0, min(firstMax, secondMax) - max(firstMin, secondMin))
-}
-
 private extension CGRect {
     func minimum(on axis: Axis) -> CGFloat {
         axis == .horizontal ? minX : minY
@@ -406,7 +402,7 @@ public func flattenedLayout(of world: World) -> Result<Layout, UnsatisfiableLayo
     return workspaceKeys
         .reduce(Result<FlattenedLayoutAccumulator, UnsatisfiableLayout>.success(.empty)) { result, key in
             result.flatMap { accumulator in
-                activeWorkspaceLayout(for: key, in: world)
+                workspaceLayout(for: key, in: world)
                     .map { accumulator.adding($0) }
             }
         }
@@ -570,13 +566,6 @@ private struct FlattenedLayoutAccumulator {
             hidden: hidden.union(layout.hidden)
         )
     }
-}
-
-private func activeWorkspaceLayout(
-    for key: WorkspaceKey,
-    in world: World
-) -> Result<Layout, UnsatisfiableLayout> {
-    workspaceLayout(for: key, in: world)
 }
 
 private struct PendingTileRuleApplicationAccumulator {

@@ -170,7 +170,7 @@ final class LayoutTransactionCoordinator {
             let reason = "\(failure.message); rollback failed: \(rollbackSummary)"
             let issue = WorkspaceReconciliationIssue(
                 operation: operation,
-                windowIDs: Array(affectedWindowIDs(for: plan)),
+                windowIDs: Array(layoutTransactionAffectedWindowIDs(plan)),
                 reason: reason
             )
             for key in affectedWorkspaces {
@@ -200,7 +200,7 @@ final class LayoutTransactionCoordinator {
     }
 
     private func affectedWorkspaceKeys(for plan: CommandPlanResult) -> Set<WorkspaceKey> {
-        let keys = affectedWindowIDs(for: plan).reduce(into: Set<WorkspaceKey>()) { result, windowID in
+        let keys = layoutTransactionAffectedWindowIDs(plan).reduce(into: Set<WorkspaceKey>()) { result, windowID in
             if let key = workspaceKey(forWindow: windowID, in: plan.sourceWorld) {
                 result.insert(key)
             }
@@ -210,9 +210,5 @@ final class LayoutTransactionCoordinator {
         }
         if !keys.isEmpty { return keys }
         return Set(activeWorkspaceKeys(in: plan.plannedWorld) + activeWorkspaceKeys(in: plan.sourceWorld))
-    }
-
-    private func affectedWindowIDs(for plan: CommandPlanResult) -> Set<WindowID> {
-        layoutTransactionAffectedWindowIDs(plan)
     }
 }

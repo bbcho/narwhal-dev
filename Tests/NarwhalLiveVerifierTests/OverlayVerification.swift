@@ -1,9 +1,10 @@
+#if NARWHAL_ENABLE_VERIFIERS
+@testable import NarwhalAppRuntime
 import AppKit
 import Darwin
 import NarwhalAppSupport
 import NarwhalCore
 
-#if NARWHAL_ENABLE_VERIFIERS
 @MainActor
 enum CommandOverlayVerification {
     static func verifyDefaultTwoColumnLayout() -> (passed: Bool, message: String) {

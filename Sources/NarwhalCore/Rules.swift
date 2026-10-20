@@ -1,13 +1,3 @@
-public func matchRule(_ metadata: WindowMetadata, rules: [WindowRule]) -> RuleAction? {
-    rules.first { rule in
-        matches(rule.predicate, metadata: metadata)
-    }?.action
-}
-
-public func windowOpenDecision(_ metadata: WindowMetadata, rules: [WindowRule]) -> WindowOpenDecision {
-    resolveWindowOpen(metadata, managedRules: [], luaRules: rules).decision
-}
-
 func matches(_ predicate: RulePredicate, metadata: WindowMetadata) -> Bool {
     switch predicate {
     case .bundleID(let expected):

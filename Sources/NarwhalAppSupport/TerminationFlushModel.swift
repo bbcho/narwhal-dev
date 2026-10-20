@@ -33,8 +33,8 @@ public func requestTermination(
     }
 }
 
+/// Persisted or timed out, whichever completes first replies; a later one is ignored.
 public func completeTerminationFlush(
-    _ completion: TerminationFlushCompletion,
     in state: TerminationFlushState
 ) -> (state: TerminationFlushState, decision: TerminationCompletionDecision) {
     switch state {

@@ -25,6 +25,25 @@ func splitFrames(_ frame: CGRect, axis: Axis, lengths: [Double]) -> [CGRect] {
     framesFromLengths(frame, axis: axis, lengths: lengths.map { CGFloat($0) })
 }
 
+/// The length two intervals share; zero when they do not overlap.
+func overlap(_ firstMin: CGFloat, _ firstMax: CGFloat, _ secondMin: CGFloat, _ secondMax: CGFloat) -> CGFloat {
+    max(0, min(firstMax, secondMax) - max(firstMin, secondMin))
+}
+
+/// Which display each window is on: the largest overlap of its frame, or the
+/// nearest display center when it overlaps none (see `displayContainingFrame`).
+func displayOwnership(
+    for windows: Dictionary<WindowID, WindowMetadata>.Values,
+    displays: [DisplayID: DisplayInfo]
+) -> [WindowID: DisplayID] {
+    Dictionary(
+        windows.compactMap { metadata in
+            displayContainingFrame(metadata.frame, displays: displays).map { (metadata.id, $0) }
+        },
+        uniquingKeysWith: { _, replacement in replacement }
+    )
+}
+
 func applyOuterGaps(_ gaps: Insets, to frame: CGRect) -> CGRect {
     CGRect(
         x: frame.minX + gaps.left,

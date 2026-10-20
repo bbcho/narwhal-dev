@@ -333,7 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func resolveTermination(_ completion: TerminationFlushCompletion) {
-        let transition = completeTerminationFlush(completion, in: terminationFlushState)
+        let transition = completeTerminationFlush(in: terminationFlushState)
         terminationFlushState = transition.state
         guard transition.decision == .replyToTerminate else { return }
 
@@ -2596,17 +2596,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .success(result)
         case .success(nil):
             return .failure(.configInvalid("no pending tile rule"))
-        case .failure(let error):
-            return .failure(error)
-        }
-    }
-
-    private func requireExternalGeometryPlan(_ event: AXEvent) async -> Result<CommandPlanResult, CommandError> {
-        switch await worldActor.planExternalGeometry(event) {
-        case .success(let result?):
-            return .success(result)
-        case .success(nil):
-            return .failure(.configInvalid("external geometry produced no layout change"))
         case .failure(let error):
             return .failure(error)
         }

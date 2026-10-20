@@ -1004,19 +1004,6 @@ private func matchDisplays(
     }
 }
 
-private func displayOwnership(
-    for windows: Dictionary<WindowID, WindowMetadata>.Values,
-    displays: [DisplayID: DisplayInfo]
-) -> [WindowID: DisplayID] {
-    Dictionary(
-        windows.compactMap { metadata -> (WindowID, DisplayID)? in
-            guard let displayID = displayContainingFrame(metadata.frame, displays: displays) else { return nil }
-            return (metadata.id, displayID)
-        },
-        uniquingKeysWith: { _, replacement in replacement }
-    )
-}
-
 private func stableWindowOrder(_ windows: [WindowMetadata]) -> [WindowMetadata] {
     windows.sorted { lhs, rhs in
         lhs.restoreSortKey < rhs.restoreSortKey

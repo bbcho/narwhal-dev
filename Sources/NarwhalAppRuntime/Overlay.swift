@@ -1562,7 +1562,6 @@ enum CommandOverlayLayout {
     static let scrollBarGutterWidth: CGFloat = scrollBarGap + scrollBarWidth
     static let sectionSpacing: CGFloat = 18
     static let sectionHeaderSpacing: CGFloat = 8
-    static let sectionPurposeGap: CGFloat = 10
     static let rowSpacing: CGFloat = 6
     static let rowGap: CGFloat = 14
     static let rowHeight: CGFloat = 42

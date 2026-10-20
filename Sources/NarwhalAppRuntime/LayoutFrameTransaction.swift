@@ -76,17 +76,12 @@ struct LayoutFrameTransaction {
         preserving preservedFrames: [WindowID: CGRect] = [:],
         isCurrent: @MainActor () async -> Bool
     ) async -> LayoutFrameTransactionOutcome {
-        let applier = LayoutApplier(
-            frameWriter: frameWriter,
-            reporter: reporter,
-            echoSuppressor: echoSuppressor
-        )
-        let planned = applier.plannedFrames(for: plan)
-        let moving = applier.movingWindowIDs(for: plan, preserving: preservedFrames)
+        let planned = plannedFrames(for: plan)
+        let moving = movingWindowIDs(for: plan, preserving: preservedFrames)
             .union(await driftedWindowIDs(plan: plan, planned: planned, excluding: preservedFrames))
-        let ordered = applier.orderedWindowIDs(
+        let ordered = leadingFrameWriteOrder(
             planned: planned,
-            movingWindowIDs: moving,
+            candidates: moving,
             innerGap: plan.plannedWorld.config.gaps.inner
         )
         var originals = preservedFrames.filter { planned[$0.key] != nil }
@@ -135,7 +130,7 @@ struct LayoutFrameTransaction {
             )
         }
 
-        var applied = applier.initiallyAcceptedFrames(
+        var applied = initiallyAcceptedFrames(
             planned: planned,
             movingWindowIDs: moving,
             windows: plan.windows,
@@ -155,7 +150,7 @@ struct LayoutFrameTransaction {
             }
 
             let target: CGRect
-            switch applier.resolvedTargetFrame(
+            switch resolvedTargetFrame(
                 for: windowID,
                 planned: planned,
                 applied: applied,
@@ -228,7 +223,7 @@ struct LayoutFrameTransaction {
             )
         }
 
-        if let validationFailure = applier.validationFailure(
+        if let validationFailure = validationFailure(
             plan: plan,
             planned: planned,
             applied: applied
@@ -267,18 +262,13 @@ struct LayoutFrameTransaction {
         preserving preservedFrames: [WindowID: CGRect] = [:],
         failure: LayoutFrameTransactionFailure
     ) async -> LayoutFrameTransactionOutcome {
-        let applier = LayoutApplier(
-            frameWriter: frameWriter,
-            reporter: reporter,
-            echoSuppressor: echoSuppressor
-        )
-        let planned = applier.plannedFrames(for: plan)
+        let planned = plannedFrames(for: plan)
         // Every window with a recorded original was written, including ones
         // drift healing added beyond the plan's moves.
         let written = Set(originalFrames.keys).subtracting(preservedFrames.keys)
-        let ordered = applier.orderedWindowIDs(
+        let ordered = leadingFrameWriteOrder(
             planned: planned,
-            movingWindowIDs: written,
+            candidates: written,
             innerGap: plan.plannedWorld.config.gaps.inner
         )
         return await restore(
@@ -465,5 +455,130 @@ struct LayoutFrameTransaction {
     private func readbackMismatchMessage(_ readback: WindowFrameReadback) -> String {
         "AX and WindowServer frames disagree AX=\(readback.accessibility.debugDescription) "
             + "WindowServer=\(readback.windowServer.debugDescription)"
+    }
+
+    private func plannedFrames(for plan: CommandPlanResult) -> [WindowID: CGRect] {
+        plan.desiredLayout.layout.tiled.mapValues(canonicalFrameWriteTarget)
+    }
+
+    private func movingWindowIDs(
+        for plan: CommandPlanResult,
+        preserving preservedFrames: [WindowID: CGRect]
+    ) -> Set<WindowID> {
+        Set(plan.desiredLayout.delta.moves.keys).subtracting(preservedFrames.keys)
+    }
+
+    private func resolvedTargetFrame(
+        for windowID: WindowID,
+        planned: [WindowID: CGRect],
+        applied: [WindowID: CGRect],
+        innerGap: Double
+    ) -> Result<CGRect, LayoutApplyFailure> {
+        guard let plannedFrame = planned[windowID] else {
+            return .failure(LayoutApplyFailure(
+                windowID: windowID,
+                targetFrame: .null,
+                message: "missing planned frame"
+            ))
+        }
+        let actualAndPending = planned.merging(applied) { _, actual in actual }
+        switch reflowSnappedFrames(
+            planned: planned,
+            actual: actualAndPending,
+            innerGap: innerGap,
+            anchoredWindowIDs: Set(applied.keys),
+            tolerance: Double(configuredGapTolerance)
+        ) {
+        case .success(let reflowed):
+            return .success(canonicalFrameWriteTarget(reflowed[windowID] ?? plannedFrame))
+        case .failure(let conflict):
+            let windows = conflict.windows.map(\.description).joined(separator: ",")
+            let failedWindowID = conflict.windows.first ?? windowID
+            return .failure(LayoutApplyFailure(
+                windowID: failedWindowID,
+                targetFrame: planned[failedWindowID] ?? plannedFrame,
+                message: "configured \(conflict.axis.rawValue) gap is physically inconsistent for \(windows)"
+            ))
+        }
+    }
+
+    private func initiallyAcceptedFrames(
+        planned: [WindowID: CGRect],
+        movingWindowIDs: Set<WindowID>,
+        windows: [WindowID: WindowMetadata],
+        preservedFrames: [WindowID: CGRect]
+    ) -> [WindowID: CGRect] {
+        let preserved = preservedFrames.filter { planned[$0.key] != nil }
+        return planned.reduce(into: preserved) { accepted, entry in
+            guard !movingWindowIDs.contains(entry.key),
+                  accepted[entry.key] == nil,
+                  let frame = windows[entry.key]?.frame
+            else {
+                return
+            }
+            accepted[entry.key] = frame
+        }
+    }
+
+    private func validationFailure(
+        plan: CommandPlanResult,
+        planned: [WindowID: CGRect],
+        applied: [WindowID: CGRect]
+    ) -> LayoutApplyFailure? {
+        let missing = planned.keys
+            .filter { applied[$0] == nil }
+            .sorted { $0.raw < $1.raw }
+        if let windowID = missing.first, let target = planned[windowID] {
+            return LayoutApplyFailure(
+                windowID: windowID,
+                targetFrame: target,
+                message: "missing final frame readback"
+            )
+        }
+
+        let violations = innerGapViolations(
+            planned: planned,
+            actual: applied,
+            innerGap: plan.plannedWorld.config.gaps.inner,
+            tolerance: Double(configuredGapTolerance)
+        )
+        if let violation = violations.first,
+           let target = planned[violation.after] {
+            return LayoutApplyFailure(
+                windowID: violation.after,
+                targetFrame: target,
+                message: "configured gap expected=\(violation.expected) actual=\(violation.actual)"
+            )
+        }
+
+        if let overlap = firstOverlap(in: applied),
+           let target = planned[overlap.second] {
+            return LayoutApplyFailure(
+                windowID: overlap.second,
+                targetFrame: target,
+                message: "visible frames overlap \(overlap.first.description) and \(overlap.second.description)"
+            )
+        }
+        return nil
+    }
+
+    private func firstOverlap(
+        in frames: [WindowID: CGRect]
+    ) -> (first: WindowID, second: WindowID)? {
+        let ids = frames.keys.sorted { $0.raw < $1.raw }
+        for firstIndex in ids.indices {
+            for secondIndex in ids.indices.dropFirst(firstIndex + 1) {
+                let firstID = ids[firstIndex]
+                let secondID = ids[secondIndex]
+                guard let first = frames[firstID],
+                      let second = frames[secondID],
+                      first.intersection(second).narwhalArea > configuredGapTolerance
+                else {
+                    continue
+                }
+                return (firstID, secondID)
+            }
+        }
+        return nil
     }
 }

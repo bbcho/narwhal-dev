@@ -658,17 +658,6 @@ private extension Corner {
     }
 }
 
-private extension Axis {
-    var toggled: Axis {
-        switch self {
-        case .horizontal:
-            return .vertical
-        case .vertical:
-            return .horizontal
-        }
-    }
-}
-
 private func makeCell(weight: Double, node: Node) -> Cell {
     switch Cell.create(weight: weight, node: node) {
     case .success(let cell):

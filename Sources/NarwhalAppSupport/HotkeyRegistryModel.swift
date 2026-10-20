@@ -23,10 +23,3 @@ public func hotkeyActionRegistry(
         (registration.id, registration.binding.action)
     })
 }
-
-public func hotkeyAction(
-    for id: UInt32,
-    in registry: [UInt32: HotkeyAction]
-) -> HotkeyAction? {
-    registry[id]
-}
