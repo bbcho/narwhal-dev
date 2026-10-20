@@ -12,7 +12,6 @@ typedef struct {
     size_t maximum_bytes;
     uint64_t remaining_instructions;
     int hook_interval;
-    int memory_limit_exceeded;
     int instruction_limit_exceeded;
 } narwhal_lua_limits;
 
@@ -43,7 +42,6 @@ static inline void *narwhal_lua_allocate(void *user_data, void *pointer, size_t 
     const size_t retained_bytes = limits->used_bytes - prior_size;
     if (new_size > limits->maximum_bytes - retained_bytes ||
         new_size > SIZE_MAX - sizeof(narwhal_lua_allocation)) {
-        limits->memory_limit_exceeded = 1;
         return NULL;
     }
 
@@ -72,6 +70,31 @@ static inline lua_State *narwhal_lua_newstate(size_t maximum_bytes) {
     return state;
 }
 
+/* Lua patterns run as C loops the instruction hook never sees, and backtracking
+ * patterns can run for hours, so config gets plain find only. Binary chunks are
+ * not verified by Lua and can crash the interpreter, so load is text-only. The
+ * explicit-arity dance keeps load(chunk, name, mode, nil) meaning "nil env". */
+static const char *const narwhal_lua_config_prelude =
+    "local find, rawload = string.find, load\n"
+    "local function patterns_unavailable(name)\n"
+    "  return function()\n"
+    "    error(name .. ': pattern matching is not available in Narwhal config', 2)\n"
+    "  end\n"
+    "end\n"
+    "string.match = patterns_unavailable('string.match')\n"
+    "string.gmatch = patterns_unavailable('string.gmatch')\n"
+    "string.gsub = patterns_unavailable('string.gsub')\n"
+    "string.find = function(s, text, init, plain)\n"
+    "  if not plain then\n"
+    "    error('string.find: pattern matching is not available in Narwhal config; pass plain = true', 2)\n"
+    "  end\n"
+    "  return find(s, text, init, true)\n"
+    "end\n"
+    "load = function(chunk, name, _, ...)\n"
+    "  if select('#', ...) > 0 then return rawload(chunk, name, 't', (...)) end\n"
+    "  return rawload(chunk, name, 't')\n"
+    "end\n";
+
 static inline int narwhal_lua_open_config_libraries_function(lua_State *state) {
     const luaL_Reg libraries[] = {
         {LUA_GNAME, luaopen_base},
@@ -91,6 +114,9 @@ static inline int narwhal_lua_open_config_libraries_function(lua_State *state) {
     lua_setglobal(state, "dofile");
     lua_pushnil(state);
     lua_setglobal(state, "loadfile");
+    if (luaL_dostring(state, narwhal_lua_config_prelude) != LUA_OK) {
+        return lua_error(state);
+    }
     return 0;
 }
 
@@ -104,8 +130,13 @@ static inline void narwhal_lua_instruction_hook(lua_State *state, lua_Debug *deb
     void *user_data = NULL;
     lua_getallocf(state, &user_data);
     narwhal_lua_limits *limits = (narwhal_lua_limits *)user_data;
-    if (limits->remaining_instructions <= (uint64_t)limits->hook_interval) {
+    if (limits->instruction_limit_exceeded
+        || limits->remaining_instructions <= (uint64_t)limits->hook_interval) {
         limits->instruction_limit_exceeded = 1;
+        /* Config can catch this error with pcall, so from now on every
+         * instruction raises again: each catching frame's caller fails next,
+         * and execution unwinds to the top. */
+        lua_sethook(state, narwhal_lua_instruction_hook, LUA_MASKCOUNT, 1);
         luaL_error(state, "configuration instruction limit exceeded");
         return;
     }
@@ -119,12 +150,6 @@ static inline void narwhal_lua_set_instruction_limit(lua_State *state, uint64_t 
     limits->remaining_instructions = maximum_instructions;
     limits->hook_interval = maximum_instructions < 1000 ? (int)maximum_instructions : 1000;
     lua_sethook(state, narwhal_lua_instruction_hook, LUA_MASKCOUNT, limits->hook_interval);
-}
-
-static inline int narwhal_lua_memory_limit_exceeded(lua_State *state) {
-    void *user_data = NULL;
-    lua_getallocf(state, &user_data);
-    return ((narwhal_lua_limits *)user_data)->memory_limit_exceeded;
 }
 
 static inline int narwhal_lua_instruction_limit_exceeded(lua_State *state) {
@@ -141,7 +166,11 @@ static inline void narwhal_lua_close(lua_State *state) {
 }
 
 static inline int narwhal_lua_loadfile(lua_State *state, const char *path) {
-    return luaL_loadfile(state, path);
+    return luaL_loadfilex(state, path, "t");
+}
+
+static inline int narwhal_lua_status_memory_error(void) {
+    return LUA_ERRMEM;
 }
 
 static inline int narwhal_lua_pcall(lua_State *state, int args, int results, int errfunc) {
@@ -154,14 +183,6 @@ static inline int narwhal_lua_type(lua_State *state, int index) {
 
 static inline int narwhal_lua_absindex(lua_State *state, int index) {
     return lua_absindex(state, index);
-}
-
-static inline int narwhal_lua_gettop(lua_State *state) {
-    return lua_gettop(state);
-}
-
-static inline void narwhal_lua_settop(lua_State *state, int index) {
-    lua_settop(state, index);
 }
 
 static inline void narwhal_lua_pop(lua_State *state, int count) {
@@ -182,10 +203,6 @@ static inline lua_Unsigned narwhal_lua_rawlen(lua_State *state, int index) {
 
 static inline const void *narwhal_lua_topointer(lua_State *state, int index) {
     return lua_topointer(state, index);
-}
-
-static inline int narwhal_lua_geti(lua_State *state, int index, lua_Integer key) {
-    return lua_geti(state, index, key);
 }
 
 static inline int narwhal_lua_toboolean(lua_State *state, int index) {

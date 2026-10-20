@@ -2773,19 +2773,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        do {
-            try hotkeyManager?.rebind(loaded.config.keymap)
-        } catch {
-            let message = String(describing: error)
-            reporter.error("Config reload failed rebinding hotkeys (\(reason)): \(message)")
-            configHealthy = false
-            configWarning = .configReloadFailed
-            menubar.updateConfigStatus(.failed(message))
-            if servicesStarted {
-                updateRuntimeReadiness(operationalReadiness)
-            }
-            showOperatorFeedback("Hotkey rebind failed", tone: .error)
-            return
+        let hotkeyFailures = hotkeyManager?.rebind(loaded.config.keymap) ?? []
+        if !hotkeyFailures.isEmpty {
+            showOperatorFeedback("\(hotkeyFailures.count) hotkey(s) could not be registered", tone: .error)
         }
 
         let activeConfig = configByRefreshingManagedRules(loaded.config)

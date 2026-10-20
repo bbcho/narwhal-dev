@@ -26,9 +26,12 @@ final class ConfigFileWatcherService {
         self.reporter = reporter
         self.fileManager = fileManager
         self.configChanged = configChanged
+        let resolvedConfigURL = self.configURL.resolvingSymlinksInPath()
         self.watchTarget = ConfigWatchTarget(
             configPath: self.configURL.path,
-            directoryPath: self.configURL.deletingLastPathComponent().standardizedFileURL.path
+            directoryPath: self.configURL.deletingLastPathComponent().standardizedFileURL.path,
+            resolvedConfigPath: resolvedConfigURL.path,
+            resolvedDirectoryPath: resolvedConfigURL.deletingLastPathComponent().path
         )
     }
 
@@ -38,6 +41,9 @@ final class ConfigFileWatcherService {
             reporter.info("Config watcher skipped: no existing config directory for \(configURL.path)")
             return
         }
+        // A symlinked config's target can live outside the watched directory.
+        let resolvedRoot = URL(fileURLWithPath: watchTarget.resolvedDirectoryPath)
+        let roots = Array(Set([root.path, resolvedRoot.path].filter { fileManager.fileExists(atPath: $0) }))
 
         var context = FSEventStreamContext(
             version: 0,
@@ -46,15 +52,14 @@ final class ConfigFileWatcherService {
             release: nil,
             copyDescription: nil
         )
-        let flags = FSEventStreamCreateFlags(
-            kFSEventStreamCreateFlagFileEvents |
-            kFSEventStreamCreateFlagNoDefer
-        )
+        // Without NoDefer, FSEvents batches an editor's atomic save (temp file,
+        // rename, metadata) into one callback instead of firing on its first event.
+        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents)
         guard let created = FSEventStreamCreate(
             kCFAllocatorDefault,
             Self.handleEvents,
             &context,
-            [root.path] as CFArray,
+            roots as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             Self.reloadDelay,
             flags
@@ -72,7 +77,7 @@ final class ConfigFileWatcherService {
         }
 
         stream = created
-        reporter.info("Config watcher ready for \(configURL.path) under \(root.path)")
+        reporter.info("Config watcher ready for \(configURL.path) under \(roots.sorted().joined(separator: ", "))")
     }
 
     func stop() {
@@ -105,8 +110,8 @@ final class ConfigFileWatcherService {
     }
 
     private func handleEvent(path: String) {
-        let eventURL = URL(fileURLWithPath: path).standardizedFileURL
-        guard configChangeEventTouchesTarget(path: eventURL.path, target: watchTarget) else { return }
+        let eventPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard configChangeEventTouchesTarget(path: eventPath, target: watchTarget) else { return }
         scheduleReload()
     }
 

@@ -28,6 +28,20 @@ struct ConfigReloadModelTests {
         ))
     }
 
+    @Test("A change to the resolved target of a symlinked config matches the target")
+    func resolvedSymlinkTargetMatches() {
+        let target = ConfigWatchTarget(
+            configPath: "/Users/ben/.config/narwhal/init.lua",
+            directoryPath: "/Users/ben/.config/narwhal",
+            resolvedConfigPath: "/Users/ben/dotfiles/narwhal/init.lua",
+            resolvedDirectoryPath: "/Users/ben/dotfiles/narwhal"
+        )
+
+        #expect(configChangeEventTouchesTarget(path: "/Users/ben/dotfiles/narwhal/init.lua", target: target))
+        #expect(configChangeEventTouchesTarget(path: "/Users/ben/dotfiles/narwhal", target: target))
+        #expect(!configChangeEventTouchesTarget(path: "/Users/ben/dotfiles/narwhal/other.lua", target: target))
+    }
+
     @Test("Config watch root selection chooses the first existing directory")
     func configWatchRootSelectionChoosesFirstExistingDirectory() {
         let candidates = [

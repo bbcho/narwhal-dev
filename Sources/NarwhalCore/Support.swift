@@ -49,6 +49,17 @@ public struct KeySpec: Equatable, Codable, Sendable {
     }
 }
 
+/// Key names a hotkey binding may use. Character keys resolve through the
+/// active keyboard layout when hotkeys register; named keys are fixed keys.
+public enum HotkeyKeyNames {
+    public static let characters: [String] = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./`".map(String.init)
+    public static let named: [String] = [
+        "return", "tab", "space", "delete", "forwarddelete", "escape",
+        "left", "right", "up", "down", "home", "end", "pageup", "pagedown"
+    ] + (1...12).map { "f\($0)" }
+    public static let supported: Set<String> = Set(characters + named)
+}
+
 public struct BorderConfig: Equatable, Codable, Sendable {
     public static let maximumWidth = 32.0
 

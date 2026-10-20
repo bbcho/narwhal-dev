@@ -16,6 +16,7 @@ private struct ConfigParser {
     let base: Config
 
     func parse() throws -> Config {
+        try onlyKeys(root, ["keymap", "zones", "rules", "gaps", "border", "hud", "drag_modifier"], path: nil)
         let keymap = try override(root["keymap"], inheriting: base.keymap, parse: parseKeymap)
         let zones = try override(root["zones"], inheriting: base.zones, parse: parseZones)
         let rules = try override(root["rules"], inheriting: base.rules, parse: parseRules)
@@ -49,9 +50,13 @@ private struct ConfigParser {
         try array(value, key: "keymap").enumerated().map { index, item in
             let path = "keymap[\(index + 1)]"
             let table = try table(item, key: path)
+            try onlyKeys(table, ["key", "modifiers", "action"], path: path)
             let key = try string(required("key", in: table, path: path), key: "\(path).key").lowercased()
             guard !key.isEmpty else {
                 throw ConfigError.invalidValue(key: "\(path).key", reason: "key cannot be empty")
+            }
+            guard HotkeyKeyNames.supported.contains(key) else {
+                throw ConfigError.invalidValue(key: "\(path).key", reason: "unsupported key '\(key)'")
             }
             return HotkeyBinding(
                 key: KeySpec(
@@ -66,6 +71,7 @@ private struct ConfigParser {
     private func parseHotkeyAction(_ value: LuaValue, key: String) throws -> HotkeyAction {
         let table = try table(value, key: key)
         let type = try string(required("type", in: table, path: key), key: "\(key).type")
+        try onlyKeys(table, Set(["type"]).union(hotkeyActionFields(type)), path: key)
         switch type {
         case "push":
             return .command(.push(try parseDirection(required("direction", in: table, path: key), key: "\(key).direction")))
@@ -122,6 +128,17 @@ private struct ConfigParser {
         }
     }
 
+    private func hotkeyActionFields(_ type: String) -> Set<String> {
+        switch type {
+        case "push", "swap", "focus_direction", "focus_cycle", "move_to_desktop":
+            return ["direction"]
+        case "resize_split":
+            return ["direction", "delta"]
+        default:
+            return []
+        }
+    }
+
     private func parseRules(_ value: LuaValue) throws -> [WindowRule] {
         switch value {
         case .array(let values) where values.isEmpty:
@@ -141,6 +158,7 @@ private struct ConfigParser {
 
     private func parseRule(_ value: LuaValue, key: String) throws -> WindowRule {
         let table = try table(value, key: key)
+        try onlyKeys(table, ["predicate", "action"], path: key)
         return WindowRule(
             predicate: try parseRulePredicate(required("predicate", in: table, path: key), key: "\(key).predicate"),
             action: try parseRuleAction(required("action", in: table, path: key), key: "\(key).action")
@@ -150,6 +168,7 @@ private struct ConfigParser {
     private func parseRulePredicate(_ value: LuaValue, key: String) throws -> RulePredicate {
         let table = try table(value, key: key)
         let type = try string(required("type", in: table, path: key), key: "\(key).type")
+        try onlyKeys(table, Set(["type"]).union(rulePredicateFields(type)), path: key)
         switch type {
         case "bundle_id":
             return .bundleID(try nonEmptyString(required("value", in: table, path: key), key: "\(key).value"))
@@ -178,6 +197,21 @@ private struct ConfigParser {
         }
     }
 
+    private func rulePredicateFields(_ type: String) -> Set<String> {
+        switch type {
+        case "bundle_id", "role":
+            return ["value"]
+        case "bundle_id_matches", "title_matches":
+            return ["pattern"]
+        case "and", "or":
+            return ["predicates"]
+        case "not":
+            return ["predicate"]
+        default:
+            return []
+        }
+    }
+
     private func parsePredicateArray(_ value: LuaValue, key: String) throws -> [RulePredicate] {
         try array(value, key: key).enumerated().map { index, item in
             try parseRulePredicate(item, key: "\(key)[\(index + 1)]")
@@ -187,6 +221,8 @@ private struct ConfigParser {
     private func parseRuleAction(_ value: LuaValue, key: String) throws -> RuleAction {
         let table = try table(value, key: key)
         let type = try string(required("type", in: table, path: key), key: "\(key).type")
+        let fields: Set<String> = type == "pin_to_display" ? ["slot"] : type == "tile_to_zone" ? ["zone"] : []
+        try onlyKeys(table, Set(["type"]).union(fields), path: key)
         switch type {
         case "force_float":
             return .forceFloat
@@ -205,6 +241,7 @@ private struct ConfigParser {
         let zones = try array(value, key: "zones").enumerated().map { index, item in
             let path = "zones[\(index + 1)]"
             let table = try table(item, key: path)
+            try onlyKeys(table, ["id", "bounds", "action"], path: path)
             return Zone(
                 id: ZoneID(raw: try string(required("id", in: table, path: path), key: "\(path).id")),
                 bounds: try parseBounds(required("bounds", in: table, path: path), key: "\(path).bounds"),
@@ -225,6 +262,7 @@ private struct ConfigParser {
 
     private func parseBounds(_ value: LuaValue, key: String) throws -> ProportionalRect {
         let table = try table(value, key: key)
+        try onlyKeys(table, ["x", "y", "w", "h"], path: key)
         let rect = ProportionalRect(
             x: try boundedNumber(required("x", in: table, path: key), key: "\(key).x", min: 0, max: 1),
             y: try boundedNumber(required("y", in: table, path: key), key: "\(key).y", min: 0, max: 1),
@@ -243,6 +281,12 @@ private struct ConfigParser {
     private func parseZoneAction(_ value: LuaValue, key: String) throws -> ZoneAction {
         let table = try table(value, key: key)
         let type = try string(required("type", in: table, path: key), key: "\(key).type")
+        let fields: [String: Set<String>] = [
+            "insert_as_half": ["direction"],
+            "insert_as_quarter": ["corner"],
+            "insert_at_subtree": ["path"]
+        ]
+        try onlyKeys(table, Set(["type"]).union(fields[type] ?? []), path: key)
         switch type {
         case "insert_as_half":
             return .insertAsHalf(try parseDirection(required("direction", in: table, path: key), key: "\(key).direction"))
@@ -260,7 +304,9 @@ private struct ConfigParser {
     private func parseGaps(_ value: LuaValue?, base: Gaps) throws -> Gaps {
         guard let value else { return base }
         let gapTable = try partialObjectTable(value, key: "gaps")
+        try onlyKeys(gapTable, ["inner", "outer"], path: "gaps")
         let outer = try gapTable["outer"].map { try partialObjectTable($0, key: "gaps.outer") } ?? [:]
+        try onlyKeys(outer, ["top", "left", "bottom", "right"], path: "gaps.outer")
         return Gaps(
             inner: try override(gapTable["inner"], inheriting: base.inner) {
                 try boundedNumber($0, key: "gaps.inner", min: 0, max: Gaps.maximumLength)
@@ -277,6 +323,7 @@ private struct ConfigParser {
     private func parseBorder(_ value: LuaValue?, base: BorderConfig) throws -> BorderConfig {
         guard let value else { return base }
         let table = try partialObjectTable(value, key: "border")
+        try onlyKeys(table, ["width", "color"], path: "border")
         let color = try override(table["color"], inheriting: base.colorHex) { try string($0, key: "border.color") }
         guard isHexRGB(color) else {
             throw ConfigError.invalidValue(key: "border.color", reason: "expected #RRGGBB")
@@ -292,6 +339,7 @@ private struct ConfigParser {
     private func parseHUD(_ value: LuaValue?, base: HUDConfig) throws -> HUDConfig {
         guard let value else { return base }
         let table = try partialObjectTable(value, key: "hud")
+        try onlyKeys(table, ["enabled", "duration_millis"], path: "hud")
         return HUDConfig(
             enabled: try override(table["enabled"], inheriting: base.enabled) { try bool($0, key: "hud.enabled") },
             durationMillis: try override(table["duration_millis"], inheriting: base.durationMillis) {
@@ -370,6 +418,13 @@ private struct ConfigParser {
                 )
             }
         }
+    }
+
+    /// Rejects keys the schema does not define, so a typo fails loudly instead
+    /// of silently leaving the setting at its default.
+    private func onlyKeys(_ table: [String: LuaValue], _ allowed: Set<String>, path: String?) throws {
+        guard let unknown = table.keys.filter({ !allowed.contains($0) }).sorted().first else { return }
+        throw ConfigError.invalidValue(key: path.map { "\($0).\(unknown)" } ?? unknown, reason: "unknown key")
     }
 
     private func required(_ name: String, in table: [String: LuaValue], path: String) throws -> LuaValue {

@@ -16,13 +16,24 @@ public enum ConfigReloadTimerDecision: Equatable, Sendable {
     case reload
 }
 
+/// The paths whose changes mean the config may have changed. FSEvents reports
+/// symlink-resolved paths, so a symlinked config also lists its resolved paths.
 public struct ConfigWatchTarget: Equatable, Sendable {
     public let configPath: String
     public let directoryPath: String
+    public let resolvedConfigPath: String
+    public let resolvedDirectoryPath: String
 
-    public init(configPath: String, directoryPath: String) {
+    public init(
+        configPath: String,
+        directoryPath: String,
+        resolvedConfigPath: String? = nil,
+        resolvedDirectoryPath: String? = nil
+    ) {
         self.configPath = configPath
         self.directoryPath = directoryPath
+        self.resolvedConfigPath = resolvedConfigPath ?? configPath
+        self.resolvedDirectoryPath = resolvedDirectoryPath ?? directoryPath
     }
 }
 
@@ -40,7 +51,8 @@ public func configChangeEventTouchesTarget(
     path: String,
     target: ConfigWatchTarget
 ) -> Bool {
-    path == target.configPath || path == target.directoryPath
+    [target.configPath, target.directoryPath, target.resolvedConfigPath, target.resolvedDirectoryPath]
+        .contains(path)
 }
 
 public func selectedConfigWatchRoot(

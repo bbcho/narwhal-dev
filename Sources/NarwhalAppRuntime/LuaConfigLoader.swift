@@ -170,7 +170,7 @@ private final class LuaConfigDecoder {
 
         let libraryStatus = narwhal_lua_open_config_libraries(state)
         guard libraryStatus == 0 else {
-            try throwLuaFailure(state, path: url.path, phase: "library initialization")
+            try throwLuaFailure(state, status: libraryStatus, path: url.path, phase: "library initialization")
         }
         narwhal_lua_set_instruction_limit(state, UInt64(limits.instructions))
 
@@ -178,7 +178,7 @@ private final class LuaConfigDecoder {
             narwhal_lua_loadfile(state, path)
         }
         guard loadStatus == 0 else {
-            if narwhal_lua_memory_limit_exceeded(state) != 0 {
+            if loadStatus == narwhal_lua_status_memory_error() {
                 throw StartupConfigError.luaResourceLimitExceeded(
                     path: url.path,
                     limit: .memoryBytes(limits.memoryBytes)
@@ -189,7 +189,7 @@ private final class LuaConfigDecoder {
 
         let runtimeStatus = narwhal_lua_pcall(state, 0, 1, 0)
         guard runtimeStatus == 0 else {
-            try throwLuaFailure(state, path: url.path, phase: "runtime")
+            try throwLuaFailure(state, status: runtimeStatus, path: url.path, phase: "runtime")
         }
 
         var activeTables = Set<UInt>()
@@ -214,8 +214,10 @@ private final class LuaConfigDecoder {
         return LuaConfigData(root: root)
     }
 
-    private func throwLuaFailure(_ state: OpaquePointer, path: String, phase: String) throws -> Never {
-        if narwhal_lua_memory_limit_exceeded(state) != 0 {
+    /// Classifies by the final status, not by whether a limit was ever hit:
+    /// config may catch a memory error with pcall and fail later for another reason.
+    private func throwLuaFailure(_ state: OpaquePointer, status: CInt, path: String, phase: String) throws -> Never {
+        if status == narwhal_lua_status_memory_error() {
             throw StartupConfigError.luaResourceLimitExceeded(
                 path: path,
                 limit: .memoryBytes(limits.memoryBytes)

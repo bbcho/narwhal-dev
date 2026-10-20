@@ -426,6 +426,80 @@ struct ConfigTests {
         ))
     }
 
+    @Test("An unknown top-level config key is rejected by name")
+    func unknownTopLevelKeyIsRejected() {
+        var root = defaultLuaRoot()
+        root["gap"] = .table(["inner": .number(8)])
+
+        #expect(parseConfig(LuaConfigData(root: root)) == .failure(
+            .invalidValue(key: "gap", reason: "unknown key")
+        ))
+    }
+
+    @Test("An unknown nested config key is rejected with its full path")
+    func unknownNestedKeyIsRejected() {
+        let root: [String: LuaValue] = ["border": .table(["colour": .string("#FF0000")])]
+
+        #expect(parseConfig(LuaConfigData(root: root)) == .failure(
+            .invalidValue(key: "border.colour", reason: "unknown key")
+        ))
+    }
+
+    @Test("A field that the chosen action type does not take is rejected")
+    func fieldForAnotherActionTypeIsRejected() {
+        let root: [String: LuaValue] = ["keymap": .array([
+            binding(key: "c", modifiers: ["control"], action: [
+                "type": .string("center"),
+                "direction": .string("left")
+            ])
+        ])]
+
+        #expect(parseConfig(LuaConfigData(root: root)) == .failure(
+            .invalidValue(key: "keymap[1].action.direction", reason: "unknown key")
+        ))
+    }
+
+    @Test("An unknown rule predicate field is rejected with its full path")
+    func unknownRulePredicateFieldIsRejected() {
+        let root: [String: LuaValue] = ["rules": .array([
+            .table([
+                "predicate": .table([
+                    "type": .string("bundle_id"),
+                    "value": .string("com.apple.Terminal"),
+                    "case_insensitive": .bool(true)
+                ]),
+                "action": .table(["type": .string("force_float")])
+            ])
+        ])]
+
+        #expect(parseConfig(LuaConfigData(root: root)) == .failure(
+            .invalidValue(key: "rules[1].predicate.case_insensitive", reason: "unknown key")
+        ))
+    }
+
+    @Test("A hotkey key that Narwhal cannot register is rejected at validation")
+    func unregistrableHotkeyKeyIsRejected() {
+        let root: [String: LuaValue] = ["keymap": .array([
+            binding(key: "page up", modifiers: ["control"], action: ["type": .string("balance")])
+        ])]
+
+        #expect(parseConfig(LuaConfigData(root: root)) == .failure(
+            .invalidValue(key: "keymap[1].key", reason: "unsupported key 'page up'")
+        ))
+    }
+
+    @Test("Arrow, digit, punctuation, and function keys are valid hotkey keys")
+    func extendedHotkeyKeysAreAccepted() throws {
+        let keys = ["up", "down", "t", "1", "[", "f5", "escape", "pageup"]
+        let root: [String: LuaValue] = ["keymap": .array(keys.map {
+            binding(key: $0, modifiers: ["control"], action: ["type": .string("balance")])
+        })]
+
+        let config = try parseConfig(LuaConfigData(root: root)).get()
+
+        #expect(config.keymap.map(\.key.key) == keys)
+    }
+
     @Test("Lua config parser rejects integer values outside Swift Int")
     func luaConfigParserRejectsOutOfRangeIntegers() {
         var root = defaultLuaRoot()

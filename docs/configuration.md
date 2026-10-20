@@ -17,6 +17,21 @@ DefaultConfig/init.lua
 If the user file is absent, Narwhal uses built-in defaults. If a hot reload fails,
 the previous valid config remains active.
 
+Every table is checked against the schema below: a key Narwhal does not define,
+such as a misspelled `gap` or `colour`, rejects the config with that key's full
+path (for example `border.colour`) instead of being silently ignored.
+
+### Lua environment
+
+Config runs in a restricted Lua: the `base`, `table`, `string`, `math`, and
+`utf8` libraries, without `os`, `io`, `require`, `dofile`, or `loadfile`.
+Execution is limited to one million instructions and 16 MiB, and catching the
+limit error with `pcall` does not extend it. Lua pattern matching
+(`string.match`, `string.gmatch`, `string.gsub`, and pattern `string.find`) is
+not available because it runs outside the instruction limit; use
+`string.find(s, text, init, true)` for a plain search. `load` accepts text only,
+and a precompiled (bytecode) config file is rejected.
+
 ## Partial Overrides
 
 All top-level fields are optional: missing means inherit, while present collections
@@ -39,8 +54,11 @@ Use an explicit `{}` to clear one of these collections.
 
 ## Full Configuration Reference
 
-Complete configurations remain supported; the full reference below can be used as-is.
-It includes every supported field:
+Complete configurations remain supported. The skeleton below shows every
+top-level field with its default scalar values. Its `keymap = {}` and
+`zones = {}` clear those collections, so copying it as-is removes every hotkey
+and drag zone; for the complete defaults, copy `DefaultConfig/init.lua`, which
+is what the menu's Open Config writes when no user config exists yet.
 
 ```lua
 return {
@@ -69,13 +87,20 @@ return {
 }
 ```
 
-Keys are lowercased during parsing. The current Carbon hotkey backend supports:
+Keys are lowercased during parsing. Supported keys:
 
-- `a`, `c`, `e`, `f`, `h`, `i`, `j`, `k`, `l`, `m`, `n`, `p`, `r`, `s`, `u`, `z`
-- `/`
-- `return`
-- `space`
-- `delete`
+- letters `a` to `z` and digits `0` to `9`
+- punctuation `-`, `=`, `[`, `]`, `\`, `;`, `'`, `,`, `.`, `/`, and `` ` ``
+- `return`, `tab`, `space`, `delete`, `forwarddelete`, `escape`
+- `left`, `right`, `up`, `down`, `home`, `end`, `pageup`, `pagedown`
+- `f1` to `f12`
+
+Any other key name rejects the config. Letters, digits, and punctuation follow
+the active keyboard layout when hotkeys register (at startup and on config
+reload): on AZERTY, `key = "a"` is the key labelled A. Switching keyboard
+layouts takes effect at the next config reload. If another app already owns a
+shortcut, that one binding is skipped with an error in the log and the rest
+still register.
 
 Supported modifier names:
 
