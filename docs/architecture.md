@@ -130,8 +130,11 @@ Each concern has exactly one owner. Extend the owner; do not add a second.
 | IPC framing, auth, socket lifecycle | `NarwhalIPC/IPCTransport.swift` |
 | Log redaction | `NarwhalAppSupport/LogLineModel.swift` |
 
-`AppDelegate` (`App.swift`) wires these together. It should route, not decide:
-when a branch in `App.swift` makes a policy decision, that decision belongs in a
+`AppDelegate` wires these together. `App.swift` holds its stored state and
+launch and termination; one `AppDelegate+<Concern>.swift` extension per concern
+holds the rest (`Hotkeys`, `Focus`, `Drag`, `LayoutApply`, `Environment`,
+`Config`, `Startup`, `Menu`, `IPC`, `Overlay`). It should route, not decide:
+when an `AppDelegate` branch makes a policy decision, that decision belongs in a
 Core function or an AppSupport model with its own tests.
 
 ## Domain Data
@@ -239,7 +242,7 @@ Do not add a second frame writer, a second mutation queue, or state outside
 ## Testing Shape
 
 - Core and AppSupport: unit tests, about 92% line coverage. These run in CI.
-- AppRuntime: about 23% line coverage from unit tests; `App.swift`, `Overlay.swift`,
+- AppRuntime: about 23% line coverage from unit tests; the `AppDelegate` files, `Overlay.swift`,
   `HotkeyManager`, `AXObserverService`, and `ConfigFileWatcherService` have none.
 - Live verifiers (`Tests/NarwhalLiveVerifierTests`) drive real AppKit and real
   app windows. They compile only with `-DNARWHAL_ENABLE_VERIFIERS` and run only
