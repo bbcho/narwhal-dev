@@ -1,5 +1,8 @@
 # Partial Configuration Overrides Implementation Plan
 
+> **Status: implemented** (f585818, 82d114a, the docs in 277bfa3, and the parsing correction in c631679). Kept as a historical record;
+> [docs/architecture.md](../../architecture.md) describes the current code.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Allow Narwhal Lua configuration files to omit unchanged top-level and nested object fields while preserving all existing replacement and validation behavior.

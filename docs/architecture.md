@@ -130,8 +130,9 @@ Each concern has exactly one owner. Extend the owner; do not add a second.
 | IPC framing, auth, socket lifecycle | `NarwhalIPC/IPCTransport.swift` |
 | Log redaction | `NarwhalAppSupport/LogLineModel.swift` |
 
-`AppDelegate` wires these together. `App.swift` holds its stored state and
-launch and termination; one `AppDelegate+<Concern>.swift` extension per concern
+`AppDelegate` wires these together. `App.swift` holds its stored state,
+launch and termination, status and operator feedback, and the Accessibility
+gate; one `AppDelegate+<Concern>.swift` extension per concern
 holds the rest (`Hotkeys`, `Focus`, `Drag`, `LayoutApply`, `Environment`,
 `Config`, `Startup`, `Menu`, `IPC`, `Overlay`). It should route, not decide:
 when an `AppDelegate` branch makes a policy decision, that decision belongs in a
@@ -248,3 +249,20 @@ Do not add a second frame writer, a second mutation queue, or state outside
   app windows. They compile only with `-DNARWHAL_ENABLE_VERIFIERS` and run only
   through `scripts/live_verify_all.sh` on an Accessibility-trusted machine; CI
   does not run them.
+- `MixedCommandSequenceTests` drives seeded random sequences of layout
+  commands, external focus, moves and resizes, and window arrivals and
+  departures (as `.environmentChanged` snapshots, whose `apply` arm calls the
+  same `reconcileEnvironment` production uses), and checks tracking and layout
+  invariants after every step. It does not generate zone drops or config
+  reloads.
+- Known gap: nine `Command` cases are never applied by production code:
+  `focus`, `focusDirection`, `focusCycle`, `resetLayout`, `startupConverge`,
+  `windowOpened`, `windowClosed`, `windowConstraintObserved`, and
+  `environmentChanged`. Production focus goes through `focusDirectionPlan`,
+  `focusCycleCandidatePlans` and `focusPlan`
+  (`NarwhalAppSupport/CommandPlanningModel.swift`),
+  reset through `resetSpaceTilingState`, and window arrivals and departures
+  through `environmentRefreshTransition`, which calls `reconcileEnvironment`
+  directly. Many `MVPLayoutTests` and `CommandWorkflowMatrixTests` cases
+  exercise these unused cases, so a passing test there says nothing about the
+  path the app takes, and logic added only to those `apply` arms never runs.

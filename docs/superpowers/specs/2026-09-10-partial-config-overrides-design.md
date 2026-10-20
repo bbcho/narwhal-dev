@@ -1,5 +1,8 @@
 # Partial Configuration Overrides Design
 
+> **Status: implemented** (f585818, 82d114a, the docs in 277bfa3, and the parsing correction in c631679). Kept as a historical record;
+> [docs/architecture.md](../../architecture.md) describes the current code.
+
 ## Context
 
 Narwhal loads an optional Lua configuration from

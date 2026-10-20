@@ -1,5 +1,14 @@
 # Narwhal Layout Reliability Implementation Plan
 
+> **Status: partially implemented.** Tasks 1–10 landed (af65b2b through
+> b50f3af). Tasks 11–15 were never done: real hotkey, drag and Workbench input
+> verification, display reflow through the production observer, installation
+> and login-item checks, removing duplicated orchestration, and the full
+> verification gate. In particular, several real-app verifiers in
+> `RealAppWindowVerification.swift` still drive a verifier-only applier rather
+> than `LayoutTransactionCoordinator`. [docs/architecture.md](../../architecture.md)
+> describes the current code.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make every Narwhal layout mutation externally atomic, serialize reconciliation with commands, localize manual resize by visible geometry, and prove user-facing behavior through the production runtime.

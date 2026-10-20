@@ -33,7 +33,8 @@ The program is built as:
   user-initiated update request.
 - [Release process](docs/release.md): signing, notarization, artifacts, and CI
   credentials.
-- [Design notes](design.md): detailed product and layout semantics.
+- [Design notes](design.md): the historical pre-implementation design; see
+  [Architecture](docs/architecture.md) for the current code.
 - [Sprint gates](docs/sprint-gates.md): acceptance gates and smoke-test history.
 
 ## Quick Start

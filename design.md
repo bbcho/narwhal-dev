@@ -1,5 +1,11 @@
 # Narwhal — Functional Architecture Design
 
+> **Status: historical.** This is the pre-implementation design from before the
+> code existed. The code has since diverged; several names it uses no longer
+> exist in Sources (for example `LayoutApplier`, `matchRule`, `windowOpenDecision`,
+> `StartupError`). Where this file disagrees with the code or with
+> [docs/architecture.md](docs/architecture.md), those win.
+
 A macOS BSP tiling window manager. Manual push-to-tile, n-ary recursive split, native-Spaces aware, Lua-configurable, mouse-drag + hotkey + IPC controllable.
 
 This is the pre-implementation gate for the fp-architect skill, adapted to Swift. No code may be written until this doc is reviewed clean. Phases reference this doc; the implementation phase does not relitigate decisions made here.

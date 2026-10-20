@@ -1,5 +1,8 @@
 # Narwhal Layout Sequences 0-4
 
+> **Status: superseded** by [layout-sequences-0-6.md](layout-sequences-0-6.md),
+> itself a May 2026 reference that no test checks.
+
 Generated from `NarwhalCore` with display `(0,0,1200,800)` and no gaps.
 
 Legend: `.` is a void slot. Repeated letters mean one window spans multiple sketch cells.

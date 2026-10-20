@@ -1,5 +1,14 @@
 # Narwhal Layout Reliability Design
 
+> **Status: partially implemented.** Tasks 1–10 landed (af65b2b through
+> b50f3af). Tasks 11–15 were never done: real hotkey, drag and Workbench input
+> verification, display reflow through the production observer, installation
+> and login-item checks, removing duplicated orchestration, and the full
+> verification gate. In particular, several real-app verifiers in
+> `RealAppWindowVerification.swift` still drive a verifier-only applier rather
+> than `LayoutTransactionCoordinator`. [docs/architecture.md](../../architecture.md)
+> describes the current code.
+
 ## Purpose
 
 Narwhal must make window-management commands behave as one coherent operation even though macOS Accessibility frame writes are sequential and external applications retain final control over their windows. A command must never leave the model, history, borders, and visible windows describing different layouts.

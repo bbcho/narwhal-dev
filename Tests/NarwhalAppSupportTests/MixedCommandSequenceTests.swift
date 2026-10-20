@@ -3,11 +3,11 @@ import Testing
 import NarwhalCore
 @testable import NarwhalAppSupport
 
-/// Drives seeded random sequences through most of the commands production
-/// sends to `apply` (layout commands, external focus, moves and resizes, and
-/// window arrivals and departures as environment snapshots), recording solved
-/// frames the way `WorldActor.commit` does, and checks the world after every
-/// step. Zone drops and config reloads are not generated.
+/// Drives seeded random sequences of layout commands, external focus, moves
+/// and resizes, and window arrivals and departures (as `.environmentChanged`
+/// snapshots, whose `apply` arm calls the `reconcileEnvironment` production
+/// uses), recording solved frames the way `WorldActor.commit` does, and checks
+/// the world after every step. Zone drops and config reloads are not generated.
 @Suite("Mixed command sequences")
 struct MixedCommandSequenceTests {
     private let space = SpaceID(raw: 1)

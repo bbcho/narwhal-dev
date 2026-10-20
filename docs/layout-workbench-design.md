@@ -135,7 +135,7 @@ Boundary flow:
 
 `AX + displays + WorldActor runtime -> pure presentation snapshot -> AppKit views`
 
-`AppKit intent -> pure plan/preview or typed rejection -> explicit Apply -> existing coordinated LayoutApplier -> successful WorldActor commit/history -> atomic persistence`
+`AppKit intent -> pure plan/preview or typed rejection -> explicit Apply -> LayoutTransactionCoordinator -> successful WorldActor commit/history -> atomic persistence`
 
 Expected domain failures use `Result`/typed enums. Decoder, filesystem, AX, and AppKit failures throw only at the shell and are immediately translated into typed presentation/store failures. Runtime mutation stays inside `WorldActor` and main-actor AppKit controllers; core values remain immutable and `Sendable`. No extra lock or event bus is introduced. Dependencies are initializer-injected closures/repositories rather than global state.
 
