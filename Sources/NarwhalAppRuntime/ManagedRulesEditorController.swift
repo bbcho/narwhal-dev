@@ -311,6 +311,9 @@ final class ManagedRulesEditorController: NSObject {
             } catch let error as ManagedRuleValidationError {
                 saveButton.isEnabled = true
                 showError(validationMessage(error))
+            } catch let error as ManagedRulesRollbackFailure {
+                saveButton.isEnabled = true
+                showError(error.description)
             } catch {
                 saveButton.isEnabled = true
                 showError("Rules were not saved or activated: \(error)")

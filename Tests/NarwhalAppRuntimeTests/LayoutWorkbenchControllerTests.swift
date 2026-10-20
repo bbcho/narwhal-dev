@@ -50,6 +50,78 @@ struct LayoutWorkbenchControllerTests {
         controller.close()
     }
 
+    @Test("A failed rule save re-activates the previous rules")
+    func failedRuleSaveReactivatesPreviousRules() async throws {
+        let blocked = try unwritableStoreDirectory()
+        defer { try? FileManager.default.removeItem(at: blocked) }
+        let activations = ActivationLog()
+        let controller = workbench(store: ManagedRulesStore(url: blocked.appendingPathComponent("rules.json"))) { rules in
+            activations.rules.append(rules)
+        }
+        let rule = sampleRule()
+
+        await #expect(throws: (any Error).self) { try await controller.saveManagedRules([rule]) }
+
+        #expect(activations.rules == [[rule], []])
+    }
+
+    @Test("When the previous rules cannot be re-activated either, the failure says both")
+    func failedRollbackIsReported() async throws {
+        let blocked = try unwritableStoreDirectory()
+        defer { try? FileManager.default.removeItem(at: blocked) }
+        let activations = ActivationLog()
+        let controller = workbench(store: ManagedRulesStore(url: blocked.appendingPathComponent("rules.json"))) { rules in
+            activations.rules.append(rules)
+            if activations.rules.count == 2 { throw ManagedRuleValidationError.emptyName(index: 0) }
+        }
+
+        do {
+            try await controller.saveManagedRules([sampleRule()])
+            Issue.record("Expected the save to fail")
+        } catch let error as ManagedRulesRollbackFailure {
+            #expect(error.description.hasSuffix("so the new rules are active but not saved"))
+        } catch {
+            Issue.record("Expected a rollback failure, got \(error)")
+        }
+    }
+
+    private final class ActivationLog {
+        var rules: [[ManagedWindowRule]] = []
+    }
+
+    /// A regular file where the store expects its directory, so saving fails.
+    private func unwritableStoreDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("narwhal-blocked-\(UUID().uuidString)")
+        try Data().write(to: url)
+        return url
+    }
+
+    private func workbench(
+        store: ManagedRulesStore,
+        activate: @escaping LayoutWorkbenchController.ActivateManagedRules
+    ) -> LayoutWorkbenchController {
+        LayoutWorkbenchController(
+            worldActor: WorldActor(),
+            snapshotQuality: { .complete },
+            applyPlan: { _, _ in true },
+            activateManagedRules: activate,
+            openAccessibilitySettings: {},
+            namedLayoutsStore: NamedLayoutsStore(url: FileManager.default.temporaryDirectory
+                .appendingPathComponent("narwhal-layouts-\(UUID().uuidString).json")),
+            managedRulesStore: store
+        )
+    }
+
+    private func sampleRule() -> ManagedWindowRule {
+        ManagedWindowRule(
+            id: ManagedRuleID(rawValue: "terminal"),
+            name: "Terminal",
+            matcher: ManagedRuleMatcher(bundleID: "com.apple.Terminal"),
+            policy: ManagedRulePolicy(placement: .forceFloat)
+        )
+    }
+
     @Test("Workbench enforces the visual contract at minimum size")
     func windowGeometry() throws {
         let directory = FileManager.default.temporaryDirectory

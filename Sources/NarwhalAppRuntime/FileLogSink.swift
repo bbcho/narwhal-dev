@@ -19,6 +19,7 @@ final class FileLogSink: @unchecked Sendable {
     private var pendingByteCount = 0
     private var droppedLines: UInt64 = 0
     private var reportedFailure = false
+    private var rotationStuck = false
 
     var isAvailable: Bool {
         withStateLock { available }
@@ -26,6 +27,13 @@ final class FileLogSink: @unchecked Sendable {
 
     var droppedLineCount: UInt64 {
         withStateLock { droppedLines }
+    }
+
+    /// True once a rotation could not move the full log aside; retried at next launch.
+    var isRotationStuck: Bool {
+        var stuck = false
+        onWriterQueue { stuck = rotationStuck }
+        return stuck
     }
 
     init(
@@ -97,15 +105,31 @@ final class FileLogSink: @unchecked Sendable {
                 try handle.synchronize()
             }
             // The app runs for weeks; rotating only at launch would let the log grow unbounded.
-            if try handle.offset() >= maximumFileBytes {
-                try handle.close()
-                self.handle = nil
-                rotateIfNeeded()
-                self.handle = Self.openAppendOnlyLog(path: path)
-                withStateLock { available = self.handle != nil }
+            if !rotationStuck, try handle.offset() >= maximumFileBytes {
+                try rotateWhileRunning(handle)
             }
         } catch {
             reportFailureOnce(error)
+        }
+    }
+
+    private func rotateWhileRunning(_ current: FileHandle) throws {
+        guard retainedGenerations > 0 else {
+            // No archives are kept, so start the file over.
+            try current.truncate(atOffset: 0)
+            return
+        }
+        try current.close()
+        handle = nil
+        rotateIfNeeded()
+        handle = Self.openAppendOnlyLog(path: path)
+        withStateLock { available = handle != nil }
+        // If the file could not be moved aside (say, an archive slot holds a
+        // directory), stop retrying on every line until the next launch. An
+        // O_APPEND descriptor's offset starts at 0, so measure the real size.
+        if let reopened = handle, try reopened.seekToEnd() >= maximumFileBytes {
+            rotationStuck = true
+            writeStderr("Log rotation is not possible; the log will grow until restart\n")
         }
     }
 

@@ -867,29 +867,32 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
             rules: managedRules,
             matchCounts: managedRuleMatchCounts()
         ) { [weak self] rules in
-            guard let self else { return }
-            // Activation validates against the live config, so it runs first; if
-            // the save then fails, the previous rules go back so the live rules
-            // always match what is on disk.
-            let previous = self.managedRules
-            try await self.activateManagedRules(rules)
-            do {
-                try self.managedRulesStore.save(rules)
-            } catch {
-                do {
-                    try await self.activateManagedRules(previous)
-                } catch let rollbackError {
-                    throw ManagedRulesRollbackFailure(saveError: error, rollbackError: rollbackError)
-                }
-                throw error
-            }
-            self.managedRules = rules
-            self.artifactWarnings.removeValue(forKey: .managedRules)
-            self.artifactWarnings.removeValue(forKey: .operation)
-            await self.refreshPresentation()
+            try await self?.saveManagedRules(rules)
         }
         ruleEditor = editor
         editor.beginSheet(for: window)
+    }
+
+    /// Activation validates against the live config, so it runs first; if the
+    /// save then fails, the previous rules go back so the live rules always
+    /// match what is on disk.
+    func saveManagedRules(_ rules: [ManagedWindowRule]) async throws {
+        let previous = managedRules
+        try await activateManagedRules(rules)
+        do {
+            try managedRulesStore.save(rules)
+        } catch {
+            do {
+                try await activateManagedRules(previous)
+            } catch let rollbackError {
+                throw ManagedRulesRollbackFailure(saveError: error, rollbackError: rollbackError)
+            }
+            throw error
+        }
+        managedRules = rules
+        artifactWarnings.removeValue(forKey: .managedRules)
+        artifactWarnings.removeValue(forKey: .operation)
+        await refreshPresentation()
     }
 
     private func managedRuleMatchCounts() -> [ManagedRuleID: Int] {
@@ -1064,7 +1067,7 @@ private func ruleSourceText(_ source: WindowRuleSource) -> String {
 /// The new rules could not be saved and the previous ones could not be put
 /// back (for example, one names a zone the config no longer has), so the live
 /// rules now differ from the file until the next successful save.
-private struct ManagedRulesRollbackFailure: Error, CustomStringConvertible {
+struct ManagedRulesRollbackFailure: Error, CustomStringConvertible {
     let saveError: Error
     let rollbackError: Error
 

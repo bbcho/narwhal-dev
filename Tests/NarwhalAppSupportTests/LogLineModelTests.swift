@@ -48,6 +48,23 @@ struct LogLineModelTests {
         #expect(message == "Config watcher ready for ~<path>")
     }
 
+    @Test("The home directory is replaced only where a path continues from it")
+    func homeDirectoryReplacementStopsAtPathBoundary() {
+        let message = redactedLogMessage(
+            "Other user /Users/Janet/notes and own /Users/Jane/notes",
+            homeDirectory: "/Users/Jane"
+        )
+
+        #expect(message == "Other user <path> and own ~<path>")
+    }
+
+    @Test("A home directory at the end of a sentence is still replaced")
+    func homeDirectoryBeforePunctuationIsReplaced() {
+        let message = redactedLogMessage("Config lives in /Users/Jane Doe.", homeDirectory: "/Users/Jane Doe")
+
+        #expect(message == "Config lives in ~.")
+    }
+
     @Test("Log privacy preserves hotkey slash notation and operational frames")
     func preservesOperationalData() {
         let message = redactedLogMessage(

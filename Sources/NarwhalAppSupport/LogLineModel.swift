@@ -41,7 +41,14 @@ private let logRedactions: [LogRedaction] = [
 /// leaking "Doe/...".
 public func redactedLogMessage(_ message: String, homeDirectory: String? = nil) -> String {
     let withoutHome = homeDirectory.flatMap { $0.isEmpty ? nil : $0 }
-        .map { message.replacingOccurrences(of: $0, with: "~") } ?? message
+        .map { home in
+            // Only at a name boundary: home "/Users/Jane" must not rewrite "/Users/Janet".
+            message.replacingOccurrences(
+                of: NSRegularExpression.escapedPattern(for: home) + #"(?![A-Za-z0-9_-])"#,
+                with: "~",
+                options: .regularExpression
+            )
+        } ?? message
     return logRedactions.reduce(withoutHome) { redacted, redaction in
         let range = NSRange(redacted.startIndex..., in: redacted)
         return redaction.expression.stringByReplacingMatches(

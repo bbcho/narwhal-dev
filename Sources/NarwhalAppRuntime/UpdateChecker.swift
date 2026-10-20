@@ -84,7 +84,8 @@ func decodeUpdateRelease(_ data: Data) throws -> UpdateRelease {
     // The page is opened in the browser, so it must be this repository's release page.
     guard release.htmlURL.scheme == "https",
           release.htmlURL.host == "github.com",
-          release.htmlURL.path.hasPrefix("/\(UpdateChecker.repository)/releases/")
+          release.htmlURL.path.hasPrefix("/\(UpdateChecker.repository)/releases/"),
+          !release.htmlURL.pathComponents.contains("..")
     else {
         throw UpdateCheckError.invalidReleasePage
     }

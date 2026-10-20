@@ -125,6 +125,38 @@ struct StartupReporterTests {
         #expect(attributes[.posixPermissions] as? Int == 0o600)
     }
 
+    @Test("With no archives kept, a log past its limit starts over")
+    func logSinkWithoutArchivesTruncates() throws {
+        let paths = temporaryLogPath()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let sink = FileLogSink(path: paths.file.path, maximumFileBytes: 10, retainedGenerations: 0)
+
+        sink.write(Data("0123456789\n".utf8))
+        sink.write(Data("next\n".utf8))
+        sink.flush()
+
+        #expect(try String(contentsOf: paths.file, encoding: .utf8) == "next\n")
+        #expect(!FileManager.default.fileExists(atPath: paths.file.path + ".1"))
+    }
+
+    @Test("When the full log cannot be moved aside, rotation stops retrying and writing continues")
+    func logSinkStopsRetryingImpossibleRotation() throws {
+        let paths = temporaryLogPath()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        try FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: paths.file.path + ".1"),
+            withIntermediateDirectories: true
+        )
+        let sink = FileLogSink(path: paths.file.path, maximumFileBytes: 10, retainedGenerations: 1)
+
+        sink.write(Data("0123456789\n".utf8))
+        sink.write(Data("next\n".utf8))
+        sink.flush()
+
+        #expect(sink.isRotationStuck)
+        #expect(try String(contentsOf: paths.file, encoding: .utf8) == "0123456789\nnext\n")
+    }
+
     private func temporaryLogPath() -> (root: URL, file: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("narwhal-log-tests-\(UUID().uuidString)", isDirectory: true)
