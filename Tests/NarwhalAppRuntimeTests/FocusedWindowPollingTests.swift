@@ -8,6 +8,7 @@ import NarwhalCore
 enum FocusedUnavailablePollingVerification {
     static func verifyUnavailableFocusIsNotLoggedEveryPoll() -> (passed: Bool, message: String) {
         let logPath = "/tmp/narwhal-focused-unavailable-\(UUID().uuidString).log"
+        defer { try? FileManager.default.removeItem(atPath: logPath) }
         let reporter = StartupReporter(logPath: logPath)
         guard let focusedApplicationFailure = AXError(rawValue: -25212) else {
             return (false, "focused-unavailable polling could not construct AXError -25212")
@@ -45,7 +46,6 @@ enum FocusedUnavailablePollingVerification {
         guard let log = try? String(contentsOfFile: logPath, encoding: .utf8) else {
             return (false, "focused-unavailable polling could not read log at \(logPath)")
         }
-        try? FileManager.default.removeItem(atPath: logPath)
 
         let unavailableCount = log.components(separatedBy: "Focused-window snapshot unavailable;").count - 1
         guard unavailableCount == 1 else {
@@ -65,6 +65,13 @@ enum FocusedUnavailablePollingVerification {
     }
 
     static func verifyStableFocusIsReconciledEveryPoll() -> (passed: Bool, message: String) {
+        let stableLogPath = "/tmp/narwhal-stable-focus-polling-\(UUID().uuidString).log"
+        let reporter = StartupReporter(logPath: stableLogPath)
+        // The sink creates its file asynchronously; flush so deletion runs last.
+        defer {
+            reporter.flush()
+            try? FileManager.default.removeItem(atPath: stableLogPath)
+        }
         let snapshot = FocusedWindowSnapshot(
             id: WindowID(raw: 700),
             bundleID: BundleID(raw: "com.ben.narwhal.verifier"),
@@ -83,7 +90,7 @@ enum FocusedUnavailablePollingVerification {
             focusedWindowSnapshot: { .success(snapshot) },
             windowSnapshot: { AXWindowSnapshot(windows: [], quality: .complete) },
             echoSuppressor: AXEchoSuppressor(),
-            reporter: StartupReporter(logPath: "/tmp/narwhal-stable-focus-polling-\(UUID().uuidString).log"),
+            reporter: reporter,
             activeSpaceByDisplay: { _ in [:] },
             spaceChanged: {},
             reconcileFocusedWindow: { reconciled.append($0) },

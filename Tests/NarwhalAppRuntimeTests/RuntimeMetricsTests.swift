@@ -56,7 +56,13 @@ private final class UptimeSequence: @unchecked Sendable {
         self.readings = readings
     }
 
+    /// Records an issue instead of trapping when the clock is read more
+    /// often than the test expected, so one test fails, not the process.
     func next() -> TimeInterval {
-        readings.removeFirst()
+        guard !readings.isEmpty else {
+            Issue.record("The uptime clock was read more times than expected")
+            return 0
+        }
+        return readings.removeFirst()
     }
 }
