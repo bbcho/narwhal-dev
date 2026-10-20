@@ -157,6 +157,18 @@ actor WorldActor {
         runtimeFocusedWindowFallback(in: world, runtime: runtimeState)
     }
 
+    func windows(_ windowIDs: Set<WindowID>) -> [WindowMetadata] {
+        windowIDs.compactMap { world.windows[$0] }
+    }
+
+    func minimizedWindows() -> [WindowMetadata] {
+        world.windows.values.filter(\.isMinimized)
+    }
+
+    func setMinimized(_ windowIDs: Set<WindowID>, _ minimized: Bool) {
+        world = worldBySettingMinimized(windowIDs, to: minimized, in: world)
+    }
+
     func removeWindowFromActiveSpace(_ windowID: WindowID) {
         world = removeWindowsFromActiveSpace([windowID], in: world)
         pruneRuntimeState()

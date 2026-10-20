@@ -204,6 +204,21 @@ control-option-command-return
 
 to normalize all split weights in the active Space.
 
+### Resize And Move With The Mouse
+
+Dragging the edge or corner of a tiled window moves the whole seam it shares
+with its neighbors, so every window along that seam resizes together. A resize
+the tiling cannot follow, such as dragging a screen-edge side or shrinking a
+neighbor below its minimum size, snaps the window back to its tile. Dragging a
+tiled window by its title bar floats it; dropping it on another display floats
+it there.
+
+### Minimize, Hide, And Quit
+
+Minimizing a tiled window, or hiding its app with command-H, keeps its tile as
+a gap; the window returns to that tile when it comes back. Closing a window or
+quitting its app removes its tile.
+
 ### Undo A Layout Command
 
 Use:

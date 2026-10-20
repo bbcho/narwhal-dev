@@ -262,6 +262,39 @@ struct AXClient {
         return AXWindowSnapshot(windows: metadata, quality: quality)
     }
 
+    /// Every window the WindowServer still has, on any Space, minimized, or
+    /// hidden; nil when the window list cannot be read.
+    func existingWindowIDs() -> Set<WindowID>? {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionAll, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return nil
+        }
+        return Set(windows.compactMap { window in
+            (window[kCGWindowNumber as String] as? CGWindowID).map { WindowID(raw: $0) }
+        })
+    }
+
+    /// Which of `windows` are minimized or belong to a hidden app. One AX
+    /// query per app; a window AX cannot identify is not reported.
+    func minimizedOrHiddenWindowIDs(among windows: [WindowMetadata]) -> Set<WindowID> {
+        Dictionary(grouping: windows, by: \.pid).reduce(into: Set<WindowID>()) { result, entry in
+            let (processID, appWindows) = entry
+            if NSRunningApplication(processIdentifier: processID)?.isHidden == true {
+                result.formUnion(appWindows.map(\.id))
+                return
+            }
+            let wanted = Set(appWindows.map(\.id))
+            for element in arrayAttribute(Self.applicationElement(processID: processID), kAXWindowsAttribute) {
+                guard let windowID = exactWindowID(for: element), wanted.contains(windowID) else { continue }
+                if boolAttribute(element, kAXMinimizedAttribute, defaultValue: false) {
+                    result.insert(windowID)
+                }
+            }
+        }
+    }
+
     func visibleWindowIDs() -> Result<Set<WindowID>, AXClientError> {
         guard
             let windows = CGWindowListCopyWindowInfo(
@@ -396,6 +429,13 @@ struct AXClient {
         }
     }
 
+    private func arrayAttribute(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
+        var value: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard error == .success, let elements = value as? [AXUIElement] else { return [] }
+        return elements.map(Self.bounded)
+    }
+
 #if NARWHAL_ENABLE_VERIFIERS
     func debugFocusedWindowRelationships() -> String {
         let system = Self.systemWideElement()
@@ -413,12 +453,6 @@ struct AXClient {
         return parts.joined(separator: " ")
     }
 
-    private func arrayAttribute(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
-        var value: CFTypeRef?
-        let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
-        guard error == .success, let elements = value as? [AXUIElement] else { return [] }
-        return elements.map(Self.bounded)
-    }
 
     private func debugElements(_ elements: [AXUIElement]) -> String {
         "[" + elements.map(debugElement).joined(separator: ",") + "]"

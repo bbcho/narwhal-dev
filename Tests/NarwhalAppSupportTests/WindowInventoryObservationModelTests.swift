@@ -113,6 +113,31 @@ struct WindowInventoryObservationModelTests {
         #expect(transition.events == [])
         #expect(transition.frameEvents == [])
         #expect(transition.effect == .likelySpaceReplacement)
+        #expect(transition.vanishedWindowIDs == [WindowID(raw: 50), WindowID(raw: 51), WindowID(raw: 52)])
+    }
+
+    @Test("A suppressed bulk disappearance reports which windows vanished")
+    func bulkDisappearanceReportsVanishedWindows() {
+        let state = windowInventoryObservationBaseline(
+            windows: [
+                metadata(WindowID(raw: 70)),
+                metadata(WindowID(raw: 71)),
+                metadata(WindowID(raw: 72)),
+                metadata(WindowID(raw: 73))
+            ],
+            activeSpaceByDisplay: [DisplayID(raw: 1): SpaceID(raw: 5)]
+        )
+
+        let transition = observeWindowInventory(
+            windows: [metadata(WindowID(raw: 73))],
+            activeSpaceByDisplay: [DisplayID(raw: 1): SpaceID(raw: 5)],
+            tolerance: 1,
+            in: state
+        )
+
+        #expect(transition.effect == .likelySpaceReplacement)
+        #expect(transition.events == [])
+        #expect(transition.vanishedWindowIDs == [WindowID(raw: 70), WindowID(raw: 71), WindowID(raw: 72)])
     }
 
     @Test("Normal observation emits inventory events and updates baseline")

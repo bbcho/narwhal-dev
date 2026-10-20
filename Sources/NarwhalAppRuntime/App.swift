@@ -509,7 +509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reconciliationMode: EnvironmentReconciliationMode = .activeWorkspaceCleanup
     ) async -> EnvironmentRefreshResult {
         let displays = providedDisplays ?? displayClient.currentDisplays()
-        let axSnapshot = axClient.windowSnapshot()
+        let axSnapshot = await includingParkedWindows(axClient.windowSnapshot())
         let topology = spaceClient.spaceTopology(displays: displays, windows: axSnapshot.windows)
         let activeSpace: SpaceID?
         switch spaceClient.activeSpaceID() {
@@ -543,6 +543,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         await updateTiledBordersFromWorld()
         await refreshWorkspacePresentationSurfaces()
         return result
+    }
+
+    /// The on-screen snapshot omits minimized and hidden windows; adding the
+    /// parked ones that still exist keeps reconciliation from pruning their slots.
+    @MainActor
+    private func includingParkedWindows(_ snapshot: AXWindowSnapshot) async -> AXWindowSnapshot {
+        let parked = await worldActor.minimizedWindows()
+        guard !parked.isEmpty, let existing = axClient.existingWindowIDs() else { return snapshot }
+        let onScreen = Set(snapshot.windows.map(\.id))
+        let stillParked = parked.filter { existing.contains($0.id) && !onScreen.contains($0.id) }
+        return AXWindowSnapshot(
+            windows: (snapshot.windows + stillParked).sorted { $0.id.raw < $1.id.raw },
+            quality: snapshot.quality
+        )
     }
 
     @MainActor
@@ -1054,6 +1068,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             spaceChanged: { [weak self] in
                 self?.activeSpaceChanged()
+            },
+            windowsVanished: { [weak self] windowIDs in
+                Task { @MainActor in
+                    await self?.handleVanishedWindows(windowIDs)
+                }
             },
             reconcileFocusedWindow: { [weak self] snapshot in
                 self?.overlay.reconcileFocusBorderAfterObservation(ifCurrent: snapshot.id)
@@ -2867,17 +2886,83 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .windowMoved, .windowResized:
             break
         case .windowOpened(let metadata):
-            scheduleCoalescedEnvironmentRefresh(.windowOpened(metadata.id))
+            if await worldActor.windows([metadata.id]).first?.isMinimized == true {
+                await worldActor.setMinimized([metadata.id], false)
+                scheduleCoalescedEnvironmentRefresh(.windowRestored(metadata.id))
+            } else {
+                scheduleCoalescedEnvironmentRefresh(.windowOpened(metadata.id))
+            }
         case .windowClosed(let windowID):
+            if await vanishedWindowFates([windowID])[windowID] == .parked {
+                await parkWindows([windowID])
+                return
+            }
+            await removeClosedWindow(windowID)
+            scheduleCoalescedEnvironmentRefresh(.windowClosed(windowID))
+        }
+    }
+
+    @MainActor
+    private func handleVanishedWindows(_ windowIDs: Set<WindowID>) async {
+        await workspaceMutationGate.perform {
+            let fates = await self.vanishedWindowFates(windowIDs)
+            let parked = Set(fates.filter { $0.value == .parked }.keys)
+            let closed = fates.filter { $0.value == .closed }.keys.sorted { $0.raw < $1.raw }
+            if !parked.isEmpty {
+                self.reporter.info("Parked \(parked.count) minimized or hidden window(s) from a bulk disappearance")
+                await self.parkWindows(parked)
+            }
+            for windowID in closed {
+                await self.removeClosedWindow(windowID)
+            }
+            if !closed.isEmpty {
+                self.reporter.info("Removed \(closed.count) closed window(s) from a bulk disappearance")
+                // The Space-change refresh that follows preserves layouts and does not save.
+                await self.persistRestore(reason: "closed windows")
+            }
+        }
+    }
+
+    /// Classifies windows that left the screen: closed, minimized or hidden
+    /// (kept in their slot), or simply elsewhere such as another Space.
+    @MainActor
+    private func vanishedWindowFates(_ windowIDs: Set<WindowID>) async -> [WindowID: VanishedWindowFate] {
+        let existing = axClient.existingWindowIDs()
+        let candidates = await worldActor.windows(windowIDs).filter { existing?.contains($0.id) == true }
+        let minimizedOrHidden = axClient.minimizedOrHiddenWindowIDs(among: candidates)
+        return Dictionary(uniqueKeysWithValues: windowIDs.map { windowID in
+            (windowID, vanishedWindowFate(
+                windowID,
+                existingWindowIDs: existing,
+                isMinimizedOrHidden: minimizedOrHidden.contains(windowID)
+            ))
+        })
+    }
+
+    /// A minimized window or a hidden app's window keeps its tile slot as a gap
+    /// and returns to it when it reappears.
+    @MainActor
+    private func parkWindows(_ windowIDs: Set<WindowID>) async {
+        await worldActor.setMinimized(windowIDs, true)
+        for windowID in windowIDs {
             externalGeometryCoordinator.cancel(windowID: windowID)
-            await worldActor.removeWindowFromActiveSpace(windowID)
             removeWindowFromOverlays(windowID)
             if operatingStatus.focusedWindowID == windowID {
                 updateOperatingStatus { $0.focusedWindowID = nil }
             }
-            await updateTiledBordersFromWorld()
-            scheduleCoalescedEnvironmentRefresh(.windowClosed(windowID))
         }
+        await updateTiledBordersFromWorld()
+    }
+
+    @MainActor
+    private func removeClosedWindow(_ windowID: WindowID) async {
+        externalGeometryCoordinator.cancel(windowID: windowID)
+        await worldActor.removeWindowFromActiveSpace(windowID)
+        removeWindowFromOverlays(windowID)
+        if operatingStatus.focusedWindowID == windowID {
+            updateOperatingStatus { $0.focusedWindowID = nil }
+        }
+        await updateTiledBordersFromWorld()
     }
 
     @MainActor

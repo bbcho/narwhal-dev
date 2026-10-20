@@ -33,17 +33,22 @@ public struct WindowInventoryObservationTransition: Equatable, Sendable {
     public let events: [AXEvent]
     public let frameEvents: [AXEvent]
     public let effect: WindowInventoryObservationEffect?
+    /// Windows that left the screen in a burst suppressed as a likely Space
+    /// change; some may have closed or been minimized and need classifying.
+    public let vanishedWindowIDs: Set<WindowID>
 
     public init(
         state: WindowInventoryObservationState,
         events: [AXEvent],
         frameEvents: [AXEvent],
-        effect: WindowInventoryObservationEffect?
+        effect: WindowInventoryObservationEffect?,
+        vanishedWindowIDs: Set<WindowID> = []
     ) {
         self.state = state
         self.events = events
         self.frameEvents = frameEvents
         self.effect = effect
+        self.vanishedWindowIDs = vanishedWindowIDs
     }
 }
 
@@ -97,7 +102,8 @@ public func observeWindowInventory(
             state: .empty,
             events: [],
             frameEvents: [],
-            effect: .likelySpaceReplacement
+            effect: .likelySpaceReplacement,
+            vanishedWindowIDs: previous.visibleWindowIDs.subtracting(windows.map(\.id))
         )
     }
 

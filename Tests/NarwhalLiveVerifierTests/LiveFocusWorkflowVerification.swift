@@ -203,6 +203,7 @@ enum LiveFocusWorkflowVerification {
                 reporter: StartupReporter(logPath: "/tmp/narwhal-live-focus-workflow.log"),
                 activeSpaceByDisplay: { _ in [display.id: activeSpace] },
                 spaceChanged: {},
+                windowsVanished: { _ in },
                 reconcileFocusedWindow: { snapshot in
                     overlay.reconcileFocusBorderAfterObservation(ifCurrent: snapshot.id)
                 },

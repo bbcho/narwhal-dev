@@ -210,6 +210,38 @@ public struct AXWindowSnapshot: Equatable, Sendable {
     }
 }
 
+/// Records that windows were minimized (or their app hidden), or came back.
+/// Only metadata changes: a minimized tiled window keeps its slot.
+public func worldBySettingMinimized(_ windowIDs: Set<WindowID>, to minimized: Bool, in world: World) -> World {
+    World(
+        displays: world.displays,
+        activeSpace: world.activeSpace,
+        activeSpaceByDisplay: world.activeSpaceByDisplay,
+        spaces: world.spaces,
+        windows: world.windows.reduce(into: [:]) { windows, entry in
+            let (id, window) = entry
+            windows[id] = windowIDs.contains(id)
+                ? WindowMetadata(
+                    id: window.id,
+                    bundleID: window.bundleID,
+                    title: window.title,
+                    role: window.role,
+                    pid: window.pid,
+                    frame: window.frame,
+                    isResizable: window.isResizable,
+                    isMinimized: minimized
+                )
+                : window
+        },
+        windowDisplay: world.windowDisplay,
+        windowSpace: world.windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
+        windowConstraints: world.windowConstraints,
+        pendingRules: world.pendingRules,
+        config: world.config
+    )
+}
+
 public struct EnvironmentSnapshot: Equatable, Sendable {
     public let activeSpace: SpaceID?
     public let activeSpaceByDisplay: [DisplayID: SpaceID]

@@ -431,10 +431,24 @@ public func workspaceLayout(
         constraints: world.windowConstraints
     ) {
     case .solved(let layout, _):
-        return .success(layout)
+        return .success(hidingMinimizedWindows(layout, in: world))
     case .unsatisfiable(let unsatisfiable):
         return .failure(unsatisfiable)
     }
+}
+
+/// Minimized windows and windows of hidden apps keep their tile slot, so the
+/// gap stays until they return, but get no frame: writing one would fail.
+private func hidingMinimizedWindows(_ layout: Layout, in world: World) -> Layout {
+    let minimized = Set(layout.tiled.keys).union(layout.floatingZOrder).filter {
+        world.windows[$0]?.isMinimized == true
+    }
+    guard !minimized.isEmpty else { return layout }
+    return Layout(
+        tiled: layout.tiled.filter { !minimized.contains($0.key) },
+        floatingZOrder: layout.floatingZOrder.filter { !minimized.contains($0) },
+        hidden: layout.hidden.union(minimized)
+    )
 }
 
 public func spaceLayout(
@@ -541,17 +555,19 @@ private func framesByWindow(in node: Node, frame: CGRect, innerGap: Double) -> [
 private struct FlattenedLayoutAccumulator {
     let tiled: [WindowID: CGRect]
     let floatingZOrder: [WindowID]
+    let hidden: Set<WindowID>
 
-    static let empty = FlattenedLayoutAccumulator(tiled: [:], floatingZOrder: [])
+    static let empty = FlattenedLayoutAccumulator(tiled: [:], floatingZOrder: [], hidden: [])
 
     var layout: Layout {
-        Layout(tiled: tiled, floatingZOrder: floatingZOrder, hidden: [])
+        Layout(tiled: tiled, floatingZOrder: floatingZOrder, hidden: hidden)
     }
 
     func adding(_ layout: Layout) -> FlattenedLayoutAccumulator {
         FlattenedLayoutAccumulator(
             tiled: tiled.merging(layout.tiled) { _, next in next },
-            floatingZOrder: floatingZOrder + layout.floatingZOrder
+            floatingZOrder: floatingZOrder + layout.floatingZOrder,
+            hidden: hidden.union(layout.hidden)
         )
     }
 }

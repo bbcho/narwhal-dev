@@ -111,6 +111,22 @@ struct EnvironmentRefreshCoalescerTests {
         ).description == "space transition ended")
     }
 
+    @Test("A restored minimized window reflows the layout so it returns to its slot")
+    func restoredWindowReflowsLayout() {
+        expectPolicy(environmentRefreshPolicy(
+            for: [.windowRestored(WindowID(raw: 47))],
+            duringSpaceTransition: false
+        ),
+            preserveSpaceLayouts: false,
+            reconciliationMode: .activeWorkspaceCleanup,
+            persistRestore: true,
+            applyPendingTileRules: true,
+            scheduleDeferredCleanup: false,
+            reflowTiledLayout: true
+        )
+        #expect(EnvironmentRefreshReason.windowRestored(WindowID(raw: 47)).description == "window restored w47")
+    }
+
     @Test("Environment refresh policy separates reconciliation, persistence, and deferred cleanup")
     func environmentRefreshPolicySeparatesEffects() {
         expectPolicy(environmentRefreshPolicy(

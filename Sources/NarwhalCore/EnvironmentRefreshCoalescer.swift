@@ -6,6 +6,7 @@ public enum EnvironmentRefreshReason: Equatable, CustomStringConvertible, Sendab
     case spaceSettled
     case spaceTransitionEnded
     case tiledBorderTargetMismatch(WindowID)
+    case windowRestored(WindowID)
 
     public var description: String {
         switch self {
@@ -23,6 +24,8 @@ public enum EnvironmentRefreshReason: Equatable, CustomStringConvertible, Sendab
             return "space transition ended"
         case .tiledBorderTargetMismatch(let id):
             return "tiled border target mismatch \(id.description)"
+        case .windowRestored(let id):
+            return "window restored \(id.description)"
         }
     }
 }
@@ -185,6 +188,11 @@ public func environmentRefreshPolicy(
         || reasons.contains(.spaceTransitionEnded)
 
     let displayTopologySettled = reasons.contains(.displaySettled) && !preserveSpaceLayouts
+    // An unminimized window returns to its kept slot, which may have moved meanwhile.
+    let windowRestored = reasons.contains { reason in
+        if case .windowRestored = reason { return true }
+        return false
+    }
 
     return EnvironmentRefreshPolicy(
         preserveSpaceLayouts: preserveSpaceLayouts,
@@ -194,6 +202,6 @@ public func environmentRefreshPolicy(
         persistRestore: !preserveSpaceLayouts && !reasons.contains(.displaySettled),
         applyPendingTileRules: !preserveSpaceLayouts,
         scheduleDeferredCleanup: reasons.contains(.displayChanged),
-        reflowTiledLayout: displayTopologySettled
+        reflowTiledLayout: displayTopologySettled || (windowRestored && !preserveSpaceLayouts)
     )
 }

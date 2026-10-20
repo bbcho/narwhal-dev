@@ -16,6 +16,7 @@ final class AXObserverService {
     private let reconcileFocusedWindow: @MainActor (FocusedWindowSnapshot) -> Void
     private let emit: @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
     private let spaceChanged: @MainActor () -> Void
+    private let windowsVanished: @MainActor (Set<WindowID>) -> Void
     private let notificationFastPathEnabled: Bool
     private var reconciliationTimer: Timer?
     private var geometryThrottleTimer: Timer?
@@ -33,6 +34,7 @@ final class AXObserverService {
         reporter: StartupReporter,
         activeSpaceByDisplay: @escaping @MainActor ([WindowMetadata]) -> [DisplayID: SpaceID],
         spaceChanged: @escaping @MainActor () -> Void,
+        windowsVanished: @escaping @MainActor (Set<WindowID>) -> Void,
         reconcileFocusedWindow: @escaping @MainActor (FocusedWindowSnapshot) -> Void,
         emit: @escaping @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
     ) {
@@ -42,6 +44,7 @@ final class AXObserverService {
         self.reporter = reporter
         self.activeSpaceByDisplay = activeSpaceByDisplay
         self.spaceChanged = spaceChanged
+        self.windowsVanished = windowsVanished
         self.reconcileFocusedWindow = reconcileFocusedWindow
         self.emit = emit
         self.notificationFastPathEnabled = true
@@ -54,6 +57,7 @@ final class AXObserverService {
         reporter: StartupReporter,
         activeSpaceByDisplay: @escaping @MainActor ([WindowMetadata]) -> [DisplayID: SpaceID],
         spaceChanged: @escaping @MainActor () -> Void,
+        windowsVanished: @escaping @MainActor (Set<WindowID>) -> Void = { _ in },
         notificationFastPathEnabled: Bool = false,
         reconcileFocusedWindow: @escaping @MainActor (FocusedWindowSnapshot) -> Void,
         emit: @escaping @MainActor (AXEvent, FocusedWindowSnapshot?) -> Void
@@ -64,6 +68,7 @@ final class AXObserverService {
         self.reporter = reporter
         self.activeSpaceByDisplay = activeSpaceByDisplay
         self.spaceChanged = spaceChanged
+        self.windowsVanished = windowsVanished
         self.reconcileFocusedWindow = reconcileFocusedWindow
         self.emit = emit
         self.notificationFastPathEnabled = notificationFastPathEnabled
@@ -326,6 +331,11 @@ final class AXObserverService {
             return
         case .likelySpaceReplacement:
             reporter.info("Suppressed likely Space replacement inventory diff")
+            // An app quitting or hiding looks like a Space change; its windows
+            // still need classifying as closed or parked.
+            if !transition.vanishedWindowIDs.isEmpty {
+                windowsVanished(transition.vanishedWindowIDs)
+            }
             activeSpaceChanged()
             return
         case nil:
