@@ -573,7 +573,7 @@ private func worldByTrackingOpenedWindow(
     )
 }
 
-private func constraintsByApplyingManagedRule(
+func constraintsByApplyingManagedRule(
     to metadata: WindowMetadata,
     in world: World
 ) -> [WindowID: WindowConstraints] {

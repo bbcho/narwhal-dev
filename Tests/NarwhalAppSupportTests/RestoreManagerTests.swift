@@ -255,6 +255,27 @@ struct RestoreManagerTests {
         #expect(try Data(contentsOf: paths.file) == original)
     }
 
+    @Test("A schema version below 1 is quarantined as corrupt, not treated as a future version")
+    func nonPositiveSchemaIsQuarantined() throws {
+        let paths = temporaryRestorePath()
+        defer { removeTemporaryRestoreRoot(paths.root) }
+        let manager = RestoreManager(url: paths.file)
+        try writeStoredWorld(
+            StoredWorld(schemaVersion: 0, activeSpace: nil, pendingRules: []),
+            to: paths.file
+        )
+
+        let outcome = try manager.loadRecovering(quarantineID: "zero")
+
+        guard case .recoveredEmpty(let recovery) = outcome else {
+            Issue.record("Expected corrupt-file recovery, got \(outcome)")
+            return
+        }
+        #expect(recovery.primaryError == .invalidStoredWorld("schema version 0 is below 1"))
+        #expect(recovery.quarantinedFilenames == ["state.json.corrupt-zero"])
+        #expect(FileManager.default.fileExists(atPath: paths.file.path) == false)
+    }
+
     @Test("Save refuses to overwrite invalid existing state")
     func saveRefusesToOverwriteInvalidExistingState() throws {
         let paths = temporaryRestorePath()

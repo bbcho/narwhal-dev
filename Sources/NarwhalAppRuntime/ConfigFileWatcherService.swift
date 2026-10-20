@@ -15,6 +15,7 @@ final class ConfigFileWatcherService {
     private var reloadTimer: Timer?
     private var reloadState = ConfigReloadDebounceState.empty
     private var reloadTimerGeneration: UInt64?
+    private var lastSeenContents: Data?
 
     init(
         configURL: URL,
@@ -77,6 +78,7 @@ final class ConfigFileWatcherService {
         }
 
         stream = created
+        lastSeenContents = currentContents()
         reporter.info("Config watcher ready for \(configURL.path) under \(roots.sorted().joined(separator: ", "))")
     }
 
@@ -142,8 +144,17 @@ final class ConfigFileWatcherService {
         let fired = fireConfigReloadTimer(generation: generation, in: reloadState)
         reloadState = fired.state
         guard fired.decision == .reload else { return }
+        // One editor save can arrive as several FSEvents batches; reload only
+        // when the bytes actually changed.
+        let contents = currentContents()
+        guard contents == nil || contents != lastSeenContents else { return }
+        lastSeenContents = contents
         reporter.info("Config file changed; reloading \(configURL.path)")
         configChanged()
+    }
+
+    private func currentContents() -> Data? {
+        try? Data(contentsOf: URL(fileURLWithPath: watchTarget.resolvedConfigPath))
     }
 
     private static let handleEvents: FSEventStreamCallback = { _, info, eventCount, eventPaths, _, _ in

@@ -234,15 +234,17 @@ private func validateStoredNode(_ node: StoredNode) -> RestoreError? {
     }
 }
 
-public func storedWorld(from world: World) -> StoredWorld {
-    guard !world.spaces.isEmpty else {
+/// `deferredSpaces` are stored Spaces not yet visible since restore; they are
+/// written back unchanged so their layouts survive until the user visits them.
+public func storedWorld(from world: World, deferredSpaces: [SpaceID: StoredSpace] = [:]) -> StoredWorld {
+    guard !world.spaces.isEmpty || !deferredSpaces.isEmpty else {
         return .empty
     }
 
     let refByWindowID = storedRefsByWindowID(for: world.windows)
     let storedSpacesByID = world.spaces.mapValues { space in
         storedSpace(from: space, world: world, refs: refByWindowID)
-    }
+    }.merging(deferredSpaces) { projected, _ in projected }
     let pendingRules = world.pendingRules.compactMap { windowID, action -> StoredPendingRule? in
         guard let ref = refByWindowID[windowID] else { return nil }
         return StoredPendingRule(window: ref, action: storedRuleAction(from: action))
@@ -323,13 +325,15 @@ public func restoreWorld(
     case .failure:
         validatedStored = .empty
     }
-    let matcher = RestoreMatcher(liveWindows: Array(windows.values))
-    let storedSpaces: [(SpaceID, StoredSpace)]
-    if let workspaces = validatedStored.workspaces, !workspaces.isEmpty {
-        storedSpaces = workspaces.map { ($0.spaceID, $0.space) }
-    } else {
-        storedSpaces = validatedStored.activeSpace.map { [(activeSpace, $0)] } ?? []
-    }
+    let storedSpaces = storedSpacesToRestoreNow(
+        validatedStored,
+        activeSpaces: Set(activeSpaceByDisplay.values).union([activeSpace]),
+        fallbackSpace: activeSpace
+    )
+    let matcher = RestoreMatcher(
+        liveWindows: Array(windows.values),
+        refs: storedSpaces.flatMap { storedWindowRefs(in: $0.1) }
+    )
     let projection = restoreSpaces(storedSpaces, matcher: matcher, displays: displays)
     let windowDisplay = displayOwnership(for: windows.values, displays: displays)
         .merging(projection.displayByWindow) { _, restored in restored }
@@ -351,7 +355,7 @@ public func restoreWorld(
         windowSpace: windowSpace
     )
 
-    return World(
+    let restored = World(
         displays: displays,
         activeSpace: activeSpace,
         activeSpaceByDisplay: activeSpaceByDisplay,
@@ -363,6 +367,120 @@ public func restoreWorld(
         windowConstraints: [:],
         pendingRules: restoredPendingRules(validatedStored.pendingRules, matcher: projection.matcher),
         config: config
+    )
+    return worldByApplyingRulesAfterRestore(restored, restoredWindowIDs: Set(projection.displayByWindow.keys))
+}
+
+/// Restoring does not open windows, so rules would never run for windows that
+/// were not in the saved state. Those open now; restored windows keep their
+/// placement but still get managed minimum sizes.
+private func worldByApplyingRulesAfterRestore(_ world: World, restoredWindowIDs: Set<WindowID>) -> World {
+    let withConstraints = restoredWindowIDs.sorted { $0.raw < $1.raw }.reduce(world) { current, windowID in
+        guard let metadata = current.windows[windowID] else { return current }
+        return worldBySettingConstraints(constraintsByApplyingManagedRule(to: metadata, in: current), in: current)
+    }
+    return world.windows.keys
+        .filter { !restoredWindowIDs.contains($0) }
+        .sorted { $0.raw < $1.raw }
+        .reduce(withConstraints) { current, windowID in
+            guard let metadata = current.windows[windowID] else { return current }
+            return worldByOpeningWindow(metadata, in: current)
+        }
+}
+
+private func worldBySettingConstraints(_ constraints: [WindowID: WindowConstraints], in world: World) -> World {
+    World(
+        displays: world.displays,
+        activeSpace: world.activeSpace,
+        activeSpaceByDisplay: world.activeSpaceByDisplay,
+        spaces: world.spaces,
+        windows: world.windows,
+        windowDisplay: world.windowDisplay,
+        windowSpace: world.windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
+        windowConstraints: constraints,
+        pendingRules: world.pendingRules,
+        config: world.config
+    )
+}
+
+/// Only Spaces visible at startup restore immediately: windows on other Spaces
+/// are not on screen yet, so matching them now would drop every slot. When no
+/// stored Space ID is active (IDs can change across logins), the layout that was
+/// active at save time is restored onto the current Space instead.
+private func storedSpacesToRestoreNow(
+    _ stored: StoredWorld,
+    activeSpaces: Set<SpaceID>,
+    fallbackSpace: SpaceID
+) -> [(SpaceID, StoredSpace)] {
+    let active = (stored.workspaces ?? [])
+        .filter { activeSpaces.contains($0.spaceID) }
+        .sorted { $0.spaceID.raw < $1.spaceID.raw }
+        .map { ($0.spaceID, $0.space) }
+    guard active.isEmpty else { return active }
+    return stored.activeSpace.map { [(fallbackSpace, $0)] } ?? []
+}
+
+/// Stored Spaces that `restoreWorld` left for later because they were not
+/// visible; see `restoringDeferredSpace`.
+public func deferredSpaces(in stored: StoredWorld, restoredInto world: World) -> [SpaceID: StoredSpace] {
+    guard case .success(let valid) = validateStoredWorld(stored) else { return [:] }
+    let restoredSpaces = Set(world.activeSpaceByDisplay.values).union(world.activeSpace.map { [$0] } ?? [])
+    return Dictionary(
+        (valid.workspaces ?? [])
+            .filter { !restoredSpaces.contains($0.spaceID) }
+            .map { ($0.spaceID, $0.space) },
+        uniquingKeysWith: { _, latest in latest }
+    )
+}
+
+/// Restores a deferred Space the first time it is visible, placing the
+/// windows that belong to it and are not tiled anywhere yet. A Space the user
+/// already tiled is left as is. Returns nil when nothing could be placed.
+public func restoringDeferredSpace(_ stored: StoredSpace, spaceID: SpaceID, in world: World) -> World? {
+    let space = world.spaces[spaceID] ?? SpaceState(id: spaceID, displays: [:], focused: nil)
+    guard space.displays.values.allSatisfy({ occupiedWindows(in: $0.tree).isEmpty }) else {
+        return nil
+    }
+    let tiledElsewhere = Set(world.spaces.values.flatMap { space in
+        space.displays.values.flatMap { occupiedWindows(in: $0.tree) }
+    })
+    let candidates = world.windows.values.filter { window in
+        world.windowSpace[window.id] == spaceID && !tiledElsewhere.contains(window.id) && !window.isMinimized
+    }
+    let projection = restoreSpace(
+        stored,
+        spaceID: spaceID,
+        matcher: RestoreMatcher(liveWindows: candidates, refs: storedWindowRefs(in: stored)),
+        displays: world.displays
+    )
+    let tiled = Set(projection.space.displays.values.flatMap { occupiedWindows(in: $0.tree) })
+    guard !tiled.isEmpty else { return nil }
+    let displayIDs = Set(space.displays.keys).union(projection.space.displays.keys)
+    let displays = displayIDs.reduce(into: [DisplayID: DisplaySpaceState]()) { result, displayID in
+        let current = space.displays[displayID]
+        result[displayID] = DisplaySpaceState(
+            displayID: displayID,
+            tree: projection.space.displays[displayID]?.tree ?? current?.tree ?? .void,
+            floating: (current?.floating ?? []).filter { !tiled.contains($0) }
+        )
+    }
+    return World(
+        displays: world.displays,
+        activeSpace: world.activeSpace,
+        activeSpaceByDisplay: world.activeSpaceByDisplay,
+        spaces: world.spaces.setting(spaceID, to: SpaceState(
+            id: spaceID,
+            displays: displays,
+            focused: space.focused ?? projection.space.focused.flatMap { tiled.contains($0) ? $0 : nil }
+        )),
+        windows: world.windows,
+        windowDisplay: world.windowDisplay.merging(projection.displayByWindow.filter { tiled.contains($0.key) }) { _, restored in restored },
+        windowSpace: world.windowSpace,
+        observedVisibleWindows: world.observedVisibleWindows,
+        windowConstraints: world.windowConstraints,
+        pendingRules: world.pendingRules,
+        config: world.config
     )
 }
 
@@ -393,15 +511,18 @@ private struct RestoreApplicationRoleKey: Hashable {
 private struct RestoreMatcher {
     private let candidatesByKey: [RestoreWindowKey: [WindowMetadata]]
     private let candidatesByApplicationRole: [RestoreApplicationRoleKey: [WindowMetadata]]
+    private let assigned: [StoredWindowRef: WindowMetadata]
     private let consumed: Set<WindowID>
 
-    init(liveWindows: [WindowMetadata]) {
+    init(liveWindows: [WindowMetadata], refs: [StoredWindowRef]) {
+        let candidatesByKey = Dictionary(grouping: liveWindows, by: \.restoreKey).mapValues(stableWindowOrder)
         self.init(
-            candidatesByKey: Dictionary(grouping: liveWindows, by: \.restoreKey).mapValues(stableWindowOrder),
+            candidatesByKey: candidatesByKey,
             candidatesByApplicationRole: Dictionary(
                 grouping: liveWindows,
                 by: \.restoreApplicationRoleKey
             ).mapValues(stableWindowOrder),
+            assigned: frameAssignments(refs: refs, candidatesByKey: candidatesByKey),
             consumed: []
         )
     }
@@ -409,10 +530,12 @@ private struct RestoreMatcher {
     private init(
         candidatesByKey: [RestoreWindowKey: [WindowMetadata]],
         candidatesByApplicationRole: [RestoreApplicationRoleKey: [WindowMetadata]],
+        assigned: [StoredWindowRef: WindowMetadata],
         consumed: Set<WindowID>
     ) {
         self.candidatesByKey = candidatesByKey
         self.candidatesByApplicationRole = candidatesByApplicationRole
+        self.assigned = assigned
         self.consumed = consumed
     }
 
@@ -424,6 +547,7 @@ private struct RestoreMatcher {
             matcher: RestoreMatcher(
                 candidatesByKey: candidatesByKey,
                 candidatesByApplicationRole: candidatesByApplicationRole,
+                assigned: assigned,
                 consumed: consumed.union([metadata.id])
             ),
             windowID: metadata.id
@@ -435,6 +559,11 @@ private struct RestoreMatcher {
     }
 
     private func bestCandidate(for ref: StoredWindowRef, excluding consumed: Set<WindowID>) -> WindowMetadata? {
+        if let assignment = assigned[ref] {
+            return consumed.contains(assignment.id) ? nil : assignment
+        }
+        // A window reserved for another ref by frame must not be taken here.
+        let consumed = consumed.union(assigned.values.map(\.id))
         let exactCandidates = candidatesByKey[ref.restoreKey, default: []]
         if exactCandidates.indices.contains(ref.occurrence) {
             let candidate = exactCandidates[ref.occurrence]
@@ -474,6 +603,33 @@ private struct RestoreMatcher {
             }
             .first?.0
     }
+}
+
+/// Pairs same-title refs with live windows by ascending frame distance across
+/// all of them at once. Matching leaf by leaf instead lets an early ref take a
+/// later ref's window, shifting every duplicate one slot.
+private func frameAssignments(
+    refs: [StoredWindowRef],
+    candidatesByKey: [RestoreWindowKey: [WindowMetadata]]
+) -> [StoredWindowRef: WindowMetadata] {
+    Dictionary(grouping: Set(refs).filter { $0.lastKnownFrame != nil }, by: \.restoreKey)
+        .reduce(into: [StoredWindowRef: WindowMetadata]()) { result, group in
+            let candidates = candidatesByKey[group.key, default: []]
+            let pairs = group.value.flatMap { ref in
+                candidates.map { window in
+                    (ref: ref, window: window, distance: frameDistanceSquared(window.frame, ref.lastKnownFrame ?? .zero))
+                }
+            }.sorted { lhs, rhs in
+                if lhs.distance != rhs.distance { return lhs.distance < rhs.distance }
+                if lhs.ref.occurrence != rhs.ref.occurrence { return lhs.ref.occurrence < rhs.ref.occurrence }
+                return lhs.window.id.raw < rhs.window.id.raw
+            }
+            var usedWindows = Set<WindowID>()
+            for pair in pairs where result[pair.ref] == nil && !usedWindows.contains(pair.window.id) {
+                result[pair.ref] = pair.window
+                usedWindows.insert(pair.window.id)
+            }
+        }
 }
 
 private func titlesLikelyReferToSameWindow(_ stored: String, _ live: String) -> Bool {

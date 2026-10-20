@@ -196,7 +196,16 @@ lines, IPC replies, or menubar status at the boundary.
 A stored window reference holds bundle ID, title, role, duplicate occurrence
 index, last known frame, display slot, and display fingerprint. On restore,
 references are matched to live windows; raw window IDs are never treated as
-stable across launches.
+stable across launches. Same-title windows are paired with references by last
+known frame across the whole layout at once, before falling back to occurrence.
+
+Only Spaces visible at startup restore immediately, because windows on other
+Spaces are not on screen yet. Other stored Spaces stay deferred in `WorldActor`,
+are written back unchanged on every save, and restore the first time their
+Space is visible (`restoringDeferredSpace`). Windows that were not in the saved
+state go through the normal window-open rules. A restore file from a newer
+Narwhal, or one that cannot be read, starts an empty layout and is never saved
+over in that session.
 
 ## Config
 

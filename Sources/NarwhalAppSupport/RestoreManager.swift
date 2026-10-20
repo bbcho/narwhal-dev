@@ -187,7 +187,11 @@ func decodeStoredWorldRestoreData(_ data: Data) -> Result<StoredWorld, RestoreMa
 }
 
 func migrateStoredWorldToCurrent(_ stored: StoredWorld) -> Result<StoredWorld, RestoreManagerError> {
-    guard (1...StoredWorld.currentSchemaVersion).contains(stored.schemaVersion) else {
+    // Below 1 is not any version Narwhal wrote: a corrupt file, not a future one.
+    guard stored.schemaVersion >= 1 else {
+        return .failure(.invalidStoredWorld("schema version \(stored.schemaVersion) is below 1"))
+    }
+    guard stored.schemaVersion <= StoredWorld.currentSchemaVersion else {
         return .failure(.unsupportedSchemaVersion(
             found: stored.schemaVersion,
             supported: StoredWorld.currentSchemaVersion

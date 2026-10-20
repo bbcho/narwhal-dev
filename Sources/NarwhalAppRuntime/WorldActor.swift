@@ -12,6 +12,8 @@ actor WorldActor {
     private var nextGeneration: UInt64 = 1
     private var runtimeState = WorldRuntimeState.empty
     private var layoutHistory = LayoutHistoryState.empty
+    /// Saved layouts of Spaces not yet visible since restore.
+    private var deferredRestoreSpaces: [SpaceID: StoredSpace] = [:]
     private let runtimeMetrics: RuntimeMetrics?
 
     init(config: Config = .default, runtimeMetrics: RuntimeMetrics? = nil) {
@@ -37,7 +39,7 @@ actor WorldActor {
     }
 
     func restore(_ stored: StoredWorld, from snapshot: EnvironmentSnapshot) -> Int {
-        world = restoreWorld(
+        let restored = restoreWorld(
             from: stored,
             liveWindows: snapshot.axSnapshot.windows,
             displays: snapshot.displays,
@@ -49,6 +51,8 @@ actor WorldActor {
             ),
             config: world.config
         )
+        world = restored
+        deferredRestoreSpaces = deferredSpaces(in: stored, restoredInto: restored)
         layoutHistory = .empty
         pruneRuntimeState()
         return world.spaces.values.reduce(0) { total, space in
@@ -606,7 +610,32 @@ actor WorldActor {
     }
 
     func restoreSnapshot() -> StoredWorld {
-        storedWorld(from: world)
+        storedWorld(from: world, deferredSpaces: deferredRestoreSpaces)
+    }
+
+    /// Restores saved layouts of Spaces that were not visible at startup once
+    /// they are. Returns true when a Space gained tiles that need writing.
+    func restoreVisibleDeferredSpaces() -> Bool {
+        let visible = Set(world.activeSpaceByDisplay.values).union(world.activeSpace.map { [$0] } ?? [])
+        var restoredAny = false
+        for spaceID in visible.sorted(by: { $0.raw < $1.raw }) {
+            guard let stored = deferredRestoreSpaces[spaceID] else { continue }
+            let alreadyTiled = world.spaces[spaceID]?.displays.values.contains {
+                !occupiedWindows(in: $0.tree).isEmpty
+            } ?? false
+            if alreadyTiled {
+                deferredRestoreSpaces[spaceID] = nil
+                continue
+            }
+            guard let restored = restoringDeferredSpace(stored, spaceID: spaceID, in: world) else { continue }
+            world = restored
+            deferredRestoreSpaces[spaceID] = nil
+            restoredAny = true
+        }
+        if restoredAny {
+            pruneRuntimeState()
+        }
+        return restoredAny
     }
 
     func isCurrent(_ result: CommandPlanResult) -> Bool {

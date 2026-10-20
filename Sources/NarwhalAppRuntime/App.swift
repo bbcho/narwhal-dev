@@ -151,6 +151,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var startupConfigFailure: StartupConfigError?
     private var configWarning: RuntimeReadinessIssue?
     private var restoreWarning: RuntimeReadinessIssue?
+    /// Set when the restore file is from a newer Narwhal or unreadable, so this
+    /// session never overwrites it.
+    private var restoreSavingSuspended = false
     private var runtimeReadiness: RuntimeReadiness = .starting
     private var terminationFlushState: TerminationFlushState = .idle
     private var terminationFlushTask: Task<Void, Never>?
@@ -2736,14 +2739,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return true
             case .incompatible(let recovery):
                 let schemaError = recovery.backupError ?? recovery.primaryError
-                reporter.error("Restore state is from an unsupported future schema: \(schemaError.description)")
-                updateRuntimeReadiness(.degraded(.restoreIncompatible))
-                return false
+                reporter.error("Restore state is from a newer Narwhal (\(schemaError.description)); starting with an empty layout and not saving over it")
+                restoreWarning = .restoreIncompatible
+                restoreSavingSuspended = true
+                return true
             }
         } catch {
-            reporter.error("Restore state failed: \(String(describing: error))")
-            updateRuntimeReadiness(.degraded(.restoreUnavailable))
-            return false
+            reporter.error("Restore state could not be read (\(String(describing: error))); starting with an empty layout and not saving")
+            restoreWarning = .restoreUnavailable
+            restoreSavingSuspended = true
+            return true
         }
     }
 
@@ -3211,6 +3216,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environmentRefreshCoalescer = completion.state
         switch completion.decision {
         case .cleared(let completedRequest):
+            if completed,
+               !spaceTransitionPreservation.isPreservingSpaceLayouts,
+               await worldActor.restoreVisibleDeferredSpaces() {
+                reporter.info("Restored a saved Space layout now that its Space is visible")
+                await applySettledDisplayLayoutLocked(reason: "deferred Space restore")
+            }
             if completed && policy.scheduleDeferredCleanup {
                 scheduleDelayedDisplaySettledRefresh(after: Self.displaySettledRefreshDelay)
             }
@@ -3631,6 +3642,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func persistRestore(reason: String) async {
+        guard !restoreSavingSuspended else { return }
         let stored = await worldActor.restoreSnapshot()
         restorePersistence.scheduleSave(stored, reason: reason)
     }

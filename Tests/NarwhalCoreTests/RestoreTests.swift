@@ -274,8 +274,8 @@ struct RestoreTests {
         #expect(world.spaces[activeSpace]?.focused == nil)
     }
 
-    @Test("storedWorld and restoreWorld preserve every known Space layout")
-    func storedWorldAndRestoreWorldPreserveEveryKnownSpaceLayout() throws {
+    @Test("storedWorld and restoreWorld keep every Space layout, deferring Spaces that are not visible")
+    func storedWorldAndRestoreWorldKeepEveryKnownSpaceLayout() throws {
         let display = DisplayID(raw: 7)
         let firstSpace = SpaceID(raw: 101)
         let secondSpace = SpaceID(raw: 202)
@@ -321,23 +321,271 @@ struct RestoreTests {
         )
 
         let stored = storedWorld(from: world)
+        // At startup only windows on visible Spaces are on screen.
         let restored = restoreWorld(
             from: stored,
-            liveWindows: Array(world.windows.values),
+            liveWindows: [try #require(world.windows[second])],
             displays: world.displays,
             activeSpace: secondSpace,
             spaceTopology: SpaceTopology(
                 activeSpaceByDisplay: [display: secondSpace],
-                windowSpace: [first: firstSpace, second: secondSpace],
+                windowSpace: [second: secondSpace],
                 quality: .managedDisplaySpaces
             ),
             config: .default
         )
 
         #expect((stored.workspaces ?? []).map(\.spaceID).sorted { $0.raw < $1.raw } == [firstSpace, secondSpace])
-        #expect(restored.spaces[firstSpace]?.displays[display]?.tree == pushIntoTree(first, .left, .void))
+        #expect(restored.spaces[firstSpace] == nil)
         #expect(restored.spaces[secondSpace]?.displays[display]?.tree == pushIntoTree(second, .right, .void))
-        #expect(restored.windowSpace == [first: firstSpace, second: secondSpace])
+        #expect(restored.windowSpace == [second: secondSpace])
+        let deferred = deferredSpaces(in: stored, restoredInto: restored)
+        #expect(Array(deferred.keys) == [firstSpace])
+        let resaved = storedWorld(from: restored, deferredSpaces: deferred)
+        #expect(resaved.workspaces == stored.workspaces)
+    }
+
+    @Test("An inactive Space's layout is restored the first time that Space is visible")
+    func deferredSpaceRestoresWhenVisible() throws {
+        let display = DisplayID(raw: 7)
+        let hiddenSpace = SpaceID(raw: 101)
+        let visibleSpace = SpaceID(raw: 202)
+        let editor = WindowID(raw: 301)
+        let editorRef = storedRef(title: "Editor", occurrence: 0, frame: CGRect(x: 0, y: 0, width: 600, height: 800))
+        let stored = StoredWorld(
+            schemaVersion: StoredWorld.currentSchemaVersion,
+            activeSpace: nil,
+            workspaces: [
+                StoredWorkspace(spaceID: hiddenSpace, space: StoredSpace(
+                    layouts: [StoredDisplayLayout(
+                        displaySlot: 0,
+                        displayFingerprint: "display-7",
+                        tree: .split(makeStoredSplit(axis: .horizontal, cells: [
+                            makeStoredCell(weight: 1, node: .leaf(editorRef)),
+                            makeStoredCell(weight: 1, node: .void)
+                        ])),
+                        floating: []
+                    )],
+                    focused: editorRef
+                ))
+            ],
+            pendingRules: []
+        )
+        let displays = [display: displayInfo(display, slot: 0, x: 0, width: 1200)]
+        let atStartup = restoreWorld(
+            from: stored,
+            liveWindows: [],
+            displays: displays,
+            activeSpace: visibleSpace,
+            config: .default
+        )
+        let deferred = try #require(deferredSpaces(in: stored, restoredInto: atStartup)[hiddenSpace])
+        let visited = World(
+            displays: displays,
+            activeSpace: hiddenSpace,
+            activeSpaceByDisplay: [display: hiddenSpace],
+            spaces: [hiddenSpace: SpaceState(
+                id: hiddenSpace,
+                displays: [display: DisplaySpaceState(displayID: display, tree: .void, floating: [editor])],
+                focused: nil
+            )],
+            windows: [editor: metadata(editor, title: "Editor", frame: CGRect(x: 0, y: 0, width: 600, height: 800))],
+            windowDisplay: [editor: display],
+            windowSpace: [editor: hiddenSpace],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        let restored = try #require(restoringDeferredSpace(deferred, spaceID: hiddenSpace, in: visited))
+
+        #expect(restored.spaces[hiddenSpace]?.displays[display] == DisplaySpaceState(
+            displayID: display,
+            tree: .split(makeSplit(axis: .horizontal, cells: [
+                makeCell(weight: 1, node: .leaf(editor)),
+                makeCell(weight: 1, node: .void)
+            ])),
+            floating: []
+        ))
+        #expect(restored.spaces[hiddenSpace]?.focused == editor)
+    }
+
+    @Test("A Space the user already tiled is not overwritten by its deferred layout")
+    func deferredSpaceSkipsAlreadyTiledSpace() throws {
+        let display = DisplayID(raw: 7)
+        let space = SpaceID(raw: 101)
+        let editor = WindowID(raw: 301)
+        let other = WindowID(raw: 302)
+        let deferred = StoredSpace(
+            layouts: [StoredDisplayLayout(
+                displaySlot: 0,
+                displayFingerprint: "display-7",
+                tree: .leaf(storedRef(title: "Editor", occurrence: 0, frame: nil)),
+                floating: []
+            )],
+            focused: nil
+        )
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0, width: 1200)],
+            activeSpace: space,
+            spaces: [space: SpaceState(
+                id: space,
+                displays: [display: DisplaySpaceState(displayID: display, tree: .leaf(other), floating: [editor])],
+                focused: other
+            )],
+            windows: [
+                editor: metadata(editor, title: "Editor", frame: CGRect(x: 0, y: 0, width: 600, height: 800)),
+                other: metadata(other, title: "Other", frame: CGRect(x: 0, y: 0, width: 1200, height: 800))
+            ],
+            windowDisplay: [editor: display, other: display],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        #expect(restoringDeferredSpace(deferred, spaceID: space, in: world) == nil)
+    }
+
+    @Test("A deferred Space restores even before reconciliation has created state for it")
+    func deferredSpaceRestoresWithoutExistingSpaceState() throws {
+        let display = DisplayID(raw: 7)
+        let visibleSpace = SpaceID(raw: 202)
+        let editor = WindowID(raw: 301)
+        let deferred = StoredSpace(
+            layouts: [StoredDisplayLayout(
+                displaySlot: 0,
+                displayFingerprint: "display-7",
+                tree: .leaf(storedRef(title: "Editor", occurrence: 0, frame: CGRect(x: 0, y: 0, width: 1200, height: 800))),
+                floating: []
+            )],
+            focused: nil
+        )
+        let world = World(
+            displays: [display: displayInfo(display, slot: 0, x: 0, width: 1200)],
+            activeSpace: visibleSpace,
+            activeSpaceByDisplay: [display: visibleSpace],
+            spaces: [:],
+            windows: [editor: metadata(editor, title: "Editor", frame: CGRect(x: 0, y: 0, width: 1200, height: 800))],
+            windowDisplay: [editor: display],
+            windowSpace: [editor: visibleSpace],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        let restored = try #require(restoringDeferredSpace(deferred, spaceID: visibleSpace, in: world))
+
+        #expect(restored.spaces[visibleSpace]?.displays[display] == DisplaySpaceState(
+            displayID: display,
+            tree: .leaf(editor),
+            floating: []
+        ))
+    }
+
+    @Test("Duplicate-title windows restore by last known frame, not by position in the list")
+    func duplicateTitlesRestoreByFrame() throws {
+        let display = DisplayID(raw: 7)
+        let space = SpaceID(raw: 1)
+        let top = CGRect(x: 0, y: 0, width: 1200, height: 266)
+        let middle = CGRect(x: 0, y: 266, width: 1200, height: 267)
+        let bottom = CGRect(x: 0, y: 533, width: 1200, height: 267)
+        let stored = StoredWorld(
+            schemaVersion: StoredWorld.currentSchemaVersion,
+            activeSpace: StoredSpace(
+                layouts: [StoredDisplayLayout(
+                    displaySlot: 0,
+                    displayFingerprint: "display-7",
+                    tree: .split(makeStoredSplit(axis: .vertical, cells: [
+                        makeStoredCell(weight: 1, node: .leaf(storedRef(title: "zsh", occurrence: 0, frame: top))),
+                        makeStoredCell(weight: 1, node: .leaf(storedRef(title: "zsh", occurrence: 1, frame: middle))),
+                        makeStoredCell(weight: 1, node: .leaf(storedRef(title: "zsh", occurrence: 2, frame: bottom)))
+                    ])),
+                    floating: []
+                )],
+                focused: nil
+            ),
+            pendingRules: []
+        )
+        let middleWindow = WindowID(raw: 11)
+        let bottomWindow = WindowID(raw: 12)
+
+        let restored = restoreWorld(
+            from: stored,
+            liveWindows: [
+                metadata(middleWindow, title: "zsh", frame: middle),
+                metadata(bottomWindow, title: "zsh", frame: bottom)
+            ],
+            displays: [display: displayInfo(display, slot: 0, x: 0, width: 1200)],
+            activeSpace: space,
+            config: .default
+        )
+
+        #expect(restored.spaces[space]?.displays[display]?.tree == .split(makeSplit(axis: .vertical, cells: [
+            makeCell(weight: 1, node: .void),
+            makeCell(weight: 1, node: .leaf(middleWindow)),
+            makeCell(weight: 1, node: .leaf(bottomWindow))
+        ])))
+    }
+
+    @Test("Windows that were not in the saved state get open rules and managed minimum sizes at startup")
+    func newWindowsGetRulesAtStartup() throws {
+        let display = DisplayID(raw: 7)
+        let space = SpaceID(raw: 1)
+        let saved = WindowID(raw: 21)
+        let ignored = WindowID(raw: 22)
+        let config = Config(
+            keymap: Config.default.keymap,
+            rules: [WindowRule(predicate: .bundleID("com.example.ignored"), action: .ignore)],
+            zones: Config.default.zones,
+            gaps: Config.default.gaps,
+            border: Config.default.border,
+            hud: Config.default.hud,
+            dragModifier: Config.default.dragModifier,
+            managedRules: [ManagedWindowRule(
+                id: ManagedRuleID(rawValue: "wide"),
+                name: "Wide",
+                matcher: ManagedRuleMatcher(bundleID: "com.example"),
+                policy: ManagedRulePolicy(minimumWidth: 500)
+            )]
+        )
+        let stored = StoredWorld(
+            schemaVersion: StoredWorld.currentSchemaVersion,
+            activeSpace: StoredSpace(
+                layouts: [StoredDisplayLayout(
+                    displaySlot: 0,
+                    displayFingerprint: "display-7",
+                    tree: .leaf(storedRef(title: "Saved", occurrence: 0, frame: CGRect(x: 0, y: 0, width: 1200, height: 800))),
+                    floating: []
+                )],
+                focused: nil
+            ),
+            pendingRules: []
+        )
+        let ignoredWindow = WindowMetadata(
+            id: ignored,
+            bundleID: BundleID(raw: "com.example.ignored"),
+            title: "Ignored",
+            role: "AXWindow",
+            pid: 43,
+            frame: CGRect(x: 100, y: 100, width: 300, height: 300),
+            isResizable: true,
+            isMinimized: false
+        )
+
+        let restored = restoreWorld(
+            from: stored,
+            liveWindows: [
+                metadata(saved, title: "Saved", frame: CGRect(x: 0, y: 0, width: 1200, height: 800)),
+                ignoredWindow
+            ],
+            displays: [display: displayInfo(display, slot: 0, x: 0, width: 1200)],
+            activeSpace: space,
+            config: config
+        )
+
+        #expect(restored.windows[ignored] == nil)
+        #expect(restored.spaces[space]?.displays[display]?.tree == .leaf(saved))
+        #expect(restored.windowConstraints == [saved: WindowConstraints(minWidth: 500)])
     }
 
     @Test("StoredWorld JSON round-trips exactly")
