@@ -482,6 +482,85 @@ struct RestoreTests {
         ))
     }
 
+    @Test("A display matched by fingerprint is never also claimed by another layout's slot fallback")
+    func fingerprintMatchIsNotOverwrittenBySlotFallback() throws {
+        let space = SpaceID(raw: 1)
+        let displayX = DisplayID(raw: 1)
+        let displayZ = DisplayID(raw: 3)
+        let onX = WindowID(raw: 31)
+        let refOnX = storedRef(title: "On X", occurrence: 0, frame: CGRect(x: 1200, y: 0, width: 1200, height: 800))
+        let refOnY = storedRef(title: "On Y", occurrence: 0, frame: CGRect(x: 2400, y: 0, width: 1200, height: 800))
+        let stored = StoredWorld(
+            schemaVersion: StoredWorld.currentSchemaVersion,
+            activeSpace: StoredSpace(
+                layouts: [
+                    StoredDisplayLayout(displaySlot: 0, displayFingerprint: "display-1", tree: .leaf(refOnX), floating: []),
+                    StoredDisplayLayout(displaySlot: 1, displayFingerprint: "display-2", tree: .leaf(refOnY), floating: [])
+                ],
+                focused: nil
+            ),
+            pendingRules: []
+        )
+
+        let restored = restoreWorld(
+            from: stored,
+            liveWindows: [metadata(onX, title: "On X", frame: CGRect(x: 1200, y: 0, width: 1200, height: 800))],
+            displays: [
+                displayZ: displayInfo(displayZ, slot: 0, x: 0, width: 1200),
+                displayX: displayInfo(displayX, slot: 1, x: 1200, width: 1200)
+            ],
+            activeSpace: space,
+            config: .default
+        )
+
+        #expect(restored.spaces[space]?.displays[displayX]?.tree == .leaf(onX))
+        #expect(restored.spaces[space]?.displays[displayZ]?.tree == .void)
+    }
+
+    @Test("Two identical monitors sharing a fingerprint each get their own layout by slot")
+    func sharedFingerprintFallsBackToSlot() throws {
+        let space = SpaceID(raw: 1)
+        let left = DisplayID(raw: 1)
+        let right = DisplayID(raw: 2)
+        let onLeft = WindowID(raw: 41)
+        let onRight = WindowID(raw: 42)
+        let refOnLeft = storedRef(title: "Left", occurrence: 0, frame: CGRect(x: 0, y: 0, width: 1200, height: 800))
+        let refOnRight = storedRef(title: "Right", occurrence: 0, frame: CGRect(x: 1200, y: 0, width: 1200, height: 800))
+        let stored = StoredWorld(
+            schemaVersion: StoredWorld.currentSchemaVersion,
+            activeSpace: StoredSpace(
+                layouts: [
+                    StoredDisplayLayout(displaySlot: 0, displayFingerprint: "twin", tree: .leaf(refOnLeft), floating: []),
+                    StoredDisplayLayout(displaySlot: 1, displayFingerprint: "twin", tree: .leaf(refOnRight), floating: [])
+                ],
+                focused: nil
+            ),
+            pendingRules: []
+        )
+        let displays = [
+            left: DisplayInfo(id: left, slot: 0, fingerprint: "twin",
+                              frame: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                              visibleFrame: CGRect(x: 0, y: 0, width: 1200, height: 800)),
+            right: DisplayInfo(id: right, slot: 1, fingerprint: "twin",
+                               frame: CGRect(x: 1200, y: 0, width: 1200, height: 800),
+                               visibleFrame: CGRect(x: 1200, y: 0, width: 1200, height: 800))
+        ]
+
+        let restored = restoreWorld(
+            from: stored,
+            liveWindows: [
+                metadata(onLeft, title: "Left", frame: CGRect(x: 0, y: 0, width: 1200, height: 800)),
+                metadata(onRight, title: "Right", frame: CGRect(x: 1200, y: 0, width: 1200, height: 800))
+            ],
+            displays: displays,
+            activeSpace: space,
+            config: .default
+        )
+
+        #expect(restored.spaces[space]?.displays[left]?.tree == .leaf(onLeft))
+        #expect(restored.spaces[space]?.displays[right]?.tree == .leaf(onRight))
+    }
+
     @Test("Duplicate-title windows restore by last known frame, not by position in the list")
     func duplicateTitlesRestoreByFrame() throws {
         let display = DisplayID(raw: 7)
@@ -585,7 +664,7 @@ struct RestoreTests {
 
         #expect(restored.windows[ignored] == nil)
         #expect(restored.spaces[space]?.displays[display]?.tree == .leaf(saved))
-        #expect(restored.windowConstraints == [saved: WindowConstraints(minWidth: 500)])
+        #expect(effectiveWindowConstraints(in: restored) == [saved: WindowConstraints(minWidth: 500)])
     }
 
     @Test("StoredWorld JSON round-trips exactly")

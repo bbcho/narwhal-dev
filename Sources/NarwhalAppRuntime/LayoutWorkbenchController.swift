@@ -868,8 +868,17 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
             matchCounts: managedRuleMatchCounts()
         ) { [weak self] rules in
             guard let self else { return }
-            try self.managedRulesStore.save(rules)
+            // Activation validates against the live config, so it runs first; if
+            // the save then fails, the previous rules go back so the live rules
+            // always match what is on disk.
+            let previous = self.managedRules
             try await self.activateManagedRules(rules)
+            do {
+                try self.managedRulesStore.save(rules)
+            } catch {
+                try? await self.activateManagedRules(previous)
+                throw error
+            }
             self.managedRules = rules
             self.artifactWarnings.removeValue(forKey: .managedRules)
             self.artifactWarnings.removeValue(forKey: .operation)

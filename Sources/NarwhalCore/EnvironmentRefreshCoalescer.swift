@@ -106,9 +106,11 @@ public func scheduleEnvironmentRefresh(
     _ reason: EnvironmentRefreshReason,
     in state: EnvironmentRefreshCoalescerState
 ) -> EnvironmentRefreshSchedule {
+    // A request retained across partial snapshots keeps each reason once.
+    let pendingReasons = state.pending?.reasons ?? []
     let request = CoalescedEnvironmentRefresh(
         generation: state.nextGeneration,
-        reasons: (state.pending?.reasons ?? []) + [reason]
+        reasons: pendingReasons.contains(reason) ? pendingReasons : pendingReasons + [reason]
     )
     return EnvironmentRefreshSchedule(
         state: EnvironmentRefreshCoalescerState(

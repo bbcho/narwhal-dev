@@ -55,6 +55,20 @@ struct ManagedRulesStoreTests {
         #expect(FileManager.default.fileExists(atPath: context.store.url.path))
     }
 
+    @Test("Saving never overwrites rules written by a newer Narwhal")
+    func saveRefusesToOverwriteNewerSchema() throws {
+        let context = try temporaryStore()
+        defer { try? FileManager.default.removeItem(at: context.directory) }
+        try FileManager.default.createDirectory(at: context.directory, withIntermediateDirectories: true)
+        let newer = try JSONEncoder().encode(StoredManagedRules(schemaVersion: 999, rules: [sampleRule()]))
+        try newer.write(to: context.store.url)
+
+        #expect(throws: ManagedRulesStoreError.unsupportedSchemaVersion(found: 999, supported: 1)) {
+            try context.store.save([sampleRule()])
+        }
+        #expect(try Data(contentsOf: context.store.url) == newer)
+    }
+
     @Test("Invalid rules are rejected before a file is written")
     func invalidRuleIsNotWritten() throws {
         let context = try temporaryStore()

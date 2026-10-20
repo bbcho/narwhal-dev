@@ -56,12 +56,15 @@ public func managedDisplaySpaceRowsByDisplay(
     rows: [ManagedDisplaySpacesDisplayRow],
     displays: [DisplayID: DisplayInfo]
 ) -> [DisplayID: ManagedDisplaySpacesDisplayRow] {
+    // Identical monitors can report the same fingerprint; then it identifies
+    // neither display, and both fall back to slot order.
     let displaysByFingerprint = Dictionary(
-        uniqueKeysWithValues: displays.compactMap { displayID, display -> (String, DisplayID)? in
+        grouping: displays.compactMap { displayID, display -> (String, DisplayID)? in
             guard let fingerprint = display.fingerprint?.lowercased() else { return nil }
             return (fingerprint, displayID)
-        }
-    )
+        },
+        by: \.0
+    ).compactMapValues { matches in matches.count == 1 ? matches[0].1 : nil }
     let displaysBySlot = displays.values.sorted { lhs, rhs in
         if lhs.slot != rhs.slot { return lhs.slot < rhs.slot }
         return lhs.id.raw < rhs.id.raw

@@ -25,6 +25,31 @@ struct NamedLayoutsTests {
         #expect(result.isComplete)
     }
 
+    @Test("A slot that names a window's title gets that window before a slot that matches any title")
+    func specificSlotsClaimWindowsFirst() throws {
+        let layout = NamedLayout(
+            id: NamedLayoutID(rawValue: "notes"),
+            name: "Notes",
+            displays: [DisplayLayoutTemplate(
+                displaySlot: 0,
+                root: .split(axis: .horizontal, cells: [
+                    LayoutTemplateCell(weight: 1, node: .slot(slot("any", bundleID: "com.example.editor"))),
+                    LayoutTemplateCell(weight: 1, node: .slot(slot("main", bundleID: "com.example.editor", title: .exact("Main"))))
+                ])
+            )]
+        )
+        let main = candidate(id: 1, title: "Main", x: 0, displaySlot: 0)
+        let scratch = candidate(id: 2, title: "Scratch", x: 500, displaySlot: 0)
+
+        let result = try matchNamedLayout(layout, candidates: [main, scratch], availableDisplaySlots: [0]).get()
+
+        #expect(result.matches == [
+            MatchedLayoutSlot(slotID: LayoutSlotID(rawValue: "any"), windowID: scratch.window.id, targetDisplaySlot: 0),
+            MatchedLayoutSlot(slotID: LayoutSlotID(rawValue: "main"), windowID: main.window.id, targetDisplaySlot: 0)
+        ])
+        #expect(result.isComplete)
+    }
+
     @Test("Missing evidence is explicit")
     func unmatchedSlotsWindowsAndDisplaysAreReported() throws {
         let layout = NamedLayout(

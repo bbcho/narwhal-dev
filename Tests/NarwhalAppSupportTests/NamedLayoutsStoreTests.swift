@@ -47,6 +47,20 @@ struct NamedLayoutsStoreTests {
         #expect(!FileManager.default.fileExists(atPath: context.store.url.path))
     }
 
+    @Test("Saving never overwrites layouts written by a newer Narwhal")
+    func saveRefusesToOverwriteNewerSchema() throws {
+        let context = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: context.directory) }
+        try FileManager.default.createDirectory(at: context.directory, withIntermediateDirectories: true)
+        let newer = try JSONEncoder().encode(StoredNamedLayouts(schemaVersion: 999, layouts: [sampleLayout()]))
+        try newer.write(to: context.store.url)
+
+        #expect(throws: NamedLayoutsStoreError.unsupportedSchemaVersion(found: 999, supported: 1)) {
+            try context.store.save([sampleLayout()])
+        }
+        #expect(try Data(contentsOf: context.store.url) == newer)
+    }
+
     private func temporaryStore() -> (directory: URL, store: NamedLayoutsStore) {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("narwhal-layouts-\(UUID().uuidString)", isDirectory: true)

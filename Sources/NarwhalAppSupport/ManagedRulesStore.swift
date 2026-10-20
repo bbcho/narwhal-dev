@@ -94,6 +94,10 @@ public struct ManagedRulesStore: Sendable {
     }
 
     public func save(_ rules: [ManagedWindowRule]) throws {
+        let current = StoredManagedRules.currentSchemaVersion
+        if let found = newerSchemaVersion(ofArtifactAt: url, current: current, maximumSize: Self.maximumFileSize) {
+            throw ManagedRulesStoreError.unsupportedSchemaVersion(found: found, supported: current)
+        }
         let stored = try validated(StoredManagedRules(rules: rules))
         try writePrivateArtifact(encode(stored), to: url)
     }

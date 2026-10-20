@@ -39,7 +39,8 @@ struct WindowRuleIntegrationTests {
         )
 
         #expect(next.pendingRules[window] == RuleAction.forceFloat)
-        #expect(next.windowConstraints[window] == WindowConstraints(minWidth: 640, minHeight: 360))
+        #expect(effectiveWindowConstraints(in: next)[window] == WindowConstraints(minWidth: 640, minHeight: 360))
+        #expect(next.windowConstraints[window] == nil)
     }
 
     @Test("Window opened applies force-float rule to world state")

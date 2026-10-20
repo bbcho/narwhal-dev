@@ -371,37 +371,17 @@ public func restoreWorld(
     return worldByApplyingRulesAfterRestore(restored, restoredWindowIDs: Set(projection.displayByWindow.keys))
 }
 
-/// Restoring does not open windows, so rules would never run for windows that
-/// were not in the saved state. Those open now; restored windows keep their
-/// placement but still get managed minimum sizes.
+/// Restoring does not open windows, so open rules would never run for windows
+/// that were not in the saved state. Those open now; restored windows keep
+/// their placement.
 private func worldByApplyingRulesAfterRestore(_ world: World, restoredWindowIDs: Set<WindowID>) -> World {
-    let withConstraints = restoredWindowIDs.sorted { $0.raw < $1.raw }.reduce(world) { current, windowID in
-        guard let metadata = current.windows[windowID] else { return current }
-        return worldBySettingConstraints(constraintsByApplyingManagedRule(to: metadata, in: current), in: current)
-    }
-    return world.windows.keys
+    world.windows.keys
         .filter { !restoredWindowIDs.contains($0) }
         .sorted { $0.raw < $1.raw }
-        .reduce(withConstraints) { current, windowID in
+        .reduce(world) { current, windowID in
             guard let metadata = current.windows[windowID] else { return current }
             return worldByOpeningWindow(metadata, in: current)
         }
-}
-
-private func worldBySettingConstraints(_ constraints: [WindowID: WindowConstraints], in world: World) -> World {
-    World(
-        displays: world.displays,
-        activeSpace: world.activeSpace,
-        activeSpaceByDisplay: world.activeSpaceByDisplay,
-        spaces: world.spaces,
-        windows: world.windows,
-        windowDisplay: world.windowDisplay,
-        windowSpace: world.windowSpace,
-        observedVisibleWindows: world.observedVisibleWindows,
-        windowConstraints: constraints,
-        pendingRules: world.pendingRules,
-        config: world.config
-    )
 }
 
 /// Only Spaces visible at startup restore immediately: windows on other Spaces
@@ -735,10 +715,12 @@ private func restoreSpace(
     matcher: RestoreMatcher,
     displays: [DisplayID: DisplayInfo]
 ) -> RestoredSpaceProjection {
-    let restoredDisplays = storedSpace.layouts.reduce(
+    let displayForLayout = matchDisplays(for: storedSpace.layouts, displays: displays)
+    let restoredDisplays = storedSpace.layouts.indices.reduce(
         RestoredDisplayAccumulator(matcher: matcher, displayStates: [:], displayByWindow: [:], spaceByWindow: [:])
-    ) { state, layout in
-        guard let displayID = matchDisplay(for: layout, displays: displays) else { return state }
+    ) { state, index in
+        let layout = storedSpace.layouts[index]
+        guard let displayID = displayForLayout[index] else { return state }
         let restoredLayout = restoreLayout(
             layout,
             displayID: displayID,
@@ -994,12 +976,32 @@ private func ruleAction(from action: StoredRuleAction) -> RuleAction {
     }
 }
 
-private func matchDisplay(for layout: StoredDisplayLayout, displays: [DisplayID: DisplayInfo]) -> DisplayID? {
-    if let fingerprint = layout.displayFingerprint,
-       let exact = displays.first(where: { $0.value.fingerprint == fingerprint }) {
-        return exact.key
+/// Maps each stored layout (by index) to a current display. Exact fingerprints
+/// claim their displays first; slot order is a fallback only onto displays no
+/// other layout claimed, so a vanished display's layout cannot land on a
+/// display that still has its own.
+private func matchDisplays(
+    for layouts: [StoredDisplayLayout],
+    displays: [DisplayID: DisplayInfo]
+) -> [Int: DisplayID] {
+    let exact = layouts.indices.reduce(into: [Int: DisplayID]()) { result, index in
+        // A fingerprint shared by identical monitors identifies neither one.
+        guard let fingerprint = layouts[index].displayFingerprint,
+              case let matches = displays.filter({ $0.value.fingerprint == fingerprint }),
+              matches.count == 1,
+              let match = matches.first?.key,
+              !result.values.contains(match)
+        else { return }
+        result[index] = match
     }
-    return displays.first(where: { $0.value.slot == layout.displaySlot })?.key
+    return layouts.indices.reduce(into: exact) { result, index in
+        guard result[index] == nil,
+              let match = displays
+                  .filter({ !result.values.contains($0.key) && $0.value.slot == layouts[index].displaySlot })
+                  .min(by: { $0.key.raw < $1.key.raw })?.key
+        else { return }
+        result[index] = match
+    }
 }
 
 private func displayOwnership(

@@ -128,6 +128,7 @@ public func workbenchPresentation(
     runtime: WorldRuntimeState,
     snapshotQuality: AXSnapshotQuality?
 ) -> WorkbenchPresentation {
+    let constraints = effectiveWindowConstraints(in: world)
     let presentations = world.spaces.keys.sorted { $0.raw < $1.raw }.flatMap { spaceID in
         guard let space = world.spaces[spaceID] else { return [WorkspacePresentation]() }
         return space.displays.keys.sorted { displaySort($0, $1, in: world) }.compactMap { displayID in
@@ -151,7 +152,7 @@ public func workbenchPresentation(
                         interaction: runtime.windowInteractions[id]
                     ),
                     isFocused: focused == id,
-                    constraints: world.windowConstraints[id] ?? WindowConstraints(),
+                    constraints: constraints[id] ?? WindowConstraints(),
                     ruleSource: resolveWindowOpen(
                         metadata,
                         managedRules: world.config.managedRules,

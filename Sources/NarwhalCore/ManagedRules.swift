@@ -83,6 +83,7 @@ public enum ManagedRuleValidationError: Error, Equatable, Sendable {
     case emptyZone(index: Int)
     case invalidMinimumWidth(index: Int)
     case invalidMinimumHeight(index: Int)
+    case unknownZone(index: Int, zone: ZoneID)
 }
 
 public enum WindowRuleSource: Equatable, Sendable {
@@ -101,8 +102,11 @@ public struct WindowOpenResolution: Equatable, Sendable {
     }
 }
 
+/// `zones` are the configured zone IDs; pass them whenever the config is known
+/// so a rule cannot silently target a zone that does not exist.
 public func validateManagedRules(
-    _ rules: [ManagedWindowRule]
+    _ rules: [ManagedWindowRule],
+    zones: Set<ZoneID>? = nil
 ) -> Result<[ManagedWindowRule], ManagedRuleValidationError> {
     var ids = Set<ManagedRuleID>()
     for (index, rule) in rules.enumerated() {
@@ -117,7 +121,7 @@ public func validateManagedRules(
         }
 
         let bundleID = normalized(rule.matcher.bundleID)
-        let titleRegex = normalized(rule.matcher.titleRegex)
+        let titleRegex = titlePattern(rule.matcher.titleRegex)
         let role = normalized(rule.matcher.role)
         if bundleID == nil, titleRegex == nil, role == nil {
             return .failure(.emptyMatcher(index: index))
@@ -131,6 +135,8 @@ public func validateManagedRules(
             return .failure(.invalidDisplaySlot(index: index, slot: slot))
         case .zone(let zoneID) where trimmed(zoneID.raw).isEmpty:
             return .failure(.emptyZone(index: index))
+        case .zone(let zoneID) where zones.map({ !$0.contains(zoneID) }) ?? false:
+            return .failure(.unknownZone(index: index, zone: zoneID))
         default:
             break
         }
@@ -189,6 +195,17 @@ public func managedConstraints(
     return constraints
 }
 
+/// The minimum sizes layout must honor: what applications reported through
+/// AX clamps (`world.windowConstraints`) combined with the current managed
+/// rules. Managed minimums are derived, never stored, so editing or deleting a
+/// rule takes effect on open windows at the next layout.
+public func effectiveWindowConstraints(in world: World) -> [WindowID: WindowConstraints] {
+    world.windows.values.reduce(into: world.windowConstraints) { result, window in
+        guard let managed = managedConstraints(for: window, rules: world.config.managedRules) else { return }
+        result[window.id] = (result[window.id] ?? WindowConstraints()).merged(with: managed)
+    }
+}
+
 public func isExcludedFromFocusCycle(
     _ metadata: WindowMetadata,
     rules: [ManagedWindowRule]
@@ -203,7 +220,7 @@ private func managedRuleMatches(_ matcher: ManagedRuleMatcher, metadata: WindowM
     if let role = normalized(matcher.role), metadata.role != role {
         return false
     }
-    if let titleRegex = normalized(matcher.titleRegex) {
+    if let titleRegex = titlePattern(matcher.titleRegex) {
         guard let regex = try? Regex(titleRegex), metadata.title.contains(regex) else { return false }
     }
     return true
@@ -245,6 +262,13 @@ private func normalized(_ value: String?) -> String? {
     guard let value else { return nil }
     let trimmedValue = trimmed(value)
     return trimmedValue.isEmpty ? nil : trimmedValue
+}
+
+/// Title patterns are used exactly as written: whitespace can be part of what
+/// they match (" - Draft$"). Only an all-blank pattern counts as absent.
+private func titlePattern(_ value: String?) -> String? {
+    guard let value, !trimmed(value).isEmpty else { return nil }
+    return value
 }
 
 private func trimmed(_ value: String) -> String {

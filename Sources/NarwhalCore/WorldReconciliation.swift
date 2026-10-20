@@ -567,22 +567,9 @@ private func worldByTrackingOpenedWindow(
             spaceID: targetActiveSpace,
             to: world.observedVisibleWindows
         ),
-        windowConstraints: constraintsByApplyingManagedRule(to: metadata, in: world),
+        windowConstraints: world.windowConstraints,
         pendingRules: world.pendingRules.settingOrRemoving(metadata.id, to: pendingRule),
         config: world.config
-    )
-}
-
-func constraintsByApplyingManagedRule(
-    to metadata: WindowMetadata,
-    in world: World
-) -> [WindowID: WindowConstraints] {
-    guard let constraints = managedConstraints(for: metadata, rules: world.config.managedRules) else {
-        return world.windowConstraints
-    }
-    return world.windowConstraints.setting(
-        metadata.id,
-        to: (world.windowConstraints[metadata.id] ?? WindowConstraints()).merged(with: constraints)
     )
 }
 

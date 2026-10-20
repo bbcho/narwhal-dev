@@ -13,6 +13,22 @@ func readPrivateArtifact<Failure: Error>(
     return try Data(contentsOf: url)
 }
 
+/// The schema version of an existing artifact when it is newer than
+/// `current`, so a save can refuse to overwrite another version's data.
+func newerSchemaVersion(ofArtifactAt url: URL, current: Int, maximumSize: Int) -> Int? {
+    struct SchemaVersionProbe: Decodable {
+        let schemaVersion: Int
+    }
+    struct TooLarge: Error {}
+    guard let data = try? readPrivateArtifact(at: url, maximumSize: maximumSize, fileTooLarge: { _, _ in TooLarge() }),
+          let probe = try? JSONDecoder().decode(SchemaVersionProbe.self, from: data),
+          probe.schemaVersion > current
+    else {
+        return nil
+    }
+    return probe.schemaVersion
+}
+
 func writePrivateArtifact(_ data: Data, to url: URL) throws {
     let directory = url.deletingLastPathComponent()
     try FileManager.default.createDirectory(

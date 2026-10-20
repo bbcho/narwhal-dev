@@ -428,7 +428,7 @@ public func workspaceLayout(
         displayID: key.displayID,
         frame: display.visibleFrame,
         gaps: world.config.gaps,
-        constraints: world.windowConstraints
+        constraints: effectiveWindowConstraints(in: world)
     ) {
     case .solved(let layout, _):
         return .success(hidingMinimizedWindows(layout, in: world))

@@ -94,6 +94,29 @@ struct ManagedRulesTests {
         #expect(validateManagedRules([duplicateA, duplicateB]) == .failure(.duplicateID(duplicateA.id)))
     }
 
+    @Test("A managed title pattern keeps its leading and trailing spaces")
+    func managedTitlePatternKeepsSurroundingSpaces() {
+        let draft = rule(
+            id: "draft",
+            name: "Draft",
+            matcher: ManagedRuleMatcher(titleRegex: " - Draft$"),
+            placement: .forceFloat
+        )
+
+        #expect(firstMatchingManagedRule(metadata(bundleID: "com.example.Editor", title: "Notes - Draft"), rules: [draft]) == draft)
+        #expect(firstMatchingManagedRule(metadata(bundleID: "com.example.Editor", title: "Notes- Draft"), rules: [draft]) == nil)
+    }
+
+    @Test("A managed rule that places windows in a zone must name a configured zone")
+    func managedZonePlacementMustExist() {
+        let zoned = rule(id: "zoned", name: "Zoned", matcher: ManagedRuleMatcher(bundleID: "a"), placement: .zone(ZoneID(raw: "sidebar")))
+
+        #expect(validateManagedRules([zoned], zones: [ZoneID(raw: "left-half")]) == .failure(
+            .unknownZone(index: 0, zone: ZoneID(raw: "sidebar"))
+        ))
+        #expect(validateManagedRules([zoned], zones: [ZoneID(raw: "sidebar")]) == .success([zoned]))
+    }
+
     @Test("Managed policies expose focus and minimum-size behavior")
     func auxiliaryPoliciesAreResolvedFromFirstMatch() {
         let window = metadata(bundleID: "com.example.Editor")

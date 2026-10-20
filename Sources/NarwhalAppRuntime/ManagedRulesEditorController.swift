@@ -308,6 +308,9 @@ final class ManagedRulesEditorController: NSObject {
             do {
                 try await saveRules(rules)
                 closeSheet()
+            } catch let error as ManagedRuleValidationError {
+                saveButton.isEnabled = true
+                showError(validationMessage(error))
             } catch {
                 saveButton.isEnabled = true
                 showError("Rules were not saved or activated: \(error)")
@@ -330,7 +333,7 @@ final class ManagedRulesEditorController: NSObject {
         guard !name.isEmpty else { return .failure("Enter a descriptive rule name.") }
         let matcher = ManagedRuleMatcher(
             bundleID: optional(bundleField.stringValue),
-            titleRegex: optional(titleRegexField.stringValue),
+            titleRegex: titlePattern(titleRegexField.stringValue),
             role: optional(roleField.stringValue)
         )
         guard matcher.bundleID != nil || matcher.titleRegex != nil || matcher.role != nil else {
@@ -442,6 +445,11 @@ private func optionalPositiveDouble(_ text: String, field: String) -> RuleFormRe
     return .success(value)
 }
 
+/// Title patterns keep their whitespace: " - Draft$" must not become "- Draft$".
+private func titlePattern(_ text: String) -> String? {
+    trimmed(text).isEmpty ? nil : text
+}
+
 private func optional(_ text: String) -> String? {
     let value = trimmed(text)
     return value.isEmpty ? nil : value
@@ -469,6 +477,8 @@ private func validationMessage(_ error: ManagedRuleValidationError) -> String {
         return "Rule \(index + 1) has an invalid display slot."
     case .emptyZone(let index):
         return "Rule \(index + 1) needs a configured zone ID."
+    case .unknownZone(let index, let zone):
+        return "Rule \(index + 1) names zone \"\(zone.raw)\", which is not in the current config."
     case .invalidMinimumWidth(let index):
         return "Rule \(index + 1) has an invalid minimum width."
     case .invalidMinimumHeight(let index):

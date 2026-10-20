@@ -240,31 +240,46 @@ public func matchNamedLayout(
     var unmatchedSlots: [UnmatchedLayoutSlot] = []
     let orderedDisplays = layout.displays.sorted { $0.displaySlot < $1.displaySlot }
 
-    for display in orderedDisplays where availableDisplaySlots.contains(display.displaySlot) {
-        for slot in templateSlots(in: display.root) {
-            let candidate = orderedCandidates
-                .filter { unassigned.contains($0.window.id) && layoutMatcher(slot.matcher, matches: $0.window) }
-                .sorted { lhs, rhs in
-                    let lhsOnTarget = lhs.currentDisplaySlot == display.displaySlot
-                    let rhsOnTarget = rhs.currentDisplaySlot == display.displaySlot
-                    if lhsOnTarget != rhsOnTarget { return lhsOnTarget }
-                    return candidateScreenOrder(lhs, rhs)
-                }
-                .first
-            if let candidate {
-                unassigned.remove(candidate.window.id)
-                matches.append(MatchedLayoutSlot(
-                    slotID: slot.id,
-                    windowID: candidate.window.id,
-                    targetDisplaySlot: display.displaySlot
-                ))
-            } else {
-                unmatchedSlots.append(UnmatchedLayoutSlot(
-                    slotID: slot.id,
-                    targetDisplaySlot: display.displaySlot,
-                    matcher: slot.matcher
-                ))
+    // Specific slots choose first so a slot that accepts any title cannot take
+    // the only window a title-matching slot accepts. Results keep template order.
+    let templateOrder = orderedDisplays
+        .filter { availableDisplaySlots.contains($0.displaySlot) }
+        .flatMap { display in templateSlots(in: display.root).map { (display: display, slot: $0) } }
+    let assignmentOrder = templateOrder.indices.sorted { lhs, rhs in
+        let lhsSpecificity = matcherSpecificity(templateOrder[lhs].slot.matcher)
+        let rhsSpecificity = matcherSpecificity(templateOrder[rhs].slot.matcher)
+        return lhsSpecificity != rhsSpecificity ? lhsSpecificity > rhsSpecificity : lhs < rhs
+    }
+    var assignedBySlotIndex: [Int: MatchedLayoutSlot] = [:]
+    for index in assignmentOrder {
+        let (display, slot) = templateOrder[index]
+        let candidate = orderedCandidates
+            .filter { unassigned.contains($0.window.id) && layoutMatcher(slot.matcher, matches: $0.window) }
+            .sorted { lhs, rhs in
+                let lhsOnTarget = lhs.currentDisplaySlot == display.displaySlot
+                let rhsOnTarget = rhs.currentDisplaySlot == display.displaySlot
+                if lhsOnTarget != rhsOnTarget { return lhsOnTarget }
+                return candidateScreenOrder(lhs, rhs)
             }
+            .first
+        if let candidate {
+            unassigned.remove(candidate.window.id)
+            assignedBySlotIndex[index] = MatchedLayoutSlot(
+                slotID: slot.id,
+                windowID: candidate.window.id,
+                targetDisplaySlot: display.displaySlot
+            )
+        }
+    }
+    for (index, entry) in templateOrder.enumerated() {
+        if let match = assignedBySlotIndex[index] {
+            matches.append(match)
+        } else {
+            unmatchedSlots.append(UnmatchedLayoutSlot(
+                slotID: entry.slot.id,
+                targetDisplaySlot: entry.display.displaySlot,
+                matcher: entry.slot.matcher
+            ))
         }
     }
 
@@ -274,6 +289,10 @@ public func matchNamedLayout(
         unmatchedWindows: orderedCandidates.map(\.window.id).filter(unassigned.contains),
         missingDisplaySlots: orderedDisplays.map(\.displaySlot).filter { !availableDisplaySlots.contains($0) }
     ))
+}
+
+private func matcherSpecificity(_ matcher: LayoutWindowMatcher) -> Int {
+    (matcher.title == nil ? 0 : 2) + (matcher.role == nil ? 0 : 1)
 }
 
 public func resolvedTemplateNode(

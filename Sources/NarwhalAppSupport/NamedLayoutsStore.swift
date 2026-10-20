@@ -97,6 +97,10 @@ public struct NamedLayoutsStore: Sendable {
     }
 
     public func save(_ layouts: [NamedLayout]) throws {
+        let current = StoredNamedLayouts.currentSchemaVersion
+        if let found = newerSchemaVersion(ofArtifactAt: url, current: current, maximumSize: Self.maximumFileSize) {
+            throw NamedLayoutsStoreError.unsupportedSchemaVersion(found: found, supported: current)
+        }
         let stored = try validated(StoredNamedLayouts(layouts: layouts))
         try writePrivateArtifact(encode(stored), to: url)
     }

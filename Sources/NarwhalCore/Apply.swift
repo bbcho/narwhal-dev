@@ -824,7 +824,7 @@ private func spacesByApplyingExternalResize(
         to: newFrame,
         rootFrame: rootFrame,
         innerGap: world.config.gaps.inner,
-        constraints: world.windowConstraints,
+        constraints: effectiveWindowConstraints(in: world),
         displayState.tree
     ) {
     case .success(let resized):

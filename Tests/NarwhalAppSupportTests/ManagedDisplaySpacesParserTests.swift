@@ -48,6 +48,25 @@ struct ManagedDisplaySpacesParserTests {
         ])
     }
 
+    @Test("Two displays reporting the same fingerprint map by slot instead of crashing")
+    func duplicateFingerprintsFallBackToSlot() {
+        let left = DisplayID(raw: 10)
+        let right = DisplayID(raw: 20)
+
+        let rows = managedDisplaySpaceRowsByDisplay(
+            rows: [
+                ManagedDisplaySpacesDisplayRow(fingerprint: "TWIN", activeSpace: SpaceID(raw: 1), spaces: []),
+                ManagedDisplaySpacesDisplayRow(fingerprint: "TWIN", activeSpace: SpaceID(raw: 2), spaces: [])
+            ],
+            displays: [
+                left: display(left, slot: 0, fingerprint: "twin"),
+                right: display(right, slot: 1, fingerprint: "twin")
+            ]
+        )
+
+        #expect(rows.mapValues(\.activeSpace) == [left: SpaceID(raw: 1), right: SpaceID(raw: 2)])
+    }
+
     @Test("Topology builder uses latest row order for duplicate window ownership")
     func topologyBuilderUsesLatestRowOrderForDuplicateWindowOwnership() throws {
         let displayID = DisplayID(raw: 11)

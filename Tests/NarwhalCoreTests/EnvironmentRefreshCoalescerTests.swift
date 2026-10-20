@@ -111,6 +111,15 @@ struct EnvironmentRefreshCoalescerTests {
         ).description == "space transition ended")
     }
 
+    @Test("A reason already pending is not added again, so retained requests stay bounded")
+    func repeatedReasonIsKeptOnce() {
+        let first = scheduleEnvironmentRefresh(.spaceSettled, in: .empty)
+        let second = scheduleEnvironmentRefresh(.spaceSettled, in: first.state)
+        let third = scheduleEnvironmentRefresh(.windowClosed(WindowID(raw: 9)), in: second.state)
+
+        #expect(third.request.reasons == [.spaceSettled, .windowClosed(WindowID(raw: 9))])
+    }
+
     @Test("A restored minimized window reflows the layout so it returns to its slot")
     func restoredWindowReflowsLayout() {
         expectPolicy(environmentRefreshPolicy(

@@ -111,9 +111,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         },
         activateManagedRules: { [weak self] rules in
             guard let self else { return }
-            await self.workspaceMutationGate.perform {
-                await self.activateManagedRules(rules)
+            let activation: Result<Void, Error> = await self.workspaceMutationGate.perform {
+                do {
+                    try await self.activateManagedRules(rules)
+                    return .success(())
+                } catch {
+                    return .failure(error)
+                }
             }
+            try activation.get()
         },
         managedRulesSnapshot: { [weak self] in
             self?.managedRules ?? []
@@ -2820,7 +2826,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         workbenchController.refreshIfVisible()
     }
 
-    private func activateManagedRules(_ rules: [ManagedWindowRule]) async {
+    private func activateManagedRules(_ rules: [ManagedWindowRule]) async throws {
+        if case .failure(let error) = validateManagedRules(rules, zones: Set(config.zones.map(\.id))) {
+            throw error
+        }
         managedRules = rules
         managedRulesWarning = nil
         let activeConfig = config.withManagedRules(rules)
