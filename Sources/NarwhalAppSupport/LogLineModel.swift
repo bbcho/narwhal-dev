@@ -23,7 +23,7 @@ private func logRedaction(_ pattern: String, replacement: String) -> LogRedactio
 
 private let logRedactions: [LogRedaction] = [
     logRedaction(
-        #"title=\"[^\n]*?\"(?=\s+(?:role|frame)=|\)|:)"#,
+        #"(?s)title=\".*?\"(?=\s+(?:role|frame)=|\)|:)"#,
         replacement: "title=<redacted>"
     ),
     logRedaction(
@@ -36,8 +36,13 @@ private let logRedactions: [LogRedaction] = [
     )
 ]
 
-public func redactedLogMessage(_ message: String) -> String {
-    logRedactions.reduce(message) { redacted, redaction in
+/// `homeDirectory` is replaced first and literally: a path like
+/// "/Users/Jane Doe/..." contains a space, which the path pattern would stop at,
+/// leaking "Doe/...".
+public func redactedLogMessage(_ message: String, homeDirectory: String? = nil) -> String {
+    let withoutHome = homeDirectory.flatMap { $0.isEmpty ? nil : $0 }
+        .map { message.replacingOccurrences(of: $0, with: "~") } ?? message
+    return logRedactions.reduce(withoutHome) { redacted, redaction in
         let range = NSRange(redacted.startIndex..., in: redacted)
         return redaction.expression.stringByReplacingMatches(
             in: redacted,

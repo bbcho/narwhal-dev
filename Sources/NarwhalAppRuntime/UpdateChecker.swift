@@ -27,7 +27,8 @@ struct UpdateRelease: Equatable, Sendable {
 }
 
 struct UpdateChecker: Sendable {
-    private static let endpointString = "https://api.github.com/repos/bbcho/narwhal-dev/releases/latest"
+    static let repository = "bbcho/narwhal-dev"
+    private static let endpointString = "https://api.github.com/repos/\(repository)/releases/latest"
     private static let maximumResponseBytes = 1_048_576
 
     let session: URLSession
@@ -80,8 +81,10 @@ func decodeUpdateRelease(_ data: Data) throws -> UpdateRelease {
     else {
         throw UpdateCheckError.invalidRelease
     }
+    // The page is opened in the browser, so it must be this repository's release page.
     guard release.htmlURL.scheme == "https",
-          release.htmlURL.host == "github.com"
+          release.htmlURL.host == "github.com",
+          release.htmlURL.path.hasPrefix("/\(UpdateChecker.repository)/releases/")
     else {
         throw UpdateCheckError.invalidReleasePage
     }

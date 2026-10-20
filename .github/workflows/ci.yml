@@ -31,6 +31,15 @@ jobs:
         run: swift test --disable-sandbox --scratch-path .build/ci-tests --skip IPCTransportTests
       - name: Run IPC integration tests
         run: swift test --disable-sandbox --scratch-path .build/ci-tests --filter IPCTransportTests
+      # Live verifiers need real windows and Accessibility, so CI cannot run
+      # them, but it must still catch API changes that stop them compiling.
+      - name: Compile live verifiers
+        run: >-
+          swift build
+          --disable-sandbox
+          --build-tests
+          -Xswiftc -DNARWHAL_ENABLE_VERIFIERS
+          --scratch-path .build/ci-verifiers
 
   sanitizer:
     runs-on: macos-26

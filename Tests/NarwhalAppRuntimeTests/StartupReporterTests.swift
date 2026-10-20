@@ -109,6 +109,22 @@ struct StartupReporterTests {
         }
     }
 
+    @Test("A long-running log rotates once it grows past the size limit")
+    func logSinkRotatesWhileRunning() throws {
+        let paths = temporaryLogPath()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let sink = FileLogSink(path: paths.file.path, maximumFileBytes: 10, retainedGenerations: 2)
+
+        sink.write(Data("0123456789\n".utf8))
+        sink.write(Data("next\n".utf8))
+        sink.flush()
+
+        #expect(try String(contentsOfFile: paths.file.path + ".1", encoding: .utf8) == "0123456789\n")
+        #expect(try String(contentsOf: paths.file, encoding: .utf8) == "next\n")
+        let attributes = try FileManager.default.attributesOfItem(atPath: paths.file.path)
+        #expect(attributes[.posixPermissions] as? Int == 0o600)
+    }
+
     private func temporaryLogPath() -> (root: URL, file: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("narwhal-log-tests-\(UUID().uuidString)", isDirectory: true)

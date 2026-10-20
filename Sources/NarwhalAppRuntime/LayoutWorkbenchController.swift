@@ -876,7 +876,11 @@ final class LayoutWorkbenchController: NSObject, NSWindowDelegate {
             do {
                 try self.managedRulesStore.save(rules)
             } catch {
-                try? await self.activateManagedRules(previous)
+                do {
+                    try await self.activateManagedRules(previous)
+                } catch let rollbackError {
+                    throw ManagedRulesRollbackFailure(saveError: error, rollbackError: rollbackError)
+                }
                 throw error
             }
             self.managedRules = rules
@@ -1054,5 +1058,18 @@ private func ruleSourceText(_ source: WindowRuleSource) -> String {
     case .managed(_, let name): return "MANAGED · \(name)"
     case .lua(let index): return "LUA · #\(index + 1)"
     case .defaultBehavior: return "DEFAULT"
+    }
+}
+
+/// The new rules could not be saved and the previous ones could not be put
+/// back (for example, one names a zone the config no longer has), so the live
+/// rules now differ from the file until the next successful save.
+private struct ManagedRulesRollbackFailure: Error, CustomStringConvertible {
+    let saveError: Error
+    let rollbackError: Error
+
+    var description: String {
+        "\(saveError); the previous rules could not be restored either (\(rollbackError)), "
+            + "so the new rules are active but not saved"
     }
 }

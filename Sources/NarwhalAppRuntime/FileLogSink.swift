@@ -96,6 +96,14 @@ final class FileLogSink: @unchecked Sendable {
             if synchronizing {
                 try handle.synchronize()
             }
+            // The app runs for weeks; rotating only at launch would let the log grow unbounded.
+            if try handle.offset() >= maximumFileBytes {
+                try handle.close()
+                self.handle = nil
+                rotateIfNeeded()
+                self.handle = Self.openAppendOnlyLog(path: path)
+                withStateLock { available = self.handle != nil }
+            }
         } catch {
             reportFailureOnce(error)
         }

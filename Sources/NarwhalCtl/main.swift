@@ -38,11 +38,12 @@ struct NarwhalCtl {
 }
 
 private struct Invocation {
-    let socketPath: String
+    /// nil means the default per-user socket, resolved only when connecting.
+    let socketPath: String?
     let command: IPCCommandDTO
     let jsonOutput: Bool
 
-    init(socketPath: String, command: IPCCommandDTO, jsonOutput: Bool = false) {
+    init(socketPath: String?, command: IPCCommandDTO, jsonOutput: Bool = false) {
         self.socketPath = socketPath
         self.command = command
         self.jsonOutput = jsonOutput
@@ -108,7 +109,7 @@ private enum NarwhalCtlError: Error, CustomStringConvertible {
 }
 
 private func parseInvocation(_ arguments: [String]) throws -> Invocation {
-    var socketPath = try IPCDefaults.socketPath()
+    var socketPath: String?
     var positional: [String] = []
     var explicitWindowID: WindowID?
     var resizeDelta: Double?

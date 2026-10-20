@@ -25,7 +25,8 @@ struct UpdateCheckerTests {
             #"{"tag_name":"v1.2.3","html_url":"https://github.com/bbcho/narwhal-dev/releases","draft":true,"prerelease":false}"#,
             #"{"tag_name":"v1.2.3","html_url":"https://github.com/bbcho/narwhal-dev/releases","draft":false,"prerelease":true}"#,
             #"{"tag_name":"latest","html_url":"https://github.com/bbcho/narwhal-dev/releases","draft":false,"prerelease":false}"#,
-            #"{"tag_name":"v1.2.3","html_url":"https://example.com/release","draft":false,"prerelease":false}"#
+            #"{"tag_name":"v1.2.3","html_url":"https://example.com/release","draft":false,"prerelease":false}"#,
+            #"{"tag_name":"v1.2.3","html_url":"https://github.com/someone-else/narwhal-dev/releases/tag/v1.2.3","draft":false,"prerelease":false}"#
         ]
 
         for payload in payloads {

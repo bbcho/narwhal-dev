@@ -5,6 +5,9 @@ import Darwin
 import Foundation
 import NarwhalAppSupport
 import NarwhalCore
+import os
+
+private let axLogger = Logger(subsystem: "ca.quantim.narwhal", category: "ax")
 
 private typealias AXUIElementGetWindowFunction =
     @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
@@ -902,17 +905,12 @@ struct AXClient {
 
         let enhancedUIOverride = disableEnhancedUserInterfaceIfNeeded(processID: processID)
         let outcome = await writeFrame(initialElement, matching: metadata, to: frame)
-        if let enhancedUIOverride {
-            switch setBool(
-                true,
-                attribute: "AXEnhancedUserInterface",
-                on: enhancedUIOverride
-            ) {
-            case .success:
-                break
-            case .failure(let error):
-                return .failed(error)
-            }
+        // The frame outcome is the truth about the window: failing to restore
+        // the app's accessibility setting afterwards must not turn a converged
+        // write into a failure (and a needless rollback).
+        if let enhancedUIOverride,
+           case .failure(let error) = setBool(true, attribute: "AXEnhancedUserInterface", on: enhancedUIOverride) {
+            axLogger.error("Could not restore AXEnhancedUserInterface: \(error.description, privacy: .public)")
         }
         return outcome
     }

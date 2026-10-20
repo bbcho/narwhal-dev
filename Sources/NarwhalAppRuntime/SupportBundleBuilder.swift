@@ -83,9 +83,10 @@ struct SupportBundleBuilder: Sendable {
                 retained.removeSubrange(...newline)
             }
             remainingBytes -= retained.count
+            let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.path
             let content = String(decoding: retained, as: UTF8.self)
                 .split(separator: "\n", omittingEmptySubsequences: false)
-                .map { redactedLogMessage(String($0)) }
+                .map { redactedLogMessage(String($0), homeDirectory: homeDirectory) }
                 .joined(separator: "\n")
             sections.append("--- \(name) ---\n\(content)")
         }

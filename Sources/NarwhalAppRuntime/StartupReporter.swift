@@ -18,6 +18,7 @@ struct StartupReporter {
     }
 
     private let logger = Logger(subsystem: "ca.quantim.narwhal", category: "app")
+    private let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.path
     private let sink: FileLogSink
     private let timestamp: () -> String
 
@@ -30,13 +31,13 @@ struct StartupReporter {
     }
 
     func info(_ message: String) {
-        let safeMessage = redactedLogMessage(message)
+        let safeMessage = redactedLogMessage(message, homeDirectory: homeDirectory)
         logger.info("\(safeMessage, privacy: .public)")
         write(level: .info, message: safeMessage)
     }
 
     func error(_ message: String) {
-        let safeMessage = redactedLogMessage(message)
+        let safeMessage = redactedLogMessage(message, homeDirectory: homeDirectory)
         logger.error("\(safeMessage, privacy: .public)")
         write(level: .error, message: safeMessage)
     }

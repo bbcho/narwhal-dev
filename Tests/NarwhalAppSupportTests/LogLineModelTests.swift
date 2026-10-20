@@ -31,6 +31,23 @@ struct LogLineModelTests {
         #expect(message.contains("role=AXWindow"))
     }
 
+    @Test("A window title containing a newline is still redacted")
+    func redactsMultilineTitles() {
+        let message = redactedLogMessage("Focused title=\"Draft\nperson@example.com\" role=AXWindow")
+
+        #expect(message == "Focused title=<redacted> role=AXWindow")
+    }
+
+    @Test("A home directory containing a space never leaks part of the user name")
+    func redactsHomeDirectoryWithSpaces() {
+        let message = redactedLogMessage(
+            "Config watcher ready for /Users/Jane Doe/.config/narwhal/init.lua",
+            homeDirectory: "/Users/Jane Doe"
+        )
+
+        #expect(message == "Config watcher ready for ~<path>")
+    }
+
     @Test("Log privacy preserves hotkey slash notation and operational frames")
     func preservesOperationalData() {
         let message = redactedLogMessage(
