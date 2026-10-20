@@ -60,7 +60,12 @@ struct LayoutWorkbenchControllerTests {
         }
         let rule = sampleRule()
 
-        await #expect(throws: (any Error).self) { try await controller.saveManagedRules([rule]) }
+        do {
+            try await controller.saveManagedRules([rule])
+            Issue.record("Expected the save to fail")
+        } catch let error as ManagedRulesRollbackFailure {
+            Issue.record("The rollback succeeded, so the save error should surface, got \(error)")
+        } catch {}
 
         #expect(activations.rules == [[rule], []])
     }

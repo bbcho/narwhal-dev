@@ -1,5 +1,5 @@
-#if NARWHAL_ENABLE_VERIFIERS
 @testable import NarwhalAppRuntime
+import Testing
 import CoreGraphics
 import NarwhalAppSupport
 import NarwhalCore
@@ -172,4 +172,12 @@ enum ObservationReplayVerification {
         )
     }
 }
-#endif
+
+@Suite("Observation replay")
+struct ObservationReplayTests {
+    @Test("Replaying an observed partial topology keeps inactive Space memory and records only visible windows")
+    func partialTopologyReplayKeepsInactiveSpaceMemory() {
+        let result = ObservationReplayVerification.verifyPartialTopologyReplay()
+        #expect(result.passed, Comment(rawValue: result.message))
+    }
+}

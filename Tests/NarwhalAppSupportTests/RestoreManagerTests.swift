@@ -213,7 +213,10 @@ struct RestoreManagerTests {
             Issue.record("Expected empty recovery, got \(outcome)")
             return
         }
-        #expect(recovery.backupError != nil)
+        guard case .decodeFailed = recovery.backupError else {
+            Issue.record("Expected the backup to fail decoding, got \(String(describing: recovery.backupError))")
+            return
+        }
         #expect(recovery.quarantinedFilenames == [
             "state.json.corrupt-both",
             "state.json.previous.corrupt-both"

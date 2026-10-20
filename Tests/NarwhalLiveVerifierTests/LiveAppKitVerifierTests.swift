@@ -63,16 +63,6 @@ struct LiveAppKitVerifierTests {
         try expectPassed(SupportBundlePanelVerification.verifyConfiguration())
     }
 
-    @Test("Observation replay")
-    func observationReplay() throws {
-        try expectPassed(ObservationReplayVerification.verifyPartialTopologyReplay())
-    }
-
-    @Test("Workspace scope")
-    func workspaceScope() throws {
-        try expectPassed(WorkspaceScopeVerification.verifyFocusedCommandsStayOnOneDisplay())
-    }
-
     @Test(
         "Live multi-display workflow",
         .enabled(if: NSScreen.screens.count >= 2, "Requires at least two displays.")
@@ -84,16 +74,6 @@ struct LiveAppKitVerifierTests {
     @Test("Display topology reflow geometry")
     func displayTopologyReflowGeometry() throws {
         try expectPassed(DisplayTopologyReflowVerification.verifyCurrentDisplayReflow())
-    }
-
-    @Test("Focused-unavailable polling")
-    func focusedUnavailablePolling() throws {
-        try expectPassed(FocusedUnavailablePollingVerification.verifyUnavailableFocusIsNotLoggedEveryPoll())
-    }
-
-    @Test("Stable focus reconciliation polling")
-    func stableFocusReconciliationPolling() throws {
-        try expectPassed(FocusedUnavailablePollingVerification.verifyStableFocusIsReconciledEveryPoll())
     }
 
     @Test("Space focus recovery")

@@ -124,7 +124,11 @@ struct LayoutTransactionCoordinatorTests {
             return
         }
         #expect(replans == 1)
-        #expect(replannedConstraints[fixture.first] != nil)
+        let clampedWrite = try #require(fixture.store.writes.first)
+        #expect(clampedWrite.windowID == fixture.first)
+        #expect(replannedConstraints == [
+            fixture.first: WindowConstraints(minWidth: Double(clampedWrite.frame.width) + 10),
+        ])
         #expect(await fixture.actor.layoutHistoryAvailability(
             spaceID: fixture.workspaceKey.spaceID
         ).undoLabel == "Resize right")

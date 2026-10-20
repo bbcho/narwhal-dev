@@ -169,7 +169,10 @@ struct WorldActorHistoryTests {
         #expect(entry.label == "Apply Saved")
         #expect(Set(plan.desiredLayout.layout.tiled.keys) == [first.id, second.id])
         await actor.commit(plan, appliedFrames: plan.desiredLayout.delta.moves)
-        #expect(try await actor.planUndoLastLayout().get() != nil)
+        let undo = try #require(try await actor.planUndoLastLayout().get())
+        #expect(undo.historyAction == .undo(SpaceID(raw: 1)))
+        #expect(undo.plannedWorld.spaces[SpaceID(raw: 1)]?.displays
+            == plan.sourceWorld.spaces[SpaceID(raw: 1)]?.displays)
     }
 
     @Test("Reset and undo preserve another display's distinct active Space")
@@ -196,10 +199,10 @@ struct WorldActorHistoryTests {
         let reset = try await actor.planResetLayoutMemory().get()
 
         #expect(reset.plannedWorld.spaces[SpaceID(raw: 2)]?.displays[DisplayID(raw: 2)]?.tree == secondSpaceTree)
-        #expect(reset.desiredLayout.layout.tiled[second.id] != nil)
+        #expect(reset.desiredLayout.layout.tiled[second.id] == CGRect(x: 1_500, y: 0, width: 500, height: 800))
         await actor.commit(reset, appliedFrames: reset.desiredLayout.delta.moves)
         let undo = try #require(try await actor.planUndoLastLayout().get())
-        #expect(undo.desiredLayout.layout.tiled[second.id] != nil)
+        #expect(undo.desiredLayout.layout.tiled[second.id] == CGRect(x: 1_500, y: 0, width: 500, height: 800))
     }
 
     @Test("Undoing a move to another display's Space returns the window to its original tile")

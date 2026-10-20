@@ -1,5 +1,5 @@
-#if NARWHAL_ENABLE_VERIFIERS
 @testable import NarwhalAppRuntime
+import Testing
 import ApplicationServices
 import Foundation
 import NarwhalCore
@@ -105,4 +105,19 @@ enum FocusedUnavailablePollingVerification {
         return (true, "stable focused-window polling reconciled every snapshot without duplicate focus events")
     }
 }
-#endif
+
+@MainActor
+@Suite("Focused-window polling")
+struct FocusedWindowPollingTests {
+    @Test("Polling an unavailable focused window logs the failure once and reconciles nothing")
+    func unavailableFocusIsNotReconciled() {
+        let result = FocusedUnavailablePollingVerification.verifyUnavailableFocusIsNotLoggedEveryPoll()
+        #expect(result.passed, Comment(rawValue: result.message))
+    }
+
+    @Test("Polling a stable focused window reconciles every snapshot without duplicate focus events")
+    func stableFocusIsReconciledEveryPoll() {
+        let result = FocusedUnavailablePollingVerification.verifyStableFocusIsReconciledEveryPoll()
+        #expect(result.passed, Comment(rawValue: result.message))
+    }
+}

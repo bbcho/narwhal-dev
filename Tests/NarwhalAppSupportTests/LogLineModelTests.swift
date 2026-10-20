@@ -58,8 +58,8 @@ struct LogLineModelTests {
         #expect(message == "Other user <path> and own ~<path>")
     }
 
-    @Test("Another account whose name extends the home name with a dot or accent is left alone")
-    func homeDirectoryPrefixOfDottedOrAccentedNameIsKept() {
+    @Test("Another account whose name extends the home name with a dot or accent is not rewritten as the home")
+    func homeDirectoryIsNotReplacedInsideLongerAccountName() {
         let message = redactedLogMessage(
             "Saw /Users/jane.doe/a and /Users/janeé/b; own /Users/jane.",
             homeDirectory: "/Users/jane"

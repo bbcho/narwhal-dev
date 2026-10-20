@@ -31,7 +31,10 @@ struct CommandPlanningModelTests {
         #expect(plan.plannedWorld == newWorld)
         #expect(plan.undoWorld == oldWorld)
         #expect(plan.windows == newWorld.windows)
-        #expect(plan.desiredLayout.layout.tiled[right.id] != nil)
+        #expect(plan.desiredLayout.layout.tiled == [
+            left.id: CGRect(x: 0, y: 0, width: 500, height: 800),
+            right.id: CGRect(x: 500, y: 0, width: 500, height: 800),
+        ])
         #expect(oldWorld.spaces[spaceID]?.displays[displayID]?.floating == [right.id])
     }
 

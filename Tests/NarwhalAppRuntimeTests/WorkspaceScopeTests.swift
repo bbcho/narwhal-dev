@@ -1,5 +1,5 @@
-#if NARWHAL_ENABLE_VERIFIERS
 @testable import NarwhalAppRuntime
+import Testing
 import CoreGraphics
 import NarwhalAppSupport
 import NarwhalCore
@@ -151,4 +151,12 @@ enum WorkspaceScopeVerification {
         )
     }
 }
-#endif
+
+@Suite("Workspace scope")
+struct WorkspaceScopeTests {
+    @Test("Focused commands stay within the focused display's workspace")
+    func focusedCommandsStayOnOneDisplay() {
+        let result = WorkspaceScopeVerification.verifyFocusedCommandsStayOnOneDisplay()
+        #expect(result.passed, Comment(rawValue: result.message))
+    }
+}

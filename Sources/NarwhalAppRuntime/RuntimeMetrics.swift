@@ -13,9 +13,14 @@ final class RuntimeMetrics: @unchecked Sendable {
     private let lock = NSLock()
     private let log = OSLog(subsystem: "ca.quantim.narwhal", category: "runtime")
     private var state: RuntimeMetricsState
+    private let uptime: @Sendable () -> TimeInterval
 
-    init(capacityPerMetric: Int = 128) {
+    init(
+        capacityPerMetric: Int = 128,
+        uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) {
         state = RuntimeMetricsState(capacityPerMetric: capacityPerMetric)
+        self.uptime = uptime
     }
 
     func begin(_ metric: RuntimeMetricKind) -> Interval {
@@ -28,14 +33,14 @@ final class RuntimeMetrics: @unchecked Sendable {
         )
         return Interval(
             metric: metric,
-            startedAt: ProcessInfo.processInfo.systemUptime,
+            startedAt: uptime(),
             signpostID: signpostID
         )
     }
 
     func end(_ interval: Interval?) {
         guard let interval else { return }
-        let elapsed = max(0, ProcessInfo.processInfo.systemUptime - interval.startedAt)
+        let elapsed = max(0, uptime() - interval.startedAt)
         os_signpost(
             .end,
             log: log,

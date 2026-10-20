@@ -11,7 +11,7 @@ struct LayoutTransactionRoutingTests {
         #expect(!source.contains("worldActor.commit("))
     }
 
-    /// App.swift plus every `AppDelegate+*.swift` extension file.
+    /// Every runtime source file that declares or extends `AppDelegate`.
     private func appDelegateSource() throws -> String {
         let runtimeSources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -19,11 +19,11 @@ struct LayoutTransactionRoutingTests {
             .deletingLastPathComponent()
             .appendingPathComponent("Sources")
             .appendingPathComponent("NarwhalAppRuntime")
-        let fileNames = try FileManager.default.contentsOfDirectory(atPath: runtimeSources.path)
-            .filter { $0 == "App.swift" || $0.hasPrefix("AppDelegate+") }
+        return try FileManager.default.contentsOfDirectory(atPath: runtimeSources.path)
+            .filter { $0.hasSuffix(".swift") }
             .sorted()
-        return try fileNames
             .map { try String(contentsOf: runtimeSources.appendingPathComponent($0), encoding: .utf8) }
+            .filter { $0.contains("class AppDelegate") || $0.contains("extension AppDelegate") }
             .joined(separator: "\n")
     }
 }
