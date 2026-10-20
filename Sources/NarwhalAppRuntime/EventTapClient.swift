@@ -8,6 +8,7 @@ final class EventTapClient {
     private var modifier: ModifierSet
     private let reporter: StartupReporter
     private let targetWindowMayRaise: () -> Void
+    private let dragBegan: () -> Void
     private let dragChanged: (CGPoint) -> Void
     private let dragEnded: () -> Void
     private let drop: (CGPoint) -> Void
@@ -19,6 +20,7 @@ final class EventTapClient {
         modifier: ModifierSet,
         reporter: StartupReporter,
         targetWindowMayRaise: @escaping () -> Void,
+        dragBegan: @escaping () -> Void = {},
         dragChanged: @escaping (CGPoint) -> Void,
         dragEnded: @escaping () -> Void,
         drop: @escaping (CGPoint) -> Void
@@ -26,6 +28,7 @@ final class EventTapClient {
         self.modifier = modifier
         self.reporter = reporter
         self.targetWindowMayRaise = targetWindowMayRaise
+        self.dragBegan = dragBegan
         self.dragChanged = dragChanged
         self.dragEnded = dragEnded
         self.drop = drop
@@ -120,6 +123,8 @@ final class EventTapClient {
     private func applyDragEffects(_ effects: [DragGestureEffect]) {
         for effect in effects {
             switch effect {
+            case .began:
+                dragBegan()
             case .preview(let location):
                 dragChanged(location)
             case .endPreview:

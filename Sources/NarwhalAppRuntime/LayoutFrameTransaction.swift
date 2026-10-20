@@ -83,6 +83,7 @@ struct LayoutFrameTransaction {
         )
         let planned = applier.plannedFrames(for: plan)
         let moving = applier.movingWindowIDs(for: plan, preserving: preservedFrames)
+            .union(await driftedWindowIDs(plan: plan, planned: planned, excluding: preservedFrames))
         let ordered = applier.orderedWindowIDs(
             planned: planned,
             movingWindowIDs: moving,
@@ -272,10 +273,12 @@ struct LayoutFrameTransaction {
             echoSuppressor: echoSuppressor
         )
         let planned = applier.plannedFrames(for: plan)
-        let moving = applier.movingWindowIDs(for: plan, preserving: preservedFrames)
+        // Every window with a recorded original was written, including ones
+        // drift healing added beyond the plan's moves.
+        let written = Set(originalFrames.keys).subtracting(preservedFrames.keys)
         let ordered = applier.orderedWindowIDs(
             planned: planned,
-            movingWindowIDs: moving,
+            movingWindowIDs: written,
             innerGap: plan.plannedWorld.config.gaps.inner
         )
         return await restore(
@@ -284,6 +287,35 @@ struct LayoutFrameTransaction {
             attempted: ordered,
             cause: failure
         )
+    }
+
+    /// Planned windows the plan does not move but whose live frame no longer
+    /// matches the frame the world recorded for them (a late-applying app, a
+    /// user drag, an incomplete rollback). Validation anchors unmoved windows at
+    /// their recorded frames, so leaving them would fail every later command;
+    /// writing them back to their tile heals the layout instead. A window an
+    /// app snapped itself (Terminal's character grid) was recorded at that
+    /// snapped frame and is left alone.
+    private func driftedWindowIDs(
+        plan: CommandPlanResult,
+        planned: [WindowID: CGRect],
+        excluding preservedFrames: [WindowID: CGRect]
+    ) async -> Set<WindowID> {
+        var drifted: Set<WindowID> = []
+        let unmoved = Set(planned.keys)
+            .subtracting(plan.desiredLayout.delta.moves.keys)
+            .subtracting(preservedFrames.keys)
+        for windowID in unmoved.sorted(by: { $0.raw < $1.raw }) {
+            guard let metadata = plan.windows[windowID],
+                  case .success(let readback) = await frameWriter.readFrame(metadata),
+                  !framesMatch(readback.accessibility, metadata.frame)
+            else {
+                continue
+            }
+            reporter.info("Transaction rewriting drifted \(windowID.description) live=\(readback.accessibility.debugDescription)")
+            drifted.insert(windowID)
+        }
+        return drifted
     }
 
     private func readCompleteLayout(
@@ -330,6 +362,9 @@ struct LayoutFrameTransaction {
         defer { runtimeMetrics?.end(metricInterval) }
         var rollbackFailures: [LayoutFrameTransactionFailure] = []
         for windowID in attempted.reversed() {
+            // The abandoned target is not an echo anymore; an app applying it late
+            // must be seen. The restore write below registers its own expectation.
+            echoSuppressor?.withdrawFrameExpectations(for: windowID)
             guard let metadata = plan.windows[windowID],
                   let original = originals[windowID]
             else {

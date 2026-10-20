@@ -21,6 +21,10 @@ public enum DragGestureInput: Equatable, Sendable {
 }
 
 public enum DragGestureEffect: Equatable, Sendable {
+    /// The first drag of a modifier gesture: record the focused window to tell
+    /// a window drag from, say, extending a text selection with shift held.
+    /// Not at mouse-down, when a clicked window has not been activated yet.
+    case began
     case preview(CGPoint)
     case endPreview
     case drop(CGPoint)
@@ -60,7 +64,7 @@ public func reduceDragGesture(
         }
         return DragGestureTransition(
             state: DragGestureState(isCandidate: true, hasDragged: true),
-            effects: [.preview(location)]
+            effects: state.hasDragged ? [.preview(location)] : [.began, .preview(location)]
         )
 
     case .mouseUp(let location):
@@ -73,4 +77,21 @@ public func reduceDragGesture(
         let effects: [DragGestureEffect] = state.isCandidate ? [.endPreview] : []
         return DragGestureTransition(state: .empty, effects: effects)
     }
+}
+
+public struct DragStartWindow: Equatable, Sendable {
+    public let windowID: WindowID
+    public let frame: CGRect
+
+    public init(windowID: WindowID, frame: CGRect) {
+        self.windowID = windowID
+        self.frame = frame
+    }
+}
+
+/// A modifier drag tiles a window only if the window focused at mouse-down is
+/// still focused and moved; otherwise the drag was not dragging that window.
+public func dragMovedWindow(from start: DragStartWindow?, to end: DragStartWindow) -> Bool {
+    guard let start, start.windowID == end.windowID else { return false }
+    return !start.frame.narwhalApproximatelyEquals(end.frame, tolerance: frameWriteSettleTolerance)
 }

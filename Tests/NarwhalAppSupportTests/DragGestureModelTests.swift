@@ -19,6 +19,17 @@ struct DragGestureModelTests {
         #expect(transition.effects == [.preview(location)])
     }
 
+    @Test("A drop counts only when the window focused at mouse-down actually moved")
+    func dropRequiresTheFocusedWindowToMove() {
+        let window = WindowID(raw: 4)
+        let start = DragStartWindow(windowID: window, frame: CGRect(x: 0, y: 0, width: 600, height: 800))
+
+        #expect(dragMovedWindow(from: start, to: DragStartWindow(windowID: window, frame: CGRect(x: 240, y: 30, width: 600, height: 800))))
+        #expect(!dragMovedWindow(from: start, to: DragStartWindow(windowID: window, frame: start.frame)))
+        #expect(!dragMovedWindow(from: start, to: DragStartWindow(windowID: WindowID(raw: 5), frame: CGRect(x: 240, y: 30, width: 600, height: 800))))
+        #expect(!dragMovedWindow(from: nil, to: start))
+    }
+
     @Test("Mouse down with wrong modifier stays inert")
     func wrongMouseDownStaysInert() {
         let transition = reduceDragGesture(
@@ -31,12 +42,26 @@ struct DragGestureModelTests {
         #expect(transition.effects == [])
     }
 
-    @Test("Drag with matching modifier updates preview and marks dragged")
-    func matchingDragUpdatesPreview() {
+    @Test("The first drag of a gesture begins it, after the clicked window has activated")
+    func firstDragBeginsGesture() {
         let location = CGPoint(x: 30, y: 40)
 
         let transition = reduceDragGesture(
             state: DragGestureState(isCandidate: true, hasDragged: false),
+            input: .mouseDragged(location: location, modifiers: [.shift]),
+            requiredModifier: [.shift]
+        )
+
+        #expect(transition.state == DragGestureState(isCandidate: true, hasDragged: true))
+        #expect(transition.effects == [.began, .preview(location)])
+    }
+
+    @Test("Later drags of the same gesture only update the preview")
+    func laterDragsOnlyUpdatePreview() {
+        let location = CGPoint(x: 50, y: 60)
+
+        let transition = reduceDragGesture(
+            state: DragGestureState(isCandidate: true, hasDragged: true),
             input: .mouseDragged(location: location, modifiers: [.shift]),
             requiredModifier: [.shift]
         )

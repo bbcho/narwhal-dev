@@ -42,6 +42,7 @@ final class LayoutTransactionCoordinator {
         operation: String,
         retryOnConstraint: Bool,
         preserving preservedFrames: [WindowID: CGRect],
+        environmentUnchanged: @escaping @MainActor () -> Bool = { true },
         replan: @escaping @MainActor () async -> Result<CommandPlanResult, CommandError>,
         reconcileLiveWorld: @escaping @MainActor () async -> EnvironmentRefreshResult
     ) async -> LayoutTransactionOutcome {
@@ -58,7 +59,9 @@ final class LayoutTransactionCoordinator {
                 plan,
                 preserving: preservedFrames
             ) { [worldActor] in
-                await worldActor.isCurrent(plan)
+                // A Space switch does not touch the world until a later refresh,
+                // but the windows being written may have just left the screen.
+                await worldActor.isCurrent(plan) && environmentUnchanged()
             }
 
             switch frameOutcome {

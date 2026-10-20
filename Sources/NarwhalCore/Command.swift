@@ -44,6 +44,9 @@ public enum CommandError: Error, Equatable, Sendable {
     case zoneNotFound(ZoneID)
     case ruleInvalid(String)
     case configInvalid(String)
+    /// Undo or redo would also rewrite another Space that has changed since
+    /// the history entry was recorded.
+    case historyConflict(SpaceID)
 
     public var code: String {
         switch self {
@@ -79,6 +82,8 @@ public enum CommandError: Error, Equatable, Sendable {
             return "rule_invalid"
         case .configInvalid:
             return "config_invalid"
+        case .historyConflict:
+            return "history_conflict"
         }
     }
 
@@ -86,6 +91,8 @@ public enum CommandError: Error, Equatable, Sendable {
         switch self {
         case .activeSpaceUnavailable:
             return "active Space unavailable"
+        case .historyConflict:
+            return "this step also changed another Space, which has changed since or is not showing"
         case .invalidResizeDelta:
             return "resize delta must be finite"
         case .resizeWouldCollapseSplit(let windowID, let direction):

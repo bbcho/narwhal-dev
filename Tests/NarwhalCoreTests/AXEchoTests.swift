@@ -27,6 +27,21 @@ struct AXEchoTests {
         #expect(resized.state == .empty)
     }
 
+    @Test("Withdrawn frame expectations no longer suppress that window's events")
+    func withdrawnFrameEchoIsNotSuppressed() {
+        let window = WindowID(raw: 1)
+        let other = WindowID(raw: 2)
+        let target = CGRect(x: 10, y: 20, width: 300, height: 400)
+        let expected = expectFrameEcho(windowID: other, targetFrame: target, now: 100, ttl: 5, in:
+            expectFrameEcho(windowID: window, targetFrame: target, now: 100, ttl: 5, in: .empty)
+        )
+
+        let withdrawn = withdrawFrameEchoes(for: window, in: expected)
+
+        #expect(!consumeExpectedEcho(.windowMoved(window, target), now: 101, tolerance: 2, in: withdrawn).isEcho)
+        #expect(consumeExpectedEcho(.windowMoved(other, target), now: 101, tolerance: 2, in: withdrawn).isEcho)
+    }
+
     @Test("Nonmatching frame event is not suppressed")
     func nonmatchingFrameEventIsNotSuppressed() {
         let window = WindowID(raw: 1)

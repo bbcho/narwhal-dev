@@ -202,6 +202,120 @@ struct WorldActorHistoryTests {
         #expect(undo.desiredLayout.layout.tiled[second.id] != nil)
     }
 
+    @Test("Undoing a move to another display's Space returns the window to its original tile")
+    func undoingCrossSpaceMoveRestoresSourceSpace() async throws {
+        let actor = WorldActor()
+        let first = metadata(1)
+        let second = WindowMetadata(
+            id: WindowID(raw: 2),
+            bundleID: BundleID(raw: "com.example.2"),
+            title: "Window 2",
+            role: "AXWindow",
+            pid: 2,
+            frame: CGRect(x: 1_000, y: 0, width: 1_000, height: 800),
+            isResizable: true,
+            isMinimized: false
+        )
+        _ = await actor.refreshEnvironment(dualSpaceSnapshot(first: first, second: second, activeSpace: SpaceID(raw: 2)))
+        let push = try await actor.planPush(first.id, direction: .left).get()
+        await actor.commit(push, appliedFrames: push.desiredLayout.delta.moves)
+        let sourceTree = push.plannedWorld.spaces[SpaceID(raw: 1)]?.displays[DisplayID(raw: 1)]?.tree
+        let move = try await actor.planMoveToNextDisplay(first.id).get()
+        await actor.commit(move, appliedFrames: move.desiredLayout.delta.moves)
+
+        let undo = try #require(try await actor.planUndoLastLayout().get())
+
+        #expect(undo.plannedWorld.spaces[SpaceID(raw: 1)]?.displays[DisplayID(raw: 1)]?.tree == sourceTree)
+        #expect(undo.plannedWorld.spaces[SpaceID(raw: 2)]?.displays.values.contains {
+            occupiedWindows(in: $0.tree).contains(first.id)
+        } == false)
+        #expect(undo.desiredLayout.layout.tiled[first.id] == push.desiredLayout.layout.tiled[first.id])
+    }
+
+    @Test("Undoing a cross-Space move is refused if the source Space changed since")
+    func undoingCrossSpaceMoveRefusesWhenSourceChanged() async throws {
+        let actor = WorldActor()
+        let first = metadata(1)
+        let third = WindowMetadata(
+            id: WindowID(raw: 3),
+            bundleID: BundleID(raw: "com.example.3"),
+            title: "Window 3",
+            role: "AXWindow",
+            pid: 3,
+            frame: CGRect(x: 500, y: 0, width: 500, height: 800),
+            isResizable: true,
+            isMinimized: false
+        )
+        let second = WindowMetadata(
+            id: WindowID(raw: 2),
+            bundleID: BundleID(raw: "com.example.2"),
+            title: "Window 2",
+            role: "AXWindow",
+            pid: 2,
+            frame: CGRect(x: 1_000, y: 0, width: 1_000, height: 800),
+            isResizable: true,
+            isMinimized: false
+        )
+        _ = await actor.refreshEnvironment(dualSpaceSnapshot(
+            first: first,
+            second: second,
+            activeSpace: SpaceID(raw: 2),
+            extraFirstDisplayWindows: [third]
+        ))
+        let push = try await actor.planPush(first.id, direction: .left).get()
+        await actor.commit(push, appliedFrames: push.desiredLayout.delta.moves)
+        let move = try await actor.planMoveToNextDisplay(first.id).get()
+        await actor.commit(move, appliedFrames: move.desiredLayout.delta.moves)
+        let laterPush = try await actor.planPush(third.id, direction: .left).get()
+        await actor.commit(laterPush, appliedFrames: laterPush.desiredLayout.delta.moves)
+
+        let undo = await actor.planUndoLastLayout()
+
+        #expect(undo == .failure(.historyConflict(SpaceID(raw: 1))))
+    }
+
+    @Test("Focusing a window on the source display does not block undoing a cross-Space move")
+    func focusChangeDoesNotBlockCrossSpaceUndo() async throws {
+        let actor = WorldActor()
+        let first = metadata(1)
+        let third = WindowMetadata(
+            id: WindowID(raw: 3),
+            bundleID: BundleID(raw: "com.example.3"),
+            title: "Window 3",
+            role: "AXWindow",
+            pid: 3,
+            frame: CGRect(x: 500, y: 0, width: 500, height: 800),
+            isResizable: true,
+            isMinimized: false
+        )
+        let second = WindowMetadata(
+            id: WindowID(raw: 2),
+            bundleID: BundleID(raw: "com.example.2"),
+            title: "Window 2",
+            role: "AXWindow",
+            pid: 2,
+            frame: CGRect(x: 1_000, y: 0, width: 1_000, height: 800),
+            isResizable: true,
+            isMinimized: false
+        )
+        _ = await actor.refreshEnvironment(dualSpaceSnapshot(
+            first: first,
+            second: second,
+            activeSpace: SpaceID(raw: 2),
+            extraFirstDisplayWindows: [third]
+        ))
+        let push = try await actor.planPush(first.id, direction: .left).get()
+        await actor.commit(push, appliedFrames: push.desiredLayout.delta.moves)
+        let sourceTree = push.plannedWorld.spaces[SpaceID(raw: 1)]?.displays[DisplayID(raw: 1)]?.tree
+        let move = try await actor.planMoveToNextDisplay(first.id).get()
+        await actor.commit(move, appliedFrames: move.desiredLayout.delta.moves)
+        await actor.recordExternalFocus(third.id)
+
+        let undo = try #require(try await actor.planUndoLastLayout().get())
+
+        #expect(undo.plannedWorld.spaces[SpaceID(raw: 1)]?.displays[DisplayID(raw: 1)]?.tree == sourceTree)
+    }
+
     private func snapshot(windows: [WindowMetadata]) -> EnvironmentSnapshot {
         let displayID = DisplayID(raw: 1)
         let spaceID = SpaceID(raw: 1)
@@ -239,14 +353,16 @@ struct WorldActorHistoryTests {
 
     private func dualSpaceSnapshot(
         first: WindowMetadata,
-        second: WindowMetadata
+        second: WindowMetadata,
+        activeSpace: SpaceID = SpaceID(raw: 1),
+        extraFirstDisplayWindows: [WindowMetadata] = []
     ) -> EnvironmentSnapshot {
         let firstDisplay = DisplayID(raw: 1)
         let secondDisplay = DisplayID(raw: 2)
         let firstSpace = SpaceID(raw: 1)
         let secondSpace = SpaceID(raw: 2)
         return EnvironmentSnapshot(
-            activeSpace: firstSpace,
+            activeSpace: activeSpace,
             displays: [
                 firstDisplay: DisplayInfo(
                     id: firstDisplay,
@@ -263,10 +379,11 @@ struct WorldActorHistoryTests {
                     visibleFrame: CGRect(x: 1_000, y: 0, width: 1_000, height: 800)
                 )
             ],
-            axSnapshot: AXWindowSnapshot(windows: [first, second], quality: .complete),
+            axSnapshot: AXWindowSnapshot(windows: [first, second] + extraFirstDisplayWindows, quality: .complete),
             spaceTopology: SpaceTopology(
                 activeSpaceByDisplay: [firstDisplay: firstSpace, secondDisplay: secondSpace],
-                windowSpace: [first.id: firstSpace, second.id: secondSpace],
+                windowSpace: [first.id: firstSpace, second.id: secondSpace]
+                    .merging(extraFirstDisplayWindows.map { ($0.id, firstSpace) }) { current, _ in current },
                 quality: .managedDisplaySpaces
             )
         )

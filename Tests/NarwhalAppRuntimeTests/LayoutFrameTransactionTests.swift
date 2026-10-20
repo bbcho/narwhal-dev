@@ -24,6 +24,46 @@ struct LayoutFrameTransactionTests {
         ])
     }
 
+    @Test("A tiled window that drifted from its recorded frame is written back instead of failing the command")
+    func driftedUnmovedWindowIsWrittenBack() async throws {
+        let fixture = TransactionFixture(moves: [WindowID(raw: 1)])
+        let drifted = CGRect(x: 300, y: 40, width: 80, height: 100)
+        fixture.frames[fixture.second] = drifted
+        fixture.windowServerFrames[fixture.second] = drifted
+
+        let outcome = await fixture.transaction.execute(fixture.plan) { true }
+
+        #expect(outcome == .applied(
+            originalFrames: [fixture.first: fixture.originals[fixture.first]!, fixture.second: drifted],
+            appliedFrames: fixture.targets
+        ))
+        #expect(Set(fixture.writes.map(\.windowID)) == [fixture.first, fixture.second])
+    }
+
+    @Test("An unmoved window still at its recorded frame is not written")
+    func settledUnmovedWindowIsNotWritten() async throws {
+        let targets = [
+            WindowID(raw: 1): CGRect(x: 0, y: 0, width: 80, height: 100),
+            WindowID(raw: 2): CGRect(x: 88, y: 0, width: 80, height: 100),
+        ]
+        let fixture = TransactionFixture(targets: targets, moves: [])
+
+        let outcome = await fixture.transaction.execute(fixture.plan) { true }
+
+        #expect(outcome == .applied(originalFrames: [:], appliedFrames: targets))
+        #expect(fixture.writes == [])
+    }
+
+    @Test("An unmoved window at its recorded frame is left alone even when that differs from its tile")
+    func snappedUnmovedWindowIsNotWritten() async throws {
+        let fixture = TransactionFixture(moves: [])
+
+        let outcome = await fixture.transaction.execute(fixture.plan) { true }
+
+        #expect(outcome == .applied(originalFrames: [:], appliedFrames: fixture.originals))
+        #expect(fixture.writes == [])
+    }
+
     @Test("Failure on the second write restores the first window")
     func secondWriteFailureRollsBackFirst() async throws {
         let fixture = TransactionFixture()
@@ -44,6 +84,17 @@ struct LayoutFrameTransactionTests {
             FrameWrite(fixture.first, fixture.originals[fixture.first]!),
         ])
         #expect(fixture.frames == fixture.originals)
+    }
+
+    @Test("A rolled-back write no longer counts as an echo, so a late application is seen")
+    func rollbackWithdrawsAbandonedEchoExpectations() async throws {
+        let fixture = TransactionFixture()
+        fixture.failures = [fixture.second: .windowElementNotFound(fixture.second)]
+
+        _ = await fixture.transaction.execute(fixture.plan) { true }
+
+        let lateApplication = AXEvent.windowMoved(fixture.second, fixture.targets[fixture.second]!)
+        #expect(!fixture.echoSuppressor.isExpectedEcho(lateApplication))
     }
 
     @Test("Final layout validation failure restores every changed window in reverse order")
@@ -214,6 +265,7 @@ private final class TransactionFixture {
     let targets: [WindowID: CGRect]
     let plan: CommandPlanResult
     var transaction: LayoutFrameTransaction!
+    let echoSuppressor = AXEchoSuppressor()
 
     var frames: [WindowID: CGRect]
     var windowServerFrames: [WindowID: CGRect]
@@ -224,7 +276,7 @@ private final class TransactionFixture {
     var clamps: [WindowID: (CGRect, WindowConstraints)] = [:]
     var staleWindowServerOnRollback: Set<WindowID> = []
 
-    init(targets: [WindowID: CGRect]? = nil) {
+    init(targets: [WindowID: CGRect]? = nil, moves: Set<WindowID>? = nil) {
         let originals = [
             first: CGRect(x: 0, y: 0, width: 80, height: 100),
             second: CGRect(x: 88, y: 0, width: 80, height: 100),
@@ -274,7 +326,12 @@ private final class TransactionFixture {
             desiredLayout: DesiredLayout(
                 generation: LayoutGeneration(raw: 1),
                 layout: Layout(tiled: targets, floatingZOrder: [], hidden: []),
-                delta: LayoutDelta(moves: targets, raises: [], hides: [], shows: [])
+                delta: LayoutDelta(
+                    moves: moves.map { moved in targets.filter { moved.contains($0.key) } } ?? targets,
+                    raises: [],
+                    hides: [],
+                    shows: []
+                )
             ),
             windows: windows,
             sourceWorld: world,
@@ -329,7 +386,8 @@ private final class TransactionFixture {
                     ))
                 }
             ),
-            reporter: reporter
+            reporter: reporter,
+            echoSuppressor: echoSuppressor
         )
     }
 }

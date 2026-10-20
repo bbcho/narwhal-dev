@@ -80,6 +80,25 @@ struct LayoutTransactionCoordinatorTests {
         ])
     }
 
+    @Test("A Space switch during the transaction restores every written frame instead of committing")
+    func spaceSwitchDuringTransactionRollsBack() async throws {
+        let fixture = try await CoordinatorFixture.make()
+        var spaceChanged = false
+        fixture.store.onRead = { readCount in
+            if readCount == 5 { spaceChanged = true }
+        }
+
+        let outcome = await fixture.execute(environmentUnchanged: { !spaceChanged })
+
+        guard case .failed(_, let reason, let restored) = outcome else {
+            Issue.record("Expected a rolled-back transaction, got \(outcome)")
+            return
+        }
+        #expect(reason.contains("stale"))
+        #expect(restored == fixture.originals)
+        #expect(fixture.store.frames == fixture.originals)
+    }
+
     @Test("A constraint restores, replans, and commits one coherent layout")
     func constraintRestoresThenReplans() async throws {
         let fixture = try await CoordinatorFixture.make()
@@ -354,13 +373,15 @@ private final class CoordinatorFixture {
 
     func execute(
         replan: (() async -> Result<CommandPlanResult, CommandError>)? = nil,
-        reconcile: (() async -> EnvironmentRefreshResult)? = nil
+        reconcile: (() async -> EnvironmentRefreshResult)? = nil,
+        environmentUnchanged: @escaping @MainActor () -> Bool = { true }
     ) async -> LayoutTransactionOutcome {
         await coordinator.execute(
             initialPlan: plan,
             operation: "Resize Right",
             retryOnConstraint: true,
             preserving: [:],
+            environmentUnchanged: environmentUnchanged,
             replan: replan ?? { .failure(.activeSpaceUnavailable) },
             reconcileLiveWorld: reconcile ?? { await self.refreshFromLiveFrames() }
         )

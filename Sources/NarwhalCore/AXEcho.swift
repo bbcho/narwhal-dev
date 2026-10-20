@@ -73,6 +73,16 @@ public func expectFrameEcho(
     return AXEchoState(frameEchoes: pruned.frameEchoes + [echo], focusEchoes: pruned.focusEchoes)
 }
 
+/// Drops every pending frame expectation for a window, used when a write is
+/// abandoned: if the application applies it late, that move must be reconciled
+/// like any other geometry change instead of being swallowed as an echo.
+public func withdrawFrameEchoes(for windowID: WindowID, in state: AXEchoState) -> AXEchoState {
+    AXEchoState(
+        frameEchoes: state.frameEchoes.filter { $0.windowID != windowID },
+        focusEchoes: state.focusEchoes
+    )
+}
+
 public func expectFocusEcho(
     windowID: WindowID,
     now: TimeInterval,

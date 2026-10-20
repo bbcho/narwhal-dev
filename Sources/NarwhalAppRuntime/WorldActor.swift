@@ -731,20 +731,52 @@ actor WorldActor {
     ) -> Result<CommandPlanResult, CommandError> {
         let historicalWorld = useBefore ? entry.beforeWorld : entry.afterWorld
         let historicalLayout = useBefore ? entry.beforeLayout : entry.afterLayout
-        let targetWorld = worldByRestoringHistorySpace(
-            from: historicalWorld,
-            spaceID: entry.spaceID,
-            onto: world
-        )
+        // A command such as move-to-next-display changes two Spaces but is
+        // recorded on one; restoring only that one would orphan the window.
+        let otherSpaceIDs = spacesChanged(between: entry.beforeWorld, and: entry.afterWorld)
+            .subtracting([entry.spaceID])
+            .sorted { $0.raw < $1.raw }
+        // Restoring another Space is safe only if it is showing and its layout
+        // (trees and floating windows, not focus) is as this step left it.
+        let worldAsEntryLeftIt = useBefore ? entry.afterWorld : entry.beforeWorld
+        let visibleSpaceIDs = Set(world.activeSpaceByDisplay.values).union(world.activeSpace.map { [$0] } ?? [])
+        if let conflict = otherSpaceIDs.first(where: { spaceID in
+            !visibleSpaceIDs.contains(spaceID)
+                || world.spaces[spaceID]?.displays != worldAsEntryLeftIt.spaces[spaceID]?.displays
+        }) {
+            return .failure(.historyConflict(conflict))
+        }
+        let targetWorld = ([entry.spaceID] + otherSpaceIDs).reduce(world) { current, spaceID in
+            worldByRestoringHistorySpace(from: historicalWorld, spaceID: spaceID, onto: current)
+        }
         switch flattenedLayout(of: world) {
         case .success(let currentLayout):
-            let targetLayout = layoutByRestoringHistorySpace(
+            let primaryLayout = layoutByRestoringHistorySpace(
                 historicalLayout,
                 historicalWorld: historicalWorld,
                 spaceID: entry.spaceID,
                 currentLayout: currentLayout,
                 currentWorld: world
             )
+            let targetLayout: Layout
+            switch otherSpaceIDs.reduce(Result<Layout, UnsatisfiableLayout>.success(primaryLayout), { result, spaceID in
+                result.flatMap { layout in
+                    spaceLayout(for: spaceID, in: historicalWorld).map { historical in
+                        layoutByRestoringHistorySpace(
+                            historical,
+                            historicalWorld: historicalWorld,
+                            spaceID: spaceID,
+                            currentLayout: layout,
+                            currentWorld: world
+                        )
+                    }
+                }
+            }) {
+            case .success(let layout):
+                targetLayout = layout
+            case .failure(let error):
+                return .failure(.layoutUnsatisfiable(error))
+            }
             return makeCustomLayoutPlan(
                 from: world,
                 to: targetWorld,
@@ -755,6 +787,10 @@ actor WorldActor {
         case .failure(let error):
             return .failure(.layoutUnsatisfiable(error))
         }
+    }
+
+    private func spacesChanged(between before: World, and after: World) -> Set<SpaceID> {
+        Set(before.spaces.keys).union(after.spaces.keys).filter { before.spaces[$0] != after.spaces[$0] }
     }
 
     private func replannedHistoryAction(

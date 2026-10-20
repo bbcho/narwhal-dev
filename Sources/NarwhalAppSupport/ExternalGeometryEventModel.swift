@@ -31,7 +31,7 @@ public func externalGeometryEventSelection(
         return ExternalGeometryEventSelection(event: event, usedLiveFrame: false)
     }
 
-    guard case .complete = liveSnapshot.quality,
+    guard snapshotIsTrustworthy(liveSnapshot.quality, for: windowID),
           let live = liveSnapshot.windows.first(where: { $0.id == windowID })
     else {
         return ExternalGeometryEventSelection(event: event, usedLiveFrame: false)
@@ -56,6 +56,21 @@ public func externalGeometryEventSelection(
         usedLiveFrame: true,
         liveFrame: live.frame
     )
+}
+
+/// A partial snapshot still describes this window reliably when every read
+/// error names some other window; an unattributed error could be this one.
+private func snapshotIsTrustworthy(_ quality: AXSnapshotQuality, for windowID: WindowID) -> Bool {
+    switch quality {
+    case .complete:
+        return true
+    case .partial(let errors):
+        return errors.allSatisfy { error in
+            error.windowID.map { $0 != windowID } ?? false
+        }
+    case .permissionDenied, .unavailable:
+        return false
+    }
 }
 
 public func preservedExternalGeometryFrames(

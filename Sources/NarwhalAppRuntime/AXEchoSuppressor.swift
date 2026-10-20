@@ -29,6 +29,10 @@ final class AXEchoSuppressor {
         )
     }
 
+    func withdrawFrameExpectations(for windowID: WindowID) {
+        state = withdrawFrameEchoes(for: windowID, in: state)
+    }
+
     func expectFocus(windowID: WindowID) {
         state = expectFocusEcho(windowID: windowID, now: now(), ttl: ttl, in: state)
     }

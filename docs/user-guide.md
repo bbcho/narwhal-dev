@@ -283,7 +283,8 @@ names, and user paths.
 
 Hold the configured drag modifier before mouse-down, drag the focused window,
 and release inside one of the configured proportional zones. The default
-modifier is `shift`.
+modifier is `shift`. A drag that does not move the focused window, such as
+extending a text selection with shift held, never tiles anything.
 
 The default zones are narrow edge and center regions:
 

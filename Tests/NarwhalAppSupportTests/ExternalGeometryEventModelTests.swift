@@ -90,6 +90,44 @@ struct ExternalGeometryEventModelTests {
         #expect(selection == ExternalGeometryEventSelection(event: event, usedLiveFrame: false))
     }
 
+    @Test("A snapshot whose read errors are all for other windows still corrects this window")
+    func errorsForOtherWindowsDoNotBlockCorrection() {
+        let window = WindowID(raw: 21)
+        let stale = CGRect(x: 100, y: 200, width: 500, height: 400)
+        let live = CGRect(x: 200, y: 300, width: 500, height: 400)
+        let snapshot = AXWindowSnapshot(
+            windows: [metadata(window, frame: live)],
+            quality: .partial([AXWindowReadError(windowID: WindowID(raw: 99), pid: nil, message: "malformed bounds")])
+        )
+
+        let selection = externalGeometryEventSelection(
+            for: .windowMoved(window, stale),
+            liveSnapshot: snapshot,
+            tolerance: 4
+        )
+
+        #expect(selection == ExternalGeometryEventSelection(
+            event: .windowMoved(window, live),
+            usedLiveFrame: true,
+            liveFrame: live
+        ))
+    }
+
+    @Test("A read error naming this window still blocks the live-frame correction")
+    func errorForThisWindowBlocksCorrection() {
+        let window = WindowID(raw: 22)
+        let stale = CGRect(x: 100, y: 200, width: 500, height: 400)
+        let event = AXEvent.windowMoved(window, stale)
+        let snapshot = AXWindowSnapshot(
+            windows: [metadata(window, frame: CGRect(x: 200, y: 300, width: 500, height: 400))],
+            quality: .partial([AXWindowReadError(windowID: window, pid: nil, message: "malformed bounds")])
+        )
+
+        let selection = externalGeometryEventSelection(for: event, liveSnapshot: snapshot, tolerance: 4)
+
+        #expect(selection == ExternalGeometryEventSelection(event: event, usedLiveFrame: false))
+    }
+
     @Test("Stale move event converges to settled live frame")
     func staleMoveEventConvergesToSettledLiveFrame() {
         let window = WindowID(raw: 30)

@@ -160,6 +160,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Set when the restore file is from a newer Narwhal or unreadable, so this
     /// session never overwrites it.
     private var restoreSavingSuspended = false
+    private var dragStartWindow: DragStartWindow?
+    /// Lets an in-flight layout transaction notice a Space switch, which
+    /// arrives outside the mutation gate while the transaction awaits AX.
+    private var activeSpaceChangeCount = 0
     private var runtimeReadiness: RuntimeReadiness = .starting
     private var terminationFlushState: TerminationFlushState = .idle
     private var terminationFlushTask: Task<Void, Never>?
@@ -1190,6 +1194,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             targetWindowMayRaise: { [weak self] in
                 self?.overlay.targetWindowMayRaise()
             },
+            dragBegan: { [weak self] in
+                self?.recordDragStartWindow()
+            },
             dragChanged: { [weak self] location in
                 Task { @MainActor in
                     self?.previewDragDrop(at: location)
@@ -1201,10 +1208,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             },
             drop: { [weak self] location in
+                // Taken now, before a queued drop could see the next gesture's start.
+                let start = self?.dragStartWindow
+                self?.dragStartWindow = nil
                 Task { @MainActor in
                     guard let self else { return }
                     await self.workspaceMutationGate.perform {
-                        await self.performDragDrop(at: location)
+                        await self.performDragDrop(at: location, start: start)
                     }
                 }
             }
@@ -1239,6 +1249,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         while !pendingHotkeys.isEmpty {
             guard let batch = nextHotkeyExecutionBatch(in: pendingHotkeys) else { break }
             pendingHotkeys.removeFirst(batch.consumedCount)
+            // A modal confirmation inside the gate would block every other
+            // workflow (AX events, drops, IPC) until the user answers.
+            if batch.action == .command(.resetLayout), !confirmResetLayout() {
+                showOperatorFeedback("Reset canceled", tone: .info)
+                continue
+            }
             await workspaceMutationGate.perform {
                 await self.performHotkey(batch.action, resizeDeltas: batch.resizeDeltas)
             }
@@ -1302,7 +1318,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .command(.togglePause):
             await togglePause()
         case .command(.resetLayout):
-            await performResetLayout(requiresConfirmation: true, logPrefix: "Reset", persistReason: "reset")
+            // Confirmed in drainHotkeyQueue before entering the mutation gate.
+            await performResetLayout(logPrefix: "Reset", persistReason: "reset")
         case .openFinderWindow:
             performOpenFinderWindow()
         case .command(let template):
@@ -1391,16 +1408,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     @discardableResult
-    private func performResetLayout(
-        requiresConfirmation: Bool,
-        logPrefix: String,
-        persistReason: String
-    ) async -> Bool {
-        if requiresConfirmation, !confirmResetLayout() {
-            showOperatorFeedback("Reset canceled", tone: .info)
-            return false
-        }
-
+    private func performResetLayout(logPrefix: String, persistReason: String) async -> Bool {
         switch await worldActor.planResetLayoutMemory() {
         case .success(let result):
             let completed = await applyPlannedLayout(
@@ -2141,8 +2149,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    /// Called synchronously on the first drag event of a modifier gesture: late
+    /// enough that a clicked window has been activated, early enough that it
+    /// has barely moved.
     @MainActor
-    private func performDragDrop(at location: CGPoint) async {
+    private func recordDragStartWindow() {
+        guard case .success(let snapshot) = axClient.focusedWindowSnapshot() else {
+            dragStartWindow = nil
+            return
+        }
+        dragStartWindow = DragStartWindow(windowID: snapshot.id, frame: snapshot.frame)
+    }
+
+    @MainActor
+    private func performDragDrop(at location: CGPoint, start: DragStartWindow?) async {
         overlay.hideDragPreview()
         guard !isPaused else {
             reporter.info("Drag drop ignored while Narwhal is paused")
@@ -2151,6 +2171,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let operation = "Drag drop"
         guard let context = await focusedLayoutContext(operation: operation) else { return }
+        guard dragMovedWindow(from: start, to: DragStartWindow(windowID: context.id, frame: context.frame)) else {
+            reporter.info("Drag drop ignored: the focused window did not move during the drag")
+            return
+        }
         let drag = DragEvent(windowID: context.id, location: location, displayID: nil)
         guard let command = resolveDrop(drag, zones: config.zones, displays: context.displays) else {
             reporter.info("Drag drop ignored: no matching exclusive zone at \(location.debugDescription)")
@@ -2630,11 +2654,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             source: sourceFocus
         )
 
+        let spaceChangesAtStart = activeSpaceChangeCount
         let outcome = await layoutTransactionCoordinator.execute(
             initialPlan: result,
             operation: operation,
             retryOnConstraint: retryOnClamp,
             preserving: preservedFrames,
+            environmentUnchanged: { [weak self] in
+                self?.activeSpaceChangeCount == spaceChangesAtStart
+            },
             replan: replanAfterClamp,
             reconcileLiveWorld: {
                 await self.refreshEnvironmentLocked(
@@ -3101,6 +3129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func activeSpaceChanged() {
+        activeSpaceChangeCount += 1
         externalGeometryCoordinator.cancelAll()
         cancelSpaceTransitionTimers()
         let preservation = beginSpaceTransitionPreservation(
@@ -3343,7 +3372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .status:
             return .diagnostics(commandID: commandID, value: await runtimeDiagnostics())
         case .resetLayout:
-            await performResetLayout(requiresConfirmation: false, logPrefix: "IPC reset", persistReason: "ipc reset")
+            await performResetLayout(logPrefix: "IPC reset", persistReason: "ipc reset")
             return .ok(commandID: commandID)
         case .quit:
             reporter.info("IPC quit requested")

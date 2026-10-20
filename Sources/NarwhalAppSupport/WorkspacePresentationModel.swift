@@ -337,6 +337,7 @@ public func commandPreview(
 public enum CommandRecovery: Equatable, Sendable {
     case grantAccessibility
     case refreshWorkspace
+    case undoOnOtherDisplay
     case chooseAnotherWindow
     case tileWindow
     case floatWindow
@@ -392,6 +393,13 @@ public func commandExplanation(for error: CommandError) -> CommandExplanation {
         return explanation(error, "Rule is invalid", message, .fixRule)
     case .configInvalid(let message):
         return explanation(error, "Configuration is invalid", message, .fixConfiguration)
+    case .historyConflict:
+        return explanation(
+            error,
+            "Another Space changed since this step",
+            "This step also moved a window on another display's Space, which has newer changes or is not showing. Show it and undo those changes there first.",
+            .undoOnOtherDisplay
+        )
     }
 }
 
