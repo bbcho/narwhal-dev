@@ -64,6 +64,23 @@ struct LayoutFrameTransactionTests {
         #expect(fixture.writes == [])
     }
 
+    @Test("Rollback restores a drift-healed window the plan itself did not move")
+    func rollbackRestoresDriftHealedWindow() async throws {
+        let fixture = TransactionFixture(moves: [WindowID(raw: 1)])
+        let healed = CGRect(x: 108, y: 0, width: 100, height: 100)
+        fixture.frames[fixture.second] = healed
+        fixture.windowServerFrames[fixture.second] = healed
+
+        _ = await fixture.transaction.rollback(
+            fixture.plan,
+            originalFrames: [fixture.second: fixture.originals[fixture.second]!],
+            failure: LayoutFrameTransactionFailure(windowID: nil, stage: .currency, message: "stale")
+        )
+
+        #expect(fixture.writes == [FrameWrite(fixture.second, fixture.originals[fixture.second]!)])
+        #expect(fixture.frames[fixture.second] == fixture.originals[fixture.second])
+    }
+
     @Test("Failure on the second write restores the first window")
     func secondWriteFailureRollsBackFirst() async throws {
         let fixture = TransactionFixture()

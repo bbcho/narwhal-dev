@@ -316,6 +316,37 @@ struct WorldActorHistoryTests {
         #expect(undo.plannedWorld.spaces[SpaceID(raw: 1)]?.displays[DisplayID(raw: 1)]?.tree == sourceTree)
     }
 
+    @Test("Undoing a cross-Space move is refused while the source Space is not showing")
+    func crossSpaceUndoRefusedWhenSourceSpaceHidden() async throws {
+        let actor = WorldActor()
+        let first = metadata(1)
+        let second = WindowMetadata(
+            id: WindowID(raw: 2),
+            bundleID: BundleID(raw: "com.example.2"),
+            title: "Window 2",
+            role: "AXWindow",
+            pid: 2,
+            frame: CGRect(x: 1_000, y: 0, width: 1_000, height: 800),
+            isResizable: true,
+            isMinimized: false
+        )
+        _ = await actor.refreshEnvironment(dualSpaceSnapshot(first: first, second: second, activeSpace: SpaceID(raw: 2)))
+        let push = try await actor.planPush(first.id, direction: .left).get()
+        await actor.commit(push, appliedFrames: push.desiredLayout.delta.moves)
+        let move = try await actor.planMoveToNextDisplay(first.id).get()
+        await actor.commit(move, appliedFrames: move.desiredLayout.delta.moves)
+        _ = await actor.refreshEnvironment(dualSpaceSnapshot(
+            first: first,
+            second: second,
+            activeSpace: SpaceID(raw: 2),
+            firstDisplaySpace: SpaceID(raw: 3)
+        ))
+
+        let undo = await actor.planUndoLastLayout()
+
+        #expect(undo == .failure(.historyConflict(SpaceID(raw: 1))))
+    }
+
     private func snapshot(windows: [WindowMetadata]) -> EnvironmentSnapshot {
         let displayID = DisplayID(raw: 1)
         let spaceID = SpaceID(raw: 1)
@@ -355,11 +386,12 @@ struct WorldActorHistoryTests {
         first: WindowMetadata,
         second: WindowMetadata,
         activeSpace: SpaceID = SpaceID(raw: 1),
-        extraFirstDisplayWindows: [WindowMetadata] = []
+        extraFirstDisplayWindows: [WindowMetadata] = [],
+        firstDisplaySpace: SpaceID = SpaceID(raw: 1)
     ) -> EnvironmentSnapshot {
         let firstDisplay = DisplayID(raw: 1)
         let secondDisplay = DisplayID(raw: 2)
-        let firstSpace = SpaceID(raw: 1)
+        let firstSpace = firstDisplaySpace
         let secondSpace = SpaceID(raw: 2)
         return EnvironmentSnapshot(
             activeSpace: activeSpace,

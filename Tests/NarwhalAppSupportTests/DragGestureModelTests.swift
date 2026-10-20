@@ -19,7 +19,7 @@ struct DragGestureModelTests {
         #expect(transition.effects == [.preview(location)])
     }
 
-    @Test("A drop counts only when the window focused at mouse-down actually moved")
+    @Test("A drop counts only when the window focused at the first drag actually moved")
     func dropRequiresTheFocusedWindowToMove() {
         let window = WindowID(raw: 4)
         let start = DragStartWindow(windowID: window, frame: CGRect(x: 0, y: 0, width: 600, height: 800))

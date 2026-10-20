@@ -89,8 +89,8 @@ public struct DragStartWindow: Equatable, Sendable {
     }
 }
 
-/// A modifier drag tiles a window only if the window focused at mouse-down is
-/// still focused and moved; otherwise the drag was not dragging that window.
+/// A modifier drag tiles a window only if the window focused at the gesture's
+/// first drag is still focused and moved; otherwise it was not dragging that window.
 public func dragMovedWindow(from start: DragStartWindow?, to end: DragStartWindow) -> Bool {
     guard let start, start.windowID == end.windowID else { return false }
     return !start.frame.narwhalApproximatelyEquals(end.frame, tolerance: frameWriteSettleTolerance)
