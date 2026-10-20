@@ -100,3 +100,16 @@ public func worldByRecordingWindowFrames(
         config: world.config
     )
 }
+
+/// Whether any display's tiling differs between two worlds; only such a change
+/// is an undoable layout step. Floating membership is ignored, and so is a
+/// display entry with an empty tree (one created just to hold a floating window).
+public func tilingDiffers(_ before: World, _ after: World) -> Bool {
+    tiledTrees(in: before) != tiledTrees(in: after)
+}
+
+private func tiledTrees(in world: World) -> [SpaceID: [DisplayID: Node]] {
+    world.spaces
+        .mapValues { space in space.displays.filter { $0.value.tree != .void }.mapValues(\.tree) }
+        .filter { !$0.value.isEmpty }
+}

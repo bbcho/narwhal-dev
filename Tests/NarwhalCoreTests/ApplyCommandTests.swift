@@ -119,6 +119,52 @@ struct ApplyCommandTests {
         #expect(next.spaces[rightSpace]?.focused == nil)
     }
 
+    @Test("A focused tiled window dragged into another display's Space floats there and takes its focus with it")
+    func externallyMovedTiledWindowCarriesFocusAcrossSpaces() throws {
+        let left = DisplayID(raw: 1)
+        let right = DisplayID(raw: 2)
+        let leftSpace = SpaceID(raw: 1)
+        let rightSpace = SpaceID(raw: 2)
+        let moving = WindowID(raw: 10)
+        let world = World(
+            displays: [
+                left: displayInfo(left, slot: 0, x: 0),
+                right: displayInfo(right, slot: 1, x: 1000)
+            ],
+            activeSpace: rightSpace,
+            activeSpaceByDisplay: [left: leftSpace, right: rightSpace],
+            spaces: [
+                leftSpace: SpaceState(
+                    id: leftSpace,
+                    displays: [left: DisplaySpaceState(displayID: left, tree: .void, floating: [])],
+                    focused: nil
+                ),
+                rightSpace: SpaceState(
+                    id: rightSpace,
+                    displays: [right: DisplaySpaceState(displayID: right, tree: .leaf(moving), floating: [])],
+                    focused: moving
+                )
+            ],
+            windows: [moving: metadata(moving, x: 1_000, y: 0)],
+            windowDisplay: [moving: right],
+            windowSpace: [moving: rightSpace],
+            observedVisibleWindows: [:],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        let next = try apply(
+            .windowMovedExternally(moving, CGRect(x: 200, y: 100, width: 100, height: 100)),
+            to: world
+        ).get()
+
+        #expect(next.spaces[leftSpace]?.displays[left]?.floating == [moving])
+        #expect(next.spaces[rightSpace]?.displays[right]?.tree == .void)
+        #expect(next.spaces[leftSpace]?.focused == moving)
+        #expect(next.spaces[rightSpace]?.focused == nil)
+    }
+
     @Test("Focus cycle skips tiled windows")
     func focusCycleSkipsTiledWindows() throws {
         let display = DisplayID(raw: 1)

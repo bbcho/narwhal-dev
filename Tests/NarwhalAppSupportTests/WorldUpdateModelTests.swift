@@ -168,6 +168,66 @@ struct WorldUpdateModelTests {
         #expect(updated.spaces == world.spaces)
     }
 
+    @Test("A floating window moving into a new, empty display entry is not a tiling change")
+    func floatingMoveIntoNewDisplayEntryIsNotTilingChange() {
+        let window = WindowID(raw: 10)
+        let before = spacesOnlyWorld([
+            SpaceID(raw: 3): SpaceState(
+                id: SpaceID(raw: 3),
+                displays: [DisplayID(raw: 1): DisplaySpaceState(displayID: DisplayID(raw: 1), tree: .void, floating: [window])],
+                focused: nil
+            )
+        ])
+        let after = spacesOnlyWorld([
+            SpaceID(raw: 3): SpaceState(
+                id: SpaceID(raw: 3),
+                displays: [
+                    DisplayID(raw: 1): DisplaySpaceState(displayID: DisplayID(raw: 1), tree: .void, floating: []),
+                    DisplayID(raw: 2): DisplaySpaceState(displayID: DisplayID(raw: 2), tree: .void, floating: [window])
+                ],
+                focused: nil
+            )
+        ])
+
+        #expect(tilingDiffers(before, after) == false)
+    }
+
+    @Test("Detaching a display's last tile is a tiling change")
+    func detachingLastTileIsTilingChange() {
+        let window = WindowID(raw: 10)
+        let display = DisplayID(raw: 1)
+        let space = SpaceID(raw: 1)
+        let before = spacesOnlyWorld([
+            space: SpaceState(
+                id: space,
+                displays: [display: DisplaySpaceState(displayID: display, tree: .leaf(window), floating: [])],
+                focused: window
+            )
+        ])
+        let after = spacesOnlyWorld([
+            space: SpaceState(
+                id: space,
+                displays: [display: DisplaySpaceState(displayID: display, tree: .void, floating: [window])],
+                focused: window
+            )
+        ])
+
+        #expect(tilingDiffers(before, after) == true)
+    }
+
+    private func spacesOnlyWorld(_ spaces: [SpaceID: SpaceState]) -> World {
+        World(
+            displays: [:],
+            activeSpace: nil,
+            spaces: spaces,
+            windows: [:],
+            windowDisplay: [:],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+    }
+
     private func worldFixture(
         displayID: DisplayID,
         spaceID: SpaceID,
