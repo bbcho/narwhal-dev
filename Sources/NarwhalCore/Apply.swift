@@ -773,7 +773,8 @@ private func applyExternalFrameUpdate(_ windowID: WindowID, frame: CGRect, to wo
         from: metadata.frame,
         to: frame,
         in: world
-    ) ?? world.spaces
+    ) ?? spacesByRelocatingFloatingWindow(windowID, to: ownership, in: world)
+        ?? world.spaces
 
     return .success(World(
         displays: world.displays,
@@ -865,6 +866,10 @@ private func spacesByDetachingExternallyAdjustedWindow(
     to destination: WorkspaceKey,
     in world: World
 ) -> [SpaceID: SpaceState] {
+    // A focused window dragged into another Space takes its focus along, as
+    // the placement commands do, instead of leaving a stale pointer behind.
+    let carriesFocus = source.spaceID != destination.spaceID
+        && world.spaces[source.spaceID]?.focused == windowID
     let cleared = world.spaces.mapValues { space in
         guard space.id == source.spaceID else { return space }
         return SpaceState(
@@ -876,7 +881,7 @@ private func spacesByDetachingExternallyAdjustedWindow(
                     floating: displayState.floating.filter { $0 != windowID }
                 )
             },
-            focused: space.focused
+            focused: carriesFocus ? nil : space.focused
         )
     }
     let destinationSpace = cleared[destination.spaceID]
@@ -890,7 +895,7 @@ private func spacesByDetachingExternallyAdjustedWindow(
             tree: target.tree,
             floating: target.floating + [windowID]
         )),
-        focused: destinationSpace.focused
+        focused: carriesFocus ? windowID : destinationSpace.focused
     ))
 }
 
@@ -919,6 +924,35 @@ private func resetDisplay(
         displayID,
         to: DisplaySpaceState(displayID: displayState.displayID, tree: .void, floating: [])
     )
+}
+
+/// A floating window moved onto another display or Space joins that
+/// workspace's floating list, so where it is tracked keeps matching its
+/// recorded owner. Nil when it is not floating or its owner is unchanged.
+private func spacesByRelocatingFloatingWindow(
+    _ windowID: WindowID,
+    to ownership: ExternalFrameOwnership,
+    in world: World
+) -> [SpaceID: SpaceState]? {
+    guard let source = floatingWorkspaceKey(of: windowID, in: world.spaces),
+          let displayID = ownership.windowDisplay[windowID],
+          let spaceID = ownership.windowSpace[windowID]
+    else {
+        return nil
+    }
+    let destination = WorkspaceKey(displayID: displayID, spaceID: spaceID)
+    guard destination != source else { return nil }
+    return spacesByDetachingExternallyAdjustedWindow(windowID, from: source, to: destination, in: world)
+}
+
+private func floatingWorkspaceKey(of windowID: WindowID, in spaces: [SpaceID: SpaceState]) -> WorkspaceKey? {
+    for (spaceID, space) in spaces.sorted(by: { $0.key.raw < $1.key.raw }) {
+        for (displayID, displayState) in space.displays.sorted(by: { $0.key.raw < $1.key.raw })
+        where displayState.floating.contains(windowID) {
+            return WorkspaceKey(displayID: displayID, spaceID: spaceID)
+        }
+    }
+    return nil
 }
 
 private struct ExternalFrameOwnership {

@@ -175,6 +175,31 @@ struct WorldActorHistoryTests {
             == plan.sourceWorld.spaces[SpaceID(raw: 1)]?.displays)
     }
 
+    @Test("Dragging a floating window onto another display records no undo step and plans no writes")
+    func floatingCrossDisplayDragIsNotUndoable() async throws {
+        let actor = WorldActor()
+        let first = metadata(1)
+        let second = WindowMetadata(
+            id: WindowID(raw: 2),
+            bundleID: BundleID(raw: "com.example.2"),
+            title: "Window 2",
+            role: "AXWindow",
+            pid: 2,
+            frame: CGRect(x: 1_100, y: 100, width: 300, height: 200),
+            isResizable: true,
+            isMinimized: false
+        )
+        _ = await actor.refreshEnvironment(dualSpaceSnapshot(first: first, second: second))
+
+        let plan = try await actor.planExternalGeometry(
+            .windowMoved(second.id, CGRect(x: 200, y: 100, width: 300, height: 200))
+        ).get()
+
+        #expect(plan == nil)
+        #expect(await actor.layoutHistoryAvailability(spaceID: SpaceID(raw: 1)).undoLabel == nil)
+        #expect(await actor.layoutHistoryAvailability(spaceID: SpaceID(raw: 2)).undoLabel == nil)
+    }
+
     @Test("Reset and undo preserve another display's distinct active Space")
     func perSpaceResetPreservesOtherActiveSpace() async throws {
         let actor = WorldActor()

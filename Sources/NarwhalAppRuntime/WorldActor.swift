@@ -111,7 +111,9 @@ actor WorldActor {
         let oldWorld = world
         switch apply(event.toCommand(), to: oldWorld) {
         case .success(let newWorld):
-            guard newWorld.spaces != oldWorld.spaces else {
+            // Only a change to tiling is an undoable layout step; a floating
+            // window changing displays just moves between floating lists.
+            guard tiledTrees(in: newWorld) != tiledTrees(in: oldWorld) else {
                 world = newWorld
                 pruneRuntimeState()
                 return externalGeometryWindowID(for: event).map(planSnapBack) ?? .success(nil)
@@ -129,6 +131,10 @@ actor WorldActor {
         case .failure(let error):
             return .failure(error)
         }
+    }
+
+    private func tiledTrees(in world: World) -> [SpaceID: [DisplayID: Node]] {
+        world.spaces.mapValues { $0.displays.mapValues(\.tree) }
     }
 
     func replanExternalGeometryAfterClamp(_ previous: CommandPlanResult) -> Result<CommandPlanResult, CommandError> {

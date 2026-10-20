@@ -3,10 +3,11 @@ import Testing
 import NarwhalCore
 @testable import NarwhalAppSupport
 
-/// Drives seeded random sequences through the commands production sends to
-/// `apply` (layout commands, external focus, and window arrivals and
-/// departures as environment snapshots), recording solved frames the way
-/// `WorldActor.commit` does, and checks the world after every step.
+/// Drives seeded random sequences through most of the commands production
+/// sends to `apply` (layout commands, external focus, moves and resizes, and
+/// window arrivals and departures as environment snapshots), recording solved
+/// frames the way `WorldActor.commit` does, and checks the world after every
+/// step. Zone drops and config reloads are not generated.
 @Suite("Mixed command sequences")
 struct MixedCommandSequenceTests {
     private let space = SpaceID(raw: 1)
@@ -44,7 +45,7 @@ struct MixedCommandSequenceTests {
                 case .success(let next):
                     world = worldByRecordingWindowFrames(solvedFrames(in: next), in: next)
                 case .failure(let error):
-                    if isExpectedRejection(error) { continue }
+                    if isExpectedRejection(error, of: step) { continue }
                     Issue.record("Unexpected rejection in \(note): \(error.message)")
                     continue seeds
                 }
@@ -65,7 +66,7 @@ struct MixedCommandSequenceTests {
             return openedWindow(in: world, nextWindowRaw: &nextWindowRaw, using: &generator)
         }
         let direction = Direction.allCases.randomElement(using: &generator)!
-        switch Int.random(in: 0..<12, using: &generator) {
+        switch Int.random(in: 0..<14, using: &generator) {
         case 0: return .push(windowID, direction)
         case 1: return .center(windowID)
         case 2: return .eject(windowID)
@@ -76,6 +77,18 @@ struct MixedCommandSequenceTests {
         case 7: return .windowFocusedExternally(windowID)
         case 8: return .balance(space)
         case 9: return closedWindow(windowID, in: world)
+        case 10:
+            let origin = CGPoint(
+                x: Double.random(in: 0..<1_800, using: &generator).rounded(),
+                y: Double.random(in: 0..<600, using: &generator).rounded()
+            )
+            return .windowMovedExternally(windowID, CGRect(origin: origin, size: CGSize(width: 360, height: 240)))
+        case 11:
+            let size = CGSize(
+                width: Double.random(in: 100..<1_200, using: &generator).rounded(),
+                height: Double.random(in: 100..<700, using: &generator).rounded()
+            )
+            return .windowResizedExternally(windowID, size)
         default: return openedWindow(in: world, nextWindowRaw: &nextWindowRaw, using: &generator)
         }
     }
@@ -94,11 +107,14 @@ struct MixedCommandSequenceTests {
         .environmentChanged(snapshot(windows: world.windows.values.filter { $0.id != windowID }))
     }
 
-    /// Rejections a valid command can meet in an arbitrary layout. Anything
-    /// else (an unsatisfiable layout, a missing Space or display) is a bug.
-    private func isExpectedRejection(_ error: CommandError) -> Bool {
-        switch error {
-        case .noNeighbor, .windowIsFloating, .windowIsTiled, .resizeWouldCollapseSplit:
+    /// Only swaps and resizes can be refused in an arbitrary layout, and only
+    /// for these reasons. Any other rejection, including from a command
+    /// that should always succeed, is a bug.
+    private func isExpectedRejection(_ error: CommandError, of command: Command) -> Bool {
+        switch (command, error) {
+        case (.swapInTree, .noNeighbor), (.swapInTree, .windowIsFloating),
+             (.resizeSplit, .noNeighbor), (.resizeSplit, .windowIsFloating),
+             (.resizeSplit, .resizeWouldCollapseSplit):
             return true
         default:
             return false

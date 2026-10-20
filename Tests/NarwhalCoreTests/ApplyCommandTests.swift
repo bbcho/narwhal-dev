@@ -43,6 +43,82 @@ struct ApplyCommandTests {
         #expect(rightTree.map { occupiedWindows(in: $0) } == [window])
     }
 
+    @Test("A floating window moved onto another display joins that display's floating list")
+    func externallyMovedFloatingWindowChangesFloatingList() throws {
+        let fixture = twoDisplayFloatingWorld(movingAt: 1_100)
+
+        let next = try apply(
+            .windowMovedExternally(fixture.moving, CGRect(x: 200, y: 100, width: 100, height: 100)),
+            to: fixture.world
+        ).get()
+
+        #expect(next.windowDisplay[fixture.moving] == fixture.left)
+        #expect(next.windowSpace[fixture.moving] == fixture.space)
+        #expect(next.spaces[fixture.space]?.displays[fixture.left]?.floating == [fixture.moving])
+        #expect(next.spaces[fixture.space]?.displays[fixture.right]?.floating == [fixture.staying])
+    }
+
+    @Test("A floating window resized mostly onto another display joins that display's floating list")
+    func externallyResizedFloatingWindowChangesFloatingList() throws {
+        let fixture = twoDisplayFloatingWorld(movingAt: 900)
+
+        let next = try apply(
+            .windowResizedExternally(fixture.moving, CGSize(width: 900, height: 100)),
+            to: fixture.world
+        ).get()
+
+        #expect(next.windowDisplay[fixture.moving] == fixture.right)
+        #expect(next.spaces[fixture.space]?.displays[fixture.left]?.floating == [])
+        #expect(next.spaces[fixture.space]?.displays[fixture.right]?.floating == [fixture.staying, fixture.moving])
+    }
+
+    @Test("A focused floating window dragged into another display's Space takes its focus with it")
+    func externallyMovedFloatingWindowCarriesFocusAcrossSpaces() throws {
+        let left = DisplayID(raw: 1)
+        let right = DisplayID(raw: 2)
+        let leftSpace = SpaceID(raw: 1)
+        let rightSpace = SpaceID(raw: 2)
+        let moving = WindowID(raw: 10)
+        let world = World(
+            displays: [
+                left: displayInfo(left, slot: 0, x: 0),
+                right: displayInfo(right, slot: 1, x: 1000)
+            ],
+            activeSpace: rightSpace,
+            activeSpaceByDisplay: [left: leftSpace, right: rightSpace],
+            spaces: [
+                leftSpace: SpaceState(
+                    id: leftSpace,
+                    displays: [left: DisplaySpaceState(displayID: left, tree: .void, floating: [])],
+                    focused: nil
+                ),
+                rightSpace: SpaceState(
+                    id: rightSpace,
+                    displays: [right: DisplaySpaceState(displayID: right, tree: .void, floating: [moving])],
+                    focused: moving
+                )
+            ],
+            windows: [moving: metadata(moving, x: 1_100, y: 100)],
+            windowDisplay: [moving: right],
+            windowSpace: [moving: rightSpace],
+            observedVisibleWindows: [:],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+
+        let next = try apply(
+            .windowMovedExternally(moving, CGRect(x: 200, y: 100, width: 100, height: 100)),
+            to: world
+        ).get()
+
+        #expect(next.windowSpace[moving] == leftSpace)
+        #expect(next.spaces[leftSpace]?.displays[left]?.floating == [moving])
+        #expect(next.spaces[rightSpace]?.displays[right]?.floating == [])
+        #expect(next.spaces[leftSpace]?.focused == moving)
+        #expect(next.spaces[rightSpace]?.focused == nil)
+    }
+
     @Test("Focus cycle skips tiled windows")
     func focusCycleSkipsTiledWindows() throws {
         let display = DisplayID(raw: 1)
@@ -512,6 +588,54 @@ struct ApplyCommandTests {
         let layout = try maximizeResetLayout(windowID: window, in: world).get()
 
         #expect(layout.tiled == [window: CGRect(x: 0, y: 0, width: 1000, height: 800)])
+    }
+
+    /// Two side-by-side displays on one Space; `staying` floats on the right
+    /// display, and `moving` floats on whichever display contains `x`.
+    private func twoDisplayFloatingWorld(movingAt x: Double) -> (
+        world: World,
+        left: DisplayID,
+        right: DisplayID,
+        space: SpaceID,
+        moving: WindowID,
+        staying: WindowID
+    ) {
+        let left = DisplayID(raw: 1)
+        let right = DisplayID(raw: 2)
+        let space = SpaceID(raw: 1)
+        let moving = WindowID(raw: 10)
+        let staying = WindowID(raw: 11)
+        let movingDisplay = x < 1_000 ? left : right
+        let world = World(
+            displays: [
+                left: displayInfo(left, slot: 0, x: 0),
+                right: displayInfo(right, slot: 1, x: 1000)
+            ],
+            activeSpace: space,
+            spaces: [
+                space: SpaceState(
+                    id: space,
+                    displays: [
+                        left: DisplaySpaceState(displayID: left, tree: .void, floating: movingDisplay == left ? [moving] : []),
+                        right: DisplaySpaceState(
+                            displayID: right,
+                            tree: .void,
+                            floating: movingDisplay == right ? [moving, staying] : [staying]
+                        )
+                    ],
+                    focused: moving
+                )
+            ],
+            windows: [
+                moving: metadata(moving, x: x, y: 100),
+                staying: metadata(staying, x: 1_500, y: 100)
+            ],
+            windowDisplay: [moving: movingDisplay, staying: right],
+            windowConstraints: [:],
+            pendingRules: [:],
+            config: .default
+        )
+        return (world, left, right, space, moving, staying)
     }
 
     private func metadata(_ id: WindowID, x: Double, y: Double) -> WindowMetadata {
