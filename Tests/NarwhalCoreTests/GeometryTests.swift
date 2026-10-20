@@ -63,6 +63,19 @@ struct GeometryTests {
         #expect(displayContainingFrame(CGRect(x: 220, y: 0, width: 10, height: 10), displays: displays) == right)
     }
 
+    @Test("A window split evenly between two displays belongs to the lower display slot")
+    func evenSplitPrefersLowerDisplaySlot() {
+        let displays = (1...8).reduce(into: [DisplayID: DisplayInfo]()) { result, raw in
+            let id = DisplayID(raw: UInt32(raw))
+            let frame = CGRect(x: CGFloat(raw - 1) * 1_000, y: 0, width: 1_000, height: 800)
+            result[id] = DisplayInfo(id: id, slot: raw - 1, fingerprint: nil, frame: frame, visibleFrame: frame)
+        }
+
+        let owner = displayContainingFrame(CGRect(x: 3_900, y: 0, width: 200, height: 400), displays: displays)
+
+        #expect(owner == DisplayID(raw: 4))
+    }
+
     @Test("Approximate frame comparison uses the shared tolerance contract")
     func approximateFrameComparisonUsesSharedTolerance() {
         let frame = CGRect(x: 10, y: 20, width: 300, height: 200)

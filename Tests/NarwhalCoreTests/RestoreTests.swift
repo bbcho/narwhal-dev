@@ -561,6 +561,41 @@ struct RestoreTests {
         #expect(restored.spaces[space]?.displays[right]?.tree == .leaf(onRight))
     }
 
+    @Test("A stored fingerprint shared by several current displays is not an exact match")
+    func ambiguousFingerprintFallsBackToSlot() throws {
+        let space = SpaceID(raw: 1)
+        let solo = DisplayID(raw: 1)
+        let window = WindowID(raw: 43)
+        let stored = StoredWorld(
+            schemaVersion: StoredWorld.currentSchemaVersion,
+            activeSpace: StoredSpace(
+                layouts: [StoredDisplayLayout(
+                    displaySlot: 0,
+                    displayFingerprint: "twin",
+                    tree: .leaf(storedRef(title: "Editor", occurrence: 0, frame: CGRect(x: 0, y: 0, width: 1200, height: 800))),
+                    floating: []
+                )],
+                focused: nil
+            ),
+            pendingRules: []
+        )
+        let displays = Dictionary(uniqueKeysWithValues: [(1, "solo"), (2, "twin"), (3, "twin")].map { raw, fingerprint in
+            let id = DisplayID(raw: UInt32(raw))
+            let frame = CGRect(x: CGFloat(raw - 1) * 1200, y: 0, width: 1200, height: 800)
+            return (id, DisplayInfo(id: id, slot: raw - 1, fingerprint: fingerprint, frame: frame, visibleFrame: frame))
+        })
+
+        let restored = restoreWorld(
+            from: stored,
+            liveWindows: [metadata(window, title: "Editor", frame: CGRect(x: 0, y: 0, width: 1200, height: 800))],
+            displays: displays,
+            activeSpace: space,
+            config: .default
+        )
+
+        #expect(restored.spaces[space]?.displays[solo]?.tree == .leaf(window))
+    }
+
     @Test("Duplicate-title windows restore by last known frame, not by position in the list")
     func duplicateTitlesRestoreByFrame() throws {
         let display = DisplayID(raw: 7)

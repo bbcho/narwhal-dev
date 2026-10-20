@@ -34,19 +34,22 @@ func applyOuterGaps(_ gaps: Insets, to frame: CGRect) -> CGRect {
     )
 }
 
+/// Ties (a window split exactly between displays) go to the lower display
+/// slot, so ownership does not depend on dictionary iteration order.
 public func displayContainingFrame(_ frame: CGRect, displays: [DisplayID: DisplayInfo]) -> DisplayID? {
-    if let byIntersection = displays.max(by: { lhs, rhs in
-        lhs.value.visibleFrame.intersection(frame).narwhalArea
-            < rhs.value.visibleFrame.intersection(frame).narwhalArea
-    }), byIntersection.value.visibleFrame.intersection(frame).narwhalArea > 0 {
-        return byIntersection.key
+    let ordered = displays.values.sorted { lhs, rhs in
+        lhs.slot != rhs.slot ? lhs.slot < rhs.slot : lhs.id.raw < rhs.id.raw
+    }
+    let overlap = { (display: DisplayInfo) in display.visibleFrame.intersection(frame).narwhalArea }
+    if let byIntersection = ordered.max(by: { overlap($0) < overlap($1) }),
+       overlap(byIntersection) > 0,
+       let first = ordered.first(where: { overlap($0) == overlap(byIntersection) }) {
+        return first.id
     }
 
     let center = frame.narwhalCenter
-    return displays.min(by: { lhs, rhs in
-        lhs.value.visibleFrame.narwhalCenter.narwhalDistanceSquared(to: center)
-            < rhs.value.visibleFrame.narwhalCenter.narwhalDistanceSquared(to: center)
-    })?.key
+    let distance = { (display: DisplayInfo) in display.visibleFrame.narwhalCenter.narwhalDistanceSquared(to: center) }
+    return ordered.min(by: { distance($0) < distance($1) })?.id
 }
 
 private func splitLengths(extent: CGFloat, weights: [Double], totalWeight: Double) -> [CGFloat] {

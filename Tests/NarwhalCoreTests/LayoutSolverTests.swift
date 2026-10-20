@@ -164,6 +164,62 @@ struct LayoutSolverTests {
         )))
     }
 
+    @Test("A cell narrower than the inner gap is unsatisfiable instead of an infinite frame")
+    func cellNarrowerThanGapIsUnsatisfiable() {
+        let display = DisplayID(raw: 1)
+        let a = WindowID(raw: 1)
+        let b = WindowID(raw: 2)
+        let tree = pushIntoTree(b, .right, pushIntoTree(a, .left, .void))
+        let space = spaceState(display: display, tree: tree)
+
+        let result = solveLayout(
+            spaceState: space,
+            displayID: display,
+            frame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+            gaps: Gaps(inner: 8, outer: Insets(top: 0, left: 0, bottom: 0, right: 0)),
+            constraints: [b: WindowConstraints(minWidth: 990)]
+        )
+
+        #expect(result == .unsatisfiable(UnsatisfiableLayout(
+            displayID: display,
+            axis: .horizontal,
+            available: 2,
+            required: 9,
+            windows: [a]
+        )))
+    }
+
+    @Test("A fractional minimum width is met on whole-point boundaries instead of failing")
+    func fractionalMinimumIsSatisfiedOnWholePoints() throws {
+        let display = DisplayID(raw: 1)
+        let a = WindowID(raw: 1)
+        let b = WindowID(raw: 2)
+        let c = WindowID(raw: 3)
+        let tree = Node.split(try Split.create(axis: .horizontal, cells: [
+            try Cell.create(weight: 1, node: .leaf(a)).get(),
+            try Cell.create(weight: 1, node: .leaf(b)).get(),
+            try Cell.create(weight: 1, node: .leaf(c)).get()
+        ]).get())
+
+        let result = solveLayout(
+            spaceState: spaceState(display: display, tree: tree),
+            displayID: display,
+            frame: CGRect(x: 0, y: 0, width: 1001, height: 800),
+            gaps: noGaps,
+            constraints: [b: WindowConstraints(minWidth: 500.5)]
+        )
+
+        guard case .solved(let layout, _) = result else {
+            Issue.record("Expected a solved layout, got \(result)")
+            return
+        }
+        #expect(layout.tiled == [
+            a: CGRect(x: 0, y: 0, width: 250, height: 800),
+            b: CGRect(x: 250, y: 0, width: 501, height: 800),
+            c: CGRect(x: 751, y: 0, width: 250, height: 800)
+        ])
+    }
+
     @Test("Finder-width clamp is inferred as a width minimum only")
     func inferFinderWidthClamp() {
         let target = CGRect(x: 12, y: 45, width: 490.666_666_666_7, height: 420.5)

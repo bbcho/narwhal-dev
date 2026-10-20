@@ -145,22 +145,32 @@ private func clearWindowPreservingZones(_ window: WindowID, from node: Node) -> 
 
 func removeWindowForRetile(_ window: WindowID, from node: Node) -> Node {
     guard occupiedWindows(in: node).contains(window) else { return node }
-    let cleared = clearWindowPreservingZones(window, from: node)
-    guard !occupiedWindows(in: cleared).isEmpty else { return .void }
-    return compactVacatedBranches(cleared, preservingRoot: true)
+    let vacated = vacatingWindow(window, from: node, preservingRoot: true)
+    guard !occupiedWindows(in: vacated).isEmpty else { return .void }
+    return vacated
 }
 
-private func compactVacatedBranches(_ node: Node, preservingRoot: Bool) -> Node {
-    guard case .split(let split) = node else { return node }
-    let cells = split.cells.map { cell in
-        makeCell(
-            weight: cell.weight,
-            node: compactVacatedBranches(cell.node, preservingRoot: false)
-        )
+/// Clears the window and compacts only the branches it leaves, root excluded.
+/// Other branches keep their deliberately preserved empty slots and weights.
+private func vacatingWindow(_ window: WindowID, from node: Node, preservingRoot: Bool) -> Node {
+    switch node {
+    case .void:
+        return .void
+    case .leaf(let id):
+        return id == window ? .void : node
+    case .split(let split):
+        guard occupiedWindows(in: node).contains(window) else { return node }
+        let cells = split.cells.map { cell in
+            makeCell(weight: cell.weight, node: vacatingWindow(window, from: cell.node, preservingRoot: false))
+        }
+        guard !preservingRoot else {
+            return .split(makeSplit(axis: split.axis, cells: cells))
+        }
+        return compactedVacatedBranch(axis: split.axis, cells: cells)
     }
-    guard !preservingRoot else {
-        return .split(makeSplit(axis: split.axis, cells: cells))
-    }
+}
+
+private func compactedVacatedBranch(axis: Axis, cells: [Cell]) -> Node {
 
     let occupied = cells.filter { !isUnoccupiedSubtree($0.node) }
     switch occupied.count {
@@ -169,7 +179,7 @@ private func compactVacatedBranches(_ node: Node, preservingRoot: Bool) -> Node 
     case 1:
         return occupied[0].node
     default:
-        return .split(makeSplit(axis: split.axis, cells: cells))
+        return .split(makeSplit(axis: axis, cells: cells))
     }
 }
 

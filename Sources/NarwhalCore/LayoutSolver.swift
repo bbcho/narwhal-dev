@@ -214,6 +214,17 @@ private func solvedFrames(
     case .void:
         return .success([:])
     case .leaf(let id):
+        // A cell no wider than the gap insets to CGRect.null (an infinite frame);
+        // a window needs at least one point of its own.
+        if let axis = [Axis.horizontal, .vertical].first(where: { frame.length(on: $0) <= innerGap }) {
+            return .failure(UnsatisfiableLayout(
+                displayID: displayID,
+                axis: axis,
+                available: frame.length(on: axis),
+                required: innerGap + 1,
+                windows: [id]
+            ))
+        }
         let target = frame.insetBy(dx: innerGap / 2, dy: innerGap / 2).standardized
         if let unsatisfiable = unsatisfiableLeaf(
             id,
@@ -301,9 +312,11 @@ private func minimumSize(
         return MinimumSize(width: 0, height: 0, windows: [])
     case .leaf(let id):
         let constraint = constraints[id] ?? WindowConstraints()
+        // Split boundaries land on whole points, so a fractional minimum is
+        // only met by its whole-point ceiling.
         return MinimumSize(
-            width: constraint.minWidth.map { $0 + innerGap } ?? 0,
-            height: constraint.minHeight.map { $0 + innerGap } ?? 0,
+            width: constraint.minWidth.map { $0.rounded(.up) + innerGap } ?? 0,
+            height: constraint.minHeight.map { $0.rounded(.up) + innerGap } ?? 0,
             windows: [id]
         )
     case .split(let split):
