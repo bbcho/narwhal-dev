@@ -42,9 +42,10 @@ private let logRedactions: [LogRedaction] = [
 public func redactedLogMessage(_ message: String, homeDirectory: String? = nil) -> String {
     let withoutHome = homeDirectory.flatMap { $0.isEmpty ? nil : $0 }
         .map { home in
-            // Only at a name boundary: home "/Users/Jane" must not rewrite "/Users/Janet".
+            // Only at a name boundary: home "/Users/jane" must not rewrite "/Users/janet",
+            // "/Users/janeé" or "/Users/jane.doe", but a sentence-ending "." is a boundary.
             message.replacingOccurrences(
-                of: NSRegularExpression.escapedPattern(for: home) + #"(?![A-Za-z0-9_-])"#,
+                of: NSRegularExpression.escapedPattern(for: home) + #"(?![\w-]|\.[\w-])"#,
                 with: "~",
                 options: .regularExpression
             )

@@ -58,6 +58,16 @@ struct LogLineModelTests {
         #expect(message == "Other user <path> and own ~<path>")
     }
 
+    @Test("Another account whose name extends the home name with a dot or accent is left alone")
+    func homeDirectoryPrefixOfDottedOrAccentedNameIsKept() {
+        let message = redactedLogMessage(
+            "Saw /Users/jane.doe/a and /Users/janeé/b; own /Users/jane.",
+            homeDirectory: "/Users/jane"
+        )
+
+        #expect(message == "Saw <path> and <path>; own ~.")
+    }
+
     @Test("A home directory at the end of a sentence is still replaced")
     func homeDirectoryBeforePunctuationIsReplaced() {
         let message = redactedLogMessage("Config lives in /Users/Jane Doe.", homeDirectory: "/Users/Jane Doe")
