@@ -46,13 +46,7 @@ public func environmentRefreshTransition(
     in world: World
 ) -> EnvironmentRefreshTransition {
     let preservedSpaceLayouts = environmentSnapshotPreservesSpaceLayouts(snapshot, in: world)
-    let refreshedWorld: World
-    switch apply(.environmentChanged(snapshot), to: world) {
-    case .success(let next):
-        refreshedWorld = next
-    case .failure:
-        refreshedWorld = world
-    }
+    let refreshedWorld = reconcileEnvironment(snapshot, in: world)
     return EnvironmentRefreshTransition(
         world: refreshedWorld,
         result: EnvironmentRefreshResult(
